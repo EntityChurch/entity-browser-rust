@@ -1269,10 +1269,25 @@ pub fn peer_create_refusal_reason(can_persist: bool, creation_enabled: bool) -> 
 
 /// Read the session config from the tree (defaults if absent/garbage).
 pub fn read(peers: &Peers, peer_id: &str) -> SessionConfig {
+    read_opt(peers, peer_id).unwrap_or_default()
+}
+
+/// [`read`] without the `unwrap_or_default`, for the callers that must tell
+/// *"the config says the defaults"* from *"we could not read the config"*.
+///
+/// The two are the same value and not the same fact, and on the Worker arm the
+/// second is routine, not exceptional: this is a sync `get_entity`, so it
+/// answers from the per-prefix cache mirror and returns `None` for any prefix
+/// no `watch_prefix` has primed yet. A caller that collapses them decides on a
+/// build default while the profile's real configuration sits in the tree
+/// unread — which is exactly how a returning visitor was offered the bundled
+/// demo in place of the site they were reading (AUDIT-WORKER-ARM-NAVIGATION,
+/// 2026-08-30). Prefer this one wherever a wrong answer is worse than no
+/// answer, and use `Peers::get_entity_async` where you can await.
+pub fn read_opt(peers: &Peers, peer_id: &str) -> Option<SessionConfig> {
     peers
         .get_entity(peer_id, &state_path(peer_id))
         .map(|e| SessionConfig::from_entity(&e))
-        .unwrap_or_default()
 }
 
 /// Persist `cfg` for `peer_id`. Arm-aware (D15) via the blessed

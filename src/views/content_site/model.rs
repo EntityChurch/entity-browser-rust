@@ -29,7 +29,13 @@ use crate::peers::Peers;
 use crate::window::{RepaintFn, WindowId};
 
 /// Entity type for the window's persisted navigation state.
-const STATE_TYPE: &str = "app/state/content_site";
+///
+/// Load-bearing for more than provenance: the window-bound model persists at
+/// `window_state_path`, whose id is **reused** across a reload, so this is what
+/// stops a Content Site window adopting the state of whatever window held its
+/// id last session (AP42). The Site Mode *overlay* writes the same type at an
+/// app-level path — same schema, same meaning, correctly one type.
+pub const STATE_TYPE: &str = "app/state/content_site";
 
 /// Active-trail test for a nav item: is `current_page` the nav target's
 /// `page`, or a descendant within the same top-level section? A real
@@ -211,6 +217,53 @@ fn build_sidebar(
     out
 }
 
+/// What an authoritative nav-state read actually established.
+///
+/// **Four outcomes, not a `bool`.** The first draft of this returned "did
+/// anything change", which merged *"the tree holds the user's location and we
+/// adopted it"* with *"the tree holds nothing, so we moved off the empty
+/// placeholder onto the configured default"* — two facts with the same answer,
+/// which is the conflation this repo has now spent a whole thread removing
+/// (`put_if_absent` for *did the user set this*, a presence check for *do I
+/// hold current bytes*, `home_is_local` for *may we read the document*). It
+/// mattered immediately: the boot log line would have reported an adoption on a
+/// profile that had never persisted a location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hydration {
+    /// The tree held a location and this surface adopted it.
+    Adopted,
+    /// The tree **answered** and holds no location for this surface. The
+    /// configured default stands — and nothing is written, because "you have
+    /// no history" is not a thing to record.
+    NonePersisted,
+    /// Nothing was heard — the round-trip failed. **Changed nothing**, which is
+    /// the point: a read that cannot answer must never be able to reset a
+    /// surface to its default (AP30 corollary (a)).
+    Unheard,
+    /// Not attempted, or discarded on arrival: this surface was already
+    /// hydrated by the sync read, or a navigation landed while the read was in
+    /// flight and is newer than anything it could carry.
+    Superseded,
+}
+
+impl Hydration {
+    /// The one fact a caller may branch on: did the user's own persisted
+    /// location reach the screen?
+    pub fn adopted(self) -> bool {
+        matches!(self, Hydration::Adopted)
+    }
+
+    /// Short label for the D13 boot line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Hydration::Adopted => "adopted",
+            Hydration::NonePersisted => "none-persisted",
+            Hydration::Unheard => "unheard",
+            Hydration::Superseded => "superseded",
+        }
+    }
+}
+
 /// Persisted per-window navigation state: which location we're viewing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContentSiteState {
@@ -223,6 +276,9 @@ pub struct ContentSiteState {
 
 impl ContentSiteState {
     pub fn from_entity(entity: &Entity) -> Self {
+        if entity.entity_type != STATE_TYPE {
+            return Self::default();
+        }
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
             Err(_) => return Self::default(),
@@ -294,6 +350,36 @@ struct Inner {
     /// window-surface only (the overlay has no rail) — a presentation choice,
     /// never persisted to the tree.
     rail_filter: RailFilter,
+    /// The site this surface points at by default — the configured `home_site`
+    /// ([`session_config`](crate::session_config)). Replaces the old hard-coded
+    /// `DEMO_SITE_ID` on the boot/default path: which-site is config, not a
+    /// constant. (The *current* location the user browsed to persists in the
+    /// nav state; this is only the default the state seeds to.)
+    ///
+    /// **Behind the mutex, not a plain field, so [`hydrate_durable`] can
+    /// correct it through `&self`** — the window surface hydrates from a
+    /// `spawn_local` task that holds only this `Arc`, never the model.
+    ///
+    /// [`hydrate_durable`]: ContentSiteModel::hydrate_durable
+    default_site_id: String,
+    /// The peer the default `home_site` lives on (config `home_site.peer_id`).
+    /// `None` = a local site on this surface's own peer (the common case —
+    /// empty config peer). `Some` threads the peer dimension so a `Site` boot /
+    /// home target can point at a site on another peer
+    /// (`entity://{peer}/sites/{id}`).
+    default_site_peer: Option<String>,
+    /// Bumped by every [`go_to`](ContentSiteModel::go_to). Read across
+    /// `hydrate_durable`'s await so a location the user (or boot) navigated to
+    /// **during** the round-trip is never overwritten by the value that was
+    /// durable before it.
+    nav_generation: u64,
+    /// True once a read of the durable nav state has actually **answered** —
+    /// either the sync L0 read on the Direct arm or the authoritative L1
+    /// round-trip. False means every location this surface has shown so far is
+    /// the *default*, not the user's. See [`hydrate_durable`].
+    ///
+    /// [`hydrate_durable`]: ContentSiteModel::hydrate_durable
+    hydrated: bool,
 }
 
 /// Long-lived model for one Content Site surface — a window section or
@@ -308,19 +394,6 @@ pub struct ContentSiteModel {
     state_path: String,
     inner: Arc<Mutex<Inner>>,
     resolver: Box<dyn ContentResolver>,
-    /// The site this surface points at by default — the configured
-    /// `home_site` ([`session_config`](crate::session_config)), hydrated in
-    /// [`initialize`](Self::initialize). Replaces the old hard-coded
-    /// `DEMO_SITE_ID` on the boot/default path: which-site is config, not a
-    /// constant. (The *current* location the user browsed to persists in the
-    /// nav state; this is only the default the state seeds to.)
-    default_site_id: String,
-    /// The peer the default `home_site` lives on (config `home_site.peer_id`),
-    /// hydrated in [`initialize`](Self::initialize). `None` = a local site on
-    /// this surface's own peer (the common case — empty config peer). `Some`
-    /// threads the peer dimension so a `Site` boot / home target can point at a
-    /// site on another peer (`entity://{peer}/sites/{id}`).
-    default_site_peer: Option<String>,
     /// Late-bound repaint handle the async (HTTP-poll) resolver fires when
     /// a remote fetch lands. The render path fills it each frame (the
     /// handle isn't available at model construction); the local resolver
@@ -358,15 +431,19 @@ impl ContentSiteModel {
     fn with_state_path(peer_id: String, state_path: String) -> Self {
         let repaint: RepaintCell = Rc::new(RefCell::new(None));
         let resolver = Box::new(MultiResolver::new(peer_id.clone(), repaint.clone()));
+        let inner = Inner {
+            // Hydrated from config in `initialize` / `hydrate_durable`; the demo
+            // site is the build-default home, so this is a safe pre-hydration
+            // fallback.
+            default_site_id: crate::session_config::DEMO_SITE_ID.to_string(),
+            default_site_peer: None,
+            ..Inner::default()
+        };
         Self {
             peer_id,
             state_path,
-            inner: Arc::new(Mutex::new(Inner::default())),
+            inner: Arc::new(Mutex::new(inner)),
             resolver,
-            // Hydrated from config in `initialize`; the demo site is the
-            // build-default home, so this is a safe pre-hydration fallback.
-            default_site_id: crate::session_config::DEMO_SITE_ID.to_string(),
-            default_site_peer: None,
             repaint,
         }
     }
@@ -388,43 +465,221 @@ impl ContentSiteModel {
     /// tree-seed side-effect, and a non-demo / remote home site (a real
     /// content deployment) is never clobbered with the demo. Tests that want
     /// the demo present call `ensure_demo_site` explicitly.
+    /// **On the Worker arm this reads nothing, by construction, and that is
+    /// why [`hydrate_durable`](Self::hydrate_durable) exists.** Both reads
+    /// below are `Peers::get_entity`, which on that arm answers from the
+    /// per-prefix cache mirror — and the mirror only holds prefixes some
+    /// `watch_prefix` has already primed. Every caller of `initialize`
+    /// subscribes *after* calling it (`SiteOverlay::new`, the window factory),
+    /// and nothing subscribes this surface's state path at all, so the answer
+    /// is `None` on a warm boot with a perfectly good persisted location.
+    /// Measured with the `audit-worker-reads` lamp, 2026-08-30 — see
+    /// `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+    ///
+    /// It is kept sync because it is correct on the Direct arm (the in-process
+    /// store is authoritative), it is what the native unit tests drive, and it
+    /// gets the seed dispatched before the first frame. `hydrate_durable` is
+    /// the awaited correction, not a replacement.
     pub fn initialize(&mut self, peers: &Peers) {
         // Hydrate the default site from the session config's `home_site`
         // (which-site is config, not a constant). Defaults to the demo site
         // when config is absent (the `Full` build default).
         let home = crate::session_config::read(peers, &self.peer_id).home_site;
-        self.default_site_id = home.id;
-        // Empty config peer = local to this surface's own peer (`None`); a
-        // non-empty peer threads the cross-peer dimension into the seed state.
-        self.default_site_peer = Some(home.peer_id).filter(|p| !p.is_empty());
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.default_site_id = home.id;
+            // Empty config peer = local to this surface's own peer (`None`); a
+            // non-empty peer threads the cross-peer dimension into the seed state.
+            inner.default_site_peer = Some(home.peer_id).filter(|p| !p.is_empty());
+        }
         self.ensure_state_in_tree(peers);
-        let state = self.read_state(peers);
-        self.inner.lock().unwrap().state = state;
+        // A sync read that ANSWERED is authoritative on the Direct arm, so
+        // record it — a Direct-arm surface is fully hydrated here and
+        // `hydrate_durable` becomes a no-op round-trip it can skip.
+        let persisted = peers.get_entity(&self.peer_id, &self.state_path());
+        let hydrated = persisted.is_some();
+        let state = persisted
+            .map(|e| ContentSiteState::from_entity(&e))
+            .unwrap_or_else(|| self.default_state());
+        let mut inner = self.inner.lock().unwrap();
+        inner.state = state;
+        inner.hydrated = hydrated;
+    }
+
+    /// Correct [`initialize`](Self::initialize)'s best-effort read with an
+    /// **authoritative, subscription-independent** one, and adopt the result.
+    ///
+    /// `Peers::get_entity_async` is an L1 round-trip on both arms (Direct: the
+    /// store, wrapped ready; Worker: a `Get` to the worker), so unlike the sync
+    /// read it does not depend on any prefix having been mirrored. This is the
+    /// same rule `tree_listing_async`'s doc comment already states for listings
+    /// and `boot_load` already applies to the session config
+    /// (`app.rs`, *"we read it from the **durable** tree (L1 `get_entity_async`,
+    /// not the cold cache mirror)"*) — the nav state simply never got it.
+    ///
+    /// Three properties this has to have, each of which is a gate:
+    ///
+    /// * **P** — a persisted location is adopted, on the arm where the sync
+    ///   read cannot see it.
+    /// * **N2 — absence of evidence changes nothing.** A round-trip that
+    ///   *errors* is not an answer: we keep what we have. Only a successful
+    ///   read of `None` — the store genuinely holds no nav state — leaves the
+    ///   default standing, and even then we do not write. A cache that drops
+    ///   what it cannot re-verify turns a hiccup into a lost session (AP30
+    ///   corollary (a)).
+    /// * **N1 — never clobber a navigation that happened during the await.**
+    ///   `nav_generation` is captured before the round-trip and re-checked
+    ///   after; a bump means the user (or boot's own re-point) moved, and the
+    ///   durable value we are holding is *older* than the screen. Adopting it
+    ///   would drag them backwards — the same shape as the user-themes
+    ///   resurrection race in `tools/e2e/README.md`.
+    ///
+    /// See [`Hydration`] for what the four outcomes mean and why this is not a
+    /// `bool`.
+    pub async fn hydrate_durable(&self, peers: &Peers) -> Hydration {
+        let Some(job) = self.hydration_job(peers) else {
+            return Hydration::Superseded;
+        };
+        job.await
+    }
+
+    /// [`hydrate_durable`](Self::hydrate_durable) for a caller that cannot
+    /// await — the window factory, which runs long after `boot_load` finished.
+    ///
+    /// The task owns everything it touches (the state `Arc`, the two boxed
+    /// futures, the repaint cell), so it holds no borrow of the model or of
+    /// `Peers` across the round-trip.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        if let Some(job) = self.hydration_job(peers) {
+            wasm_bindgen_futures::spawn_local(async move {
+                job.await;
+            });
+        }
+    }
+
+    /// Build the hydration future, or `None` if there is nothing to do.
+    ///
+    /// Split out so `hydrate_durable` and `spawn_hydrate_durable` are the same
+    /// code: everything the future needs is cloned/owned **before** it is
+    /// created, which is what lets the spawned form exist at all.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = Hydration> + 'static> {
+        let generation = {
+            let inner = self.inner.lock().unwrap();
+            if inner.hydrated {
+                return None; // the sync read already answered (Direct arm)
+            }
+            inner.nav_generation
+        };
+        // Both round-trips are created here, from `&Peers`, and are `'static`
+        // once boxed — creating a future does not start it, so this costs
+        // nothing for the arm that returns above.
+        let cfg_fut =
+            peers.get_entity_async(&self.peer_id, &crate::session_config::state_path(&self.peer_id));
+        let state_fut = peers.get_entity_async(&self.peer_id, &self.state_path());
+        let inner = self.inner.clone();
+        let state_path = self.state_path.clone();
+        let repaint = self.repaint.clone();
+        Some(async move {
+            // The config first: it decides the DEFAULT, which is what we fall
+            // back to when there is genuinely no persisted location. Reading it
+            // here (rather than trusting `initialize`'s cold read) is what stops
+            // a warm Worker boot offering the *build* default in place of the
+            // deployment's home.
+            if let Ok(Some(e)) = cfg_fut.await {
+                let home = crate::session_config::SessionConfig::from_entity(&e).home_site;
+                let mut inner = inner.lock().unwrap();
+                inner.default_site_id = home.id;
+                inner.default_site_peer = Some(home.peer_id).filter(|p| !p.is_empty());
+            }
+            let read = state_fut.await;
+            let mut guard = inner.lock().unwrap();
+            if guard.nav_generation != generation {
+                // Somebody navigated across the await. Their location is newer
+                // than this read; leave it alone. Deliberately NOT marked
+                // hydrated — the navigation is in memory and durable, so there
+                // is nothing left to adopt.
+                tracing::debug!(
+                    path = %state_path,
+                    "content_site: durable hydration discarded — navigated during the read"
+                );
+                return Hydration::Superseded;
+            }
+            let outcome = match read {
+                Ok(Some(entity)) => {
+                    let state = ContentSiteState::from_entity(&entity);
+                    guard.state = state;
+                    guard.hydrated = true;
+                    tracing::info!(
+                        path = %state_path,
+                        site = %guard.state.site_id,
+                        "content_site: adopted the persisted location from the durable tree"
+                    );
+                    Hydration::Adopted
+                }
+                Ok(None) => {
+                    // A real answer: this surface has no persisted location. The
+                    // default stands — but it is now built from the
+                    // AUTHORITATIVE config read above, not the cold one.
+                    guard.state = ContentSiteState {
+                        peer: guard.default_site_peer.clone(),
+                        site_id: guard.default_site_id.clone(),
+                        page: String::new(),
+                    };
+                    guard.hydrated = true;
+                    Hydration::NonePersisted
+                }
+                Err(e) => {
+                    // NOT an answer. Change nothing, and say so — a silent
+                    // best-effort here is how a transient round-trip failure
+                    // would read as "this profile has no history".
+                    tracing::warn!(
+                        path = %state_path,
+                        error = %e,
+                        "content_site: durable nav-state read failed — keeping the current \
+                         location rather than falling back to the default"
+                    );
+                    Hydration::Unheard
+                }
+            };
+            drop(guard);
+            // Adopting is an in-memory change with NO tree write, so no
+            // subscription fires and a window would sit clean on the old
+            // location until the user touched something. The resolver's repaint
+            // handle is the existing mechanism for exactly this (the window
+            // composes a dirty-mark into it); the overlay re-renders every
+            // active frame and does not need it.
+            if outcome.adopted() {
+                if let Some(rp) = repaint.borrow().as_ref() {
+                    rp();
+                }
+            }
+            outcome
+        })
     }
 
     fn state_path(&self) -> String {
         self.state_path.clone()
     }
 
-    fn ensure_state_in_tree(&self, peers: &Peers) {
-        let path = self.state_path();
-        let default = ContentSiteState {
-            peer: self.default_site_peer.clone(),
-            site_id: self.default_site_id.clone(),
+    /// The location this surface points at when nothing is persisted — the
+    /// configured home's root page.
+    fn default_state(&self) -> ContentSiteState {
+        let inner = self.inner.lock().unwrap();
+        ContentSiteState {
+            peer: inner.default_site_peer.clone(),
+            site_id: inner.default_site_id.clone(),
             page: String::new(),
-        };
-        peers.seed_state_if_absent(&self.peer_id, path, default.to_entity(), "content_site");
+        }
     }
 
-    fn read_state(&self, peers: &Peers) -> ContentSiteState {
-        peers
-            .get_entity(&self.peer_id, &self.state_path())
-            .map(|e| ContentSiteState::from_entity(&e))
-            .unwrap_or_else(|| ContentSiteState {
-                peer: self.default_site_peer.clone(),
-                site_id: self.default_site_id.clone(),
-                page: String::new(),
-            })
+    fn ensure_state_in_tree(&self, peers: &Peers) {
+        let path = self.state_path();
+        let default = self.default_state();
+        peers.seed_state_if_absent(&self.peer_id, path, default.to_entity(), "content_site");
     }
 
     fn persist_state(&self, peers: &Peers) {
@@ -464,6 +719,9 @@ impl ContentSiteModel {
                 page: loc.page.clone(),
             };
             inner.history.push(prev);
+            // What the screen shows is now newer than anything a
+            // `hydrate_durable` round-trip started earlier can be holding.
+            inner.nav_generation = inner.nav_generation.wrapping_add(1);
         }
         self.persist_state(peers);
     }
@@ -632,9 +890,10 @@ impl ContentSiteModel {
     /// the overlay Home button can reset to the real site from anywhere —
     /// including an unresolvable location where `/` would just reload the error.
     fn home_nav_target(&self) -> String {
-        match self.default_site_peer.as_deref().filter(|p| !p.is_empty()) {
-            Some(peer) => format!("entity://{peer}/sites/{}/", self.default_site_id),
-            None => format!("site:{}/", self.default_site_id),
+        let inner = self.inner.lock().unwrap();
+        match inner.default_site_peer.as_deref().filter(|p| !p.is_empty()) {
+            Some(peer) => format!("entity://{peer}/sites/{}/", inner.default_site_id),
+            None => format!("site:{}/", inner.default_site_id),
         }
     }
 
@@ -727,47 +986,160 @@ impl ContentSiteModel {
         }
     }
 
+    /// Is `loc` the site this deployment is built around?
+    ///
+    /// The discriminator that makes the withdrawal advice true. Compared on
+    /// **peer + site id**, not the page: a withdrawn site is withdrawn whichever
+    /// page of it the reader was on.
+    ///
+    /// **Which home?** The live config read is preferred, so changing the home
+    /// in Settings takes effect without a reload. But on the Worker arm that
+    /// read answers from the cache mirror and can miss — and a *miss* used to
+    /// silently become "the home is the build default", which picks the wrong
+    /// one of two withdrawal sentences. So a miss falls back to the home this
+    /// surface hydrated authoritatively rather than to `Default`. (The previous
+    /// session named this soft spot and left it; it closes here because
+    /// `hydrate_durable` finally gives it something true to fall back to.)
+    fn is_configured_home(&self, peers: &Peers, loc: &Location) -> bool {
+        let home = crate::session_config::read_opt(peers, &self.peer_id)
+            .map(|cfg| (cfg.home_site.peer_id, cfg.home_site.id))
+            .unwrap_or_else(|| {
+                let inner = self.inner.lock().unwrap();
+                (
+                    inner.default_site_peer.clone().unwrap_or_default(),
+                    inner.default_site_id.clone(),
+                )
+            });
+        let (home_peer, home_id) = (home.0.as_str(), home.1.as_str());
+        let loc_peer = loc.peer_id.as_deref().unwrap_or("");
+        home_id == loc.site_id
+            && (home_peer == loc_peer
+                // The empty peer is the system-peer sentinel; a home recorded
+                // that way and a location naming us explicitly are one place.
+                || (home_peer.is_empty() && loc_peer == self.peer_id)
+                || (loc_peer.is_empty() && home_peer == self.peer_id))
+    }
+
+    /// The successor if this location names a **retired** publisher.
+    ///
+    /// Owned and returned to the caller rather than resolved inside the
+    /// classifier: `peer_supersession::resolve` yields a `String`, and
+    /// [`SiteAbsence`](super::output::SiteAbsence) borrows, so the caller has to
+    /// hold it for the classification's lifetime.
+    fn retired_successor(loc: &Location) -> Option<String> {
+        loc.peer_id
+            .as_deref()
+            .filter(|p| crate::peer_supersession::is_retired(p))
+            .map(crate::peer_supersession::resolve)
+    }
+
     fn error_output(&self, peers: &Peers, loc: &Location, err: ResolveError) -> SiteRenderOutput {
         let msg = match err {
-            // A missing manifest means two different things, and saying the
-            // same sentence for both is what made a live foreign site read as
-            // deleted. `classify_missing_site` owns the rule (and its tests);
-            // this only maps the verdict to a string.
-            ResolveError::ManifestMissing => {
-                use super::output::{classify_missing_site, MissingSite};
+            // An absent site means FOUR different things, and saying the same
+            // sentence for all of them is what made a live foreign site read as
+            // deleted (2026-08-24) and a withdrawn one read as an outage (cell
+            // #17). `classify_site_absence` owns the rule and its tests; this
+            // only maps the verdict to a string.
+            //
+            // `answered` is the fact the decode point now preserves:
+            // `SiteWithdrawn` means the origin said 404/410 — a choice it made —
+            // while `ManifestMissing`/`OriginUnreachable` mean we do not know.
+            ResolveError::ManifestMissing
+            | ResolveError::SiteWithdrawn
+            | ResolveError::OriginUnreachable => {
+                use super::output::SiteAbsence;
                 let origin = loc.peer_id.as_deref().and_then(|p| {
                     crate::content_site::origins::get_origin(peers, &self.peer_id, p)
                 });
-                match classify_missing_site(&self.peer_id, loc.peer_id.as_deref(), origin.as_deref())
-                {
-                    MissingSite::Local => crate::i18n::t(
+                let answered = matches!(err, ResolveError::SiteWithdrawn);
+                // `ManifestMissing` is the arm that never asked anyone — the
+                // durable-cache miss, and the ORIGINAL wrong-lookup case this
+                // message family was written for.
+                let never_asked = matches!(err, ResolveError::ManifestMissing);
+                // An empty origin is the same-origin sentinel. Render it as the
+                // address the reader is actually on, because "" tells them
+                // nothing and naming the host we asked is the point.
+                let shown = |origin: &str| {
+                    if origin.is_empty() {
+                        Self::current_origin_display()
+                    } else {
+                        Some(origin.to_string())
+                    }
+                };
+                let retired = Self::retired_successor(loc);
+                match super::output::classify_site_absence(
+                    &self.peer_id,
+                    loc.peer_id.as_deref(),
+                    origin.as_deref(),
+                    answered,
+                    self.is_configured_home(peers, loc),
+                    retired.as_deref(),
+                ) {
+                    SiteAbsence::Local => crate::i18n::t(
                         "contentsite.err_no_manifest",
                         &[("site", &loc.site_id), ("peer", &self.peer_id)],
                     ),
-                    MissingSite::Foreign { peer, origin } => {
-                        // An empty origin is the same-origin sentinel. Render
-                        // it as the address the reader is actually on, because
-                        // "" tells them nothing and the whole point of this
-                        // message is naming the host we asked.
-                        let shown = if origin.is_empty() {
-                            Self::current_origin_display()
-                        } else {
-                            Some(origin.to_string())
-                        };
-                        match shown {
-                            Some(o) => crate::i18n::t(
-                                "contentsite.err_no_manifest_foreign",
-                                &[("site", &loc.site_id), ("peer", peer), ("origin", &o)],
-                            ),
-                            // Cannot name the origin — say the thing that is
-                            // still true rather than guessing at the one fact
-                            // this message is for.
-                            None => {
-                                crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)])
-                            }
-                        }
-                    }
-                    MissingSite::ForeignUnknownHost { peer } => {
+                    SiteAbsence::Retired { peer, successor } => crate::i18n::t(
+                        "contentsite.err_peer_retired",
+                        &[("site", &loc.site_id), ("peer", peer), ("successor", successor)],
+                    ),
+                    // The origin ANSWERED and does not carry it — **and that is
+                    // not yet enough to say the publisher withdrew it.**
+                    //
+                    // On this branch we hold NO cached copy (a copy would have
+                    // produced the shell, not an error), so we have never
+                    // successfully fetched this site from this origin, and
+                    // "answered 404" cannot distinguish:
+                    //
+                    //   (a) the publisher removed a site it used to serve, from
+                    //   (b) we asked a host that never had it — the `?site=`
+                    //       deep-link case that seeds a SAME-ORIGIN entry for a
+                    //       foreign peer (measured 2026-08-24), which is the
+                    //       whole reason `err_no_manifest_foreign` exists.
+                    //
+                    // Claiming (a) for both is the same overclaim this change
+                    // set out to remove, pointed the other way — and it is what
+                    // the first version of C2 shipped, because the gate only
+                    // covers the home case. So a withdrawal is asserted **only**
+                    // where the deployment itself vouches that this origin is
+                    // where that peer publishes: its own declared home.
+                    SiteAbsence::Withdrawn { peer, origin, home } => match shown(origin) {
+                        Some(o) if home => crate::i18n::t(
+                            "contentsite.err_home_site_withdrawn",
+                            &[("site", &loc.site_id), ("origin", &o)],
+                        ),
+                        // True for both (a) and (b), which is exactly why it
+                        // stays: it names the site and the origin we asked, and
+                        // its advice — go look for that peer's own domain — is
+                        // right for (b) and harmless for (a).
+                        Some(o) => crate::i18n::t(
+                            "contentsite.err_no_manifest_foreign",
+                            &[("site", &loc.site_id), ("peer", peer), ("origin", &o)],
+                        ),
+                        // Cannot name the origin — say what is still true
+                        // rather than guessing at the one fact this is for.
+                        None => crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)]),
+                    },
+                    // We heard nothing. This may NOT borrow the withdrawal
+                    // sentence: relabelling an outage as a deletion is a worse
+                    // failure than the one this replaces.
+                    SiteAbsence::Unreachable { peer, origin } => match shown(origin) {
+                        // `ManifestMissing` is the arm that never asked anyone —
+                        // the original wrong-lookup case ("we looked at the
+                        // wrong host"), and this string has always said the
+                        // right thing for it. Keep it exactly where it was
+                        // earned, and nowhere else.
+                        Some(o) if never_asked => crate::i18n::t(
+                            "contentsite.err_no_manifest_foreign",
+                            &[("site", &loc.site_id), ("peer", peer), ("origin", &o)],
+                        ),
+                        Some(o) => crate::i18n::t(
+                            "contentsite.err_origin_unreachable",
+                            &[("site", &loc.site_id), ("origin", &o)],
+                        ),
+                        None => crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)]),
+                    },
+                    SiteAbsence::NoRoute { peer } => {
                         crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)])
                     }
                 }
@@ -811,11 +1183,27 @@ impl ContentSiteModel {
             // We hold the page's site but not its body, and the origin answered:
             // a genuinely-missing page (not offline).
             ResolveError::PageMissing => "contentsite.offline_page_missing",
-            // The live source is unreachable (origin down / 404'd the fetch),
-            // but we have the cached outline.
-            ResolveError::Unreachable | ResolveError::ManifestMissing => {
-                "contentsite.offline_source_unreachable"
-            }
+            // **The origin answered and does not carry this site.** This is the
+            // measured defect (cell #17): the reader was shown a fully-navigable
+            // ghost under "This site's source is unreachable", while the source
+            // was up and answering. "Unreachable" sends them to check their
+            // network; "showing its cached outline" reads as temporary. Both are
+            // wrong, and the state is permanent until the publisher acts.
+            //
+            // **A withdrawal may be asserted HERE and not on the bare-error
+            // path, and the difference is evidence.** Reaching this notice means
+            // we hold a cached manifest for this site — so we *did* fetch it
+            // from this origin at some point, which is what makes "that origin
+            // is where this peer publishes" a fact rather than an assumption.
+            // With nothing held (`error_output`) we have no such history, and
+            // "the origin answered 404" cannot be told apart from "we asked the
+            // wrong host".
+            ResolveError::SiteWithdrawn => "contentsite.offline_source_withdrawn",
+            // We genuinely could not reach it, or never asked (a cache miss on a
+            // site we hold the manifest for). The old sentence is right here.
+            ResolveError::Unreachable
+            | ResolveError::OriginUnreachable
+            | ResolveError::ManifestMissing => "contentsite.offline_source_unreachable",
         };
         self.shell_from_manifest(peers, loc, can_go_back, &crate::i18n::t(notice, &[]))
     }
@@ -826,9 +1214,12 @@ impl ContentSiteModel {
     /// where a page-miss is a genuine not-found, or no durable manifest). The
     /// shell is gated on whether we HOLD the manifest, NOT on the live error
     /// type: a manifest-pinned site whose page is ephemeral re-fetches over
-    /// HTTP, and an unreachable origin 404s the *manifest fetch* too — so the
-    /// live error is `ManifestMissing` even though we have a durable cached
-    /// copy. Reuses [`output_from_resolved`] so the chrome is identical to a
+    /// HTTP, and a live failure fails the *manifest fetch* too — so the live
+    /// error is a manifest-level one (`SiteWithdrawn` / `OriginUnreachable` /
+    /// `ManifestMissing`) even though we have a durable cached copy. **Which of
+    /// those it is chooses the notice, never whether there is a shell** — the
+    /// outline renders either way, and only the sentence over it differs
+    /// (`shell_output`). Reuses [`output_from_resolved`] so the chrome is identical to a
     /// live render. Shared by the offline/error shell ([`shell_output`]) and
     /// the still-loading shell (the Pending branch, BUG-2) so a visited foreign
     /// site always shows its outline instead of a bare spinner.
@@ -888,6 +1279,127 @@ mod tests {
         let mut m = ContentSiteModel::new(1, pid);
         m.initialize(peers);
         m
+    }
+
+    // -- `hydrate_durable`: the Worker-arm nav-state repair ------------------
+    //
+    // AUDIT-WORKER-ARM-NAVIGATION-2026-08-30. What these can and cannot reach,
+    // stated up front so nobody reads them as more than they are: `Peers` is
+    // Direct-only on the native target, where the sync and async reads hit the
+    // SAME in-process store — so the arm-split that produces the defect is not
+    // reproducible here, and the end-to-end proof is the e2e gate on the arm
+    // that broke. What IS reachable here is the mechanism's decision table,
+    // which is where the ways to get this wrong live: adopting on a miss,
+    // wiping on an error, and clobbering a navigation that beat the read home.
+    // A model built without `initialize` stands in for the un-hydrated surface.
+
+    /// **P** — a location in the durable tree is adopted by a surface that has
+    /// not read one, and it replaces the default rather than merging with it.
+    #[tokio::test]
+    async fn hydrate_adopts_the_persisted_location() {
+        let peers = pm();
+        let pid = peers.primary_peer_id().to_string();
+        crate::views::content_site::ensure_demo_site(&peers, &pid);
+        let m = ContentSiteModel::new(7, pid.clone());
+        // Deliberately NO `initialize` — this is the surface whose sync read
+        // answered nothing, which on the Worker arm is every surface.
+        let persisted = ContentSiteState {
+            peer: Some("PUBLISHER".into()),
+            site_id: "handbook".into(),
+            page: "chapter-2".into(),
+        };
+        // `seed_write`, not `dispatch_write`: on Direct it is a sync L0 put, so
+        // the durable value is there before the read. `dispatch_write` spawns,
+        // and the read would race it — which would make this test pass through
+        // the `NonePersisted` branch and prove nothing.
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+        assert_ne!(m.state_snapshot(), persisted, "precondition: not there yet");
+
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::Adopted);
+        assert_eq!(m.state_snapshot(), persisted);
+    }
+
+    /// **N2 — absence of evidence changes nothing, and it is the whole reason
+    /// the read is three-way instead of `unwrap_or_default`.** A surface with
+    /// no persisted location keeps its configured default; it does not invent
+    /// one, and it does not write.
+    #[tokio::test]
+    async fn hydrate_with_nothing_persisted_keeps_the_default() {
+        let peers = pm();
+        let pid = peers.primary_peer_id().to_string();
+        crate::views::content_site::ensure_demo_site(&peers, &pid);
+        let m = ContentSiteModel::new(8, pid.clone());
+
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::NonePersisted);
+        // The configured default, and NOT a location invented from somewhere.
+        assert_eq!(
+            m.state_snapshot(),
+            ContentSiteState { peer: None, site_id: DEMO_SITE_ID.into(), page: String::new() }
+        );
+        assert!(
+            peers.get_entity(&pid, &m.state_path()).is_none(),
+            "hydration must not WRITE — it is a read that corrects an earlier read"
+        );
+    }
+
+    /// **N1 — a navigation that lands during the round-trip wins.**
+    ///
+    /// The durable value the read is carrying is *older* than the screen, so
+    /// adopting it would drag the user backwards. This is the failure the
+    /// user-themes resurrection race is the other instance of; here it is
+    /// forced by navigating between building the future and awaiting it, which
+    /// is exactly the window the real one opens.
+    #[tokio::test]
+    async fn a_navigation_during_the_read_is_not_clobbered() {
+        let peers = pm();
+        let pid = peers.primary_peer_id().to_string();
+        crate::views::content_site::ensure_demo_site(&peers, &pid);
+        let m = ContentSiteModel::new(9, pid.clone());
+        let stale = ContentSiteState {
+            peer: None,
+            site_id: "handbook".into(),
+            page: "old-page".into(),
+        };
+        peers.seed_write(&pid, m.state_path(), stale.to_entity());
+
+        // The round-trip starts here...
+        let job = m.hydration_job(&peers).expect("un-hydrated surface has a job");
+        // ...and the user moves before it lands.
+        m.open_site("", DEMO_NOTES_SITE_ID, &peers);
+        let moved = m.state_snapshot();
+        assert_eq!(moved.site_id, DEMO_NOTES_SITE_ID, "precondition: we navigated");
+
+        assert_eq!(job.await, Hydration::Superseded);
+        assert_eq!(
+            m.state_snapshot(),
+            moved,
+            "the newer navigation must survive the older durable read"
+        );
+    }
+
+    /// A surface whose SYNC read already answered — the Direct arm, whenever
+    /// the state is genuinely there — skips the round-trip entirely. Without
+    /// this the fix would put an L1 round-trip on every path that never needed
+    /// one.
+    #[tokio::test]
+    async fn a_surface_the_sync_read_hydrated_does_no_round_trip() {
+        let peers = pm();
+        let pid = peers.primary_peer_id().to_string();
+        crate::views::content_site::ensure_demo_site(&peers, &pid);
+        let mut m = ContentSiteModel::new(10, pid.clone());
+        // Persist FIRST (synchronously on Direct), so `initialize`'s sync read
+        // is the one that answers — which is the whole Direct-arm story.
+        let persisted =
+            ContentSiteState { peer: None, site_id: DEMO_NOTES_SITE_ID.into(), page: String::new() };
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+        m.initialize(&peers);
+        assert_eq!(m.state_snapshot(), persisted, "the sync read answered");
+
+        assert!(
+            m.hydration_job(&peers).is_none(),
+            "an already-hydrated surface must not schedule a durable read"
+        );
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::Superseded);
     }
 
     #[test]
@@ -1460,10 +1972,10 @@ mod tests {
     #[test]
     fn home_nav_target_is_cross_site_local_and_cross_peer_foreign() {
         let peers = pm();
-        let mut m = model(&peers); // local demo home
+        let m = model(&peers); // local demo home
         assert_eq!(m.home_nav_target(), "site:demo/");
         // A foreign-home deployment: home lives on a publisher peer.
-        m.default_site_peer = Some("PEERX".to_string());
+        m.inner.lock().unwrap().default_site_peer = Some("PEERX".to_string());
         assert_eq!(m.home_nav_target(), "entity://PEERX/sites/demo/");
     }
 
@@ -1589,6 +2101,55 @@ mod tests {
         assert_eq!(out.site_title, "Bill's Labs");
     }
 
+    /// **A withdrawal is asserted only where we can tell it from a wrong
+    /// lookup — map-C2, corrected while auditing C2.**
+    ///
+    /// The first version of this change routed every answered-404 on a foreign
+    /// site to a new "this peer doesn't carry that site any more" string. That
+    /// is an overclaim, and it regressed the exact case
+    /// `err_no_manifest_foreign` was earned on (2026-08-24): a `?site=` deep
+    /// link seeds a **same-origin** entry for a foreign peer, so the resolver
+    /// asks *this* domain for *their* site, gets a perfectly honest 404, and
+    /// the reader would be told the publisher removed something it never had.
+    ///
+    /// With nothing cached we have never successfully fetched this site from
+    /// this origin, so "answered 404" cannot distinguish a withdrawal from a
+    /// wrong host — and the message that is true for both stays. The demo-pull
+    /// gate did not catch this because it only covers the deployment's own home.
+    #[test]
+    fn a_withdrawn_foreign_site_we_never_held_is_not_claimed_as_a_withdrawal() {
+        let peers = pm();
+        let m = model(&peers);
+        let me = peers.primary_peer_id().to_string();
+        let foreign = "2KSomebodyElsesPublisherIdentity";
+        // The deep-link shape: an origin registered for a peer whose site we
+        // hold nothing for.
+        crate::content_site::origins::set_origin(&peers, &me, foreign, "https://ours.example");
+        let loc = Location {
+            peer_id: Some(foreign.to_string()),
+            site_id: "theirs".into(),
+            page: String::new(),
+        };
+
+        let out = m.error_output(&peers, &loc, ResolveError::SiteWithdrawn);
+        let msg = out.error.expect("an absent foreign site reports");
+        assert!(
+            msg.contains("Nothing is published at") || msg.contains("theirs"),
+            "the message must name the site and the origin we asked: {msg}"
+        );
+        assert!(
+            !msg.to_lowercase().contains("removed")
+                && !msg.to_lowercase().contains("no longer published"),
+            "we hold no copy of this site from this origin, so we cannot tell a withdrawal \
+             from asking the wrong host — and must not claim one: {msg}"
+        );
+        assert!(
+            msg.contains("ours.example"),
+            "naming the origin we asked is what turns an apparently-deleted site into an \
+             obviously-wrong lookup: {msg}"
+        );
+    }
+
     #[test]
     fn open_owned_site_clears_peer_dimension() {
         use crate::content_site::prefs;
@@ -1654,10 +2215,10 @@ mod tests {
             shell.body.as_str()
         );
 
-        // THE REGRESSION (Phase 21b): an unreachable origin 404s the manifest
-        // *fetch* too, so the live error is `ManifestMissing` even though we
-        // hold the cached manifest. The shell must still render from the cache —
-        // gated on `manifest_only`, not on the error type.
+        // THE REGRESSION (Phase 21b): a live failure fails the manifest *fetch*
+        // too, so the live error is a manifest-level one even though we hold the
+        // cached manifest. The shell must still render from the cache — gated on
+        // `manifest_only`, not on the error type.
         let shell_mm = m
             .shell_output(&peers, &loc, ResolveError::ManifestMissing, false)
             .expect("cached manifest + live ManifestMissing still yields a shell");
@@ -1667,6 +2228,44 @@ mod tests {
             shell_mm.body.as_str().to_lowercase().contains("unreachable"),
             "ManifestMissing notice says the source is unreachable: {}",
             shell_mm.body.as_str()
+        );
+
+        // **map-C2 / cell #17.** A site the publisher WITHDREW gets a shell too
+        // — availability is unchanged, and that was never the defect. What
+        // changes is the sentence over it: the origin answered, so "the source
+        // is unreachable" is false, and "showing its cached outline" reads as a
+        // temporary state when the state is permanent until the publisher acts.
+        let shell_wd = m
+            .shell_output(&peers, &loc, ResolveError::SiteWithdrawn, false)
+            .expect("a withdrawn site still shows the outline we hold — E1 is unchanged");
+        assert_eq!(shell_wd.site_title, "Bill's Labs", "the chrome is identical");
+        assert!(shell_wd.error.is_none());
+        let withdrawn = shell_wd.body.as_str().to_lowercase();
+        assert!(
+            withdrawn.contains("removed"),
+            "a withdrawn site must say the publisher removed it: {withdrawn}"
+        );
+        assert!(
+            !withdrawn.contains("unreachable"),
+            "the origin ANSWERED — calling it unreachable sends the reader to check a \
+             network that is working: {withdrawn}"
+        );
+
+        // And the reverse direction, which is the easier mistake: an origin we
+        // could not reach must NOT be reported as a withdrawal. Relabelling an
+        // outage as a deletion is worse than the bug it replaces.
+        let shell_ou = m
+            .shell_output(&peers, &loc, ResolveError::OriginUnreachable, false)
+            .expect("an unreachable origin still shows the outline we hold");
+        let unreachable = shell_ou.body.as_str().to_lowercase();
+        assert!(
+            unreachable.contains("unreachable"),
+            "an origin that said nothing is unreachable: {unreachable}"
+        );
+        assert!(
+            !unreachable.contains("removed"),
+            "we heard nothing — claiming the publisher removed the site is a fact we do \
+             not have: {unreachable}"
         );
 
         // A LOCAL page-miss gets NO shell — that's a genuine not-found.

@@ -183,6 +183,19 @@ impl WindowView for ShellWindow {
             _ => false,
         };
         if dirty {
+            // **Mark dirty here, not via the state-path subscription.** The
+            // scrollback is *session* state — `to_entity` deliberately does not
+            // persist it — so a submission can change what the user sees while
+            // changing nothing we store: `record_submit` skips a consecutive
+            // duplicate, and the put that follows is then byte-identical.
+            // Content-addressed, identical bytes are not a change, no event
+            // fires, and the section never rebuilds, so everything the shell
+            // printed stays in the model and off the screen.
+            //
+            // The subscription stays — it is what re-renders on writes we did
+            // not make here (an async `exec` completing). It just cannot be the
+            // trigger for our own output.
+            self.watch.mark_dirty();
             self.model.save_state(peers);
         }
     }

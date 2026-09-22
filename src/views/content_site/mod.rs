@@ -66,6 +66,22 @@ impl ContentSiteWindow {
             create: |id, peer_id, pm| {
                 let mut window = ContentSiteWindow::new(id, peer_id.to_string());
                 window.model.initialize(pm);
+                // ...and then CORRECT that read, because on the Worker arm it
+                // read nothing. `initialize`'s `get_entity` answers from the
+                // per-prefix cache mirror, and the only subscription that would
+                // cover this window's state path is the one registered three
+                // lines below — after the read, and asynchronously even then.
+                // So a Site Browser window restored on the Worker arm opened at
+                // the configured home instead of where it was left, on every
+                // boot. Same defect as the overlay's, same fix, its own call
+                // site because a window is created long after `boot_load` has
+                // finished awaiting things. Fire-and-forget: `hydrate_durable`
+                // adopts through the model's `Arc<Mutex<_>>` and refuses to
+                // clobber a navigation that lands first, and the state watch
+                // registered below repaints when it does.
+                // (`docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.)
+                #[cfg(target_arch = "wasm32")]
+                window.model.spawn_hydrate_durable(pm);
                 // Re-render when our navigation state changes (navigate
                 // persists the location) ...
                 pm.watch_prefix(

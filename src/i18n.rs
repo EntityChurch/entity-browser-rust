@@ -1453,6 +1453,36 @@ pub const EN: &[(&str, Message)] = &[
              find it in the Registry Browser.",
         ),
     ),
+    // The same withdrawal, when the site is the one THIS DEPLOYMENT is built
+    // around. The advice in `err_no_manifest_foreign` — go find the peer's own
+    // domain — is absurd here: it is this domain, and the reader is on it. So
+    // this says what is true and stops, rather than sending them somewhere.
+    (
+        "contentsite.err_home_site_withdrawn",
+        Message::Simple(
+            "This site's home page, '{site}', is no longer published at {origin}. The host \
+             is up and answering; its publisher has removed the site. Nothing here can \
+             restore it — the site's operator has to republish it.",
+        ),
+    ),
+    // We asked an origin and heard nothing usable. Says only what we know.
+    (
+        "contentsite.err_origin_unreachable",
+        Message::Simple(
+            "Couldn't reach {origin} to load '{site}'. The site may be fine — we got no \
+             answer, which tells us nothing about what's published there. Try again.",
+        ),
+    ),
+    // The publisher was replaced and this reference still names the old one.
+    // Reachable from a link, a `?site=` deep link, or a deployment document —
+    // persisted navigation already resolves a retired peer at its decode point.
+    (
+        "contentsite.err_peer_retired",
+        Message::Simple(
+            "The publisher of '{site}' ({peer}) was replaced by {successor}. This link \
+             names the old identity, which no longer publishes anything.",
+        ),
+    ),
     (
         "contentsite.err_page_not_found",
         Message::Simple("Page '{page}' not found in site '{site}'."),
@@ -1468,6 +1498,19 @@ pub const EN: &[(&str, Message)] = &[
     (
         "contentsite.offline_source_unreachable",
         Message::Simple("_This site's source is unreachable. Showing its cached outline._"),
+    ),
+    // The cached-outline notice for a site the publisher WITHDREW. The line
+    // above is false here in the way that matters: the source is up, answering,
+    // and no longer carries the site — so "unreachable" sends the reader to
+    // check their network, and "showing its cached outline" reads as a
+    // temporary state when it is a permanent one. This is the second half of
+    // AP33 (the first was the log line), and it is the half a user sees.
+    (
+        "contentsite.offline_source_withdrawn",
+        Message::Simple(
+            "_Its publisher has removed this site. What you're reading is the copy this \
+             browser already had._",
+        ),
     ),
     // A `format:html` document page whose body is empty. Its own state, not an
     // error and not the markdown empty-page path: the sandboxed frame would

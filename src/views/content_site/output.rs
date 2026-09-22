@@ -284,6 +284,94 @@ pub fn classify_missing_site<'a>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Why a site is ABSENT — the three-way distinction, and the one bit of context
+// that makes the advice true.
+// ---------------------------------------------------------------------------
+
+/// Everything the reports need to know about a site that would not resolve.
+///
+/// [`MissingSite`] above answers *which origin did we look at*. It cannot answer
+/// **what happened when we looked**, because until now nothing carried that:
+/// `ResolveError::ManifestMissing` was returned whether the origin answered
+/// "not here", answered nothing, or was never asked. This type is the second
+/// axis, and it exists because the surface was measurably wrong on both counts:
+///
+///   * a returning visitor to a **withdrawn** site was told *"This site's source
+///     is unreachable. Showing its cached outline."* The source answered
+///     perfectly; the publisher withdrew the site. (Gate cell #17.)
+///   * a first-time visitor was told the site *"belongs to another peer and is
+///     probably hosted on its own domain — open it there, or find it in the
+///     Registry Browser"* — about **this deployment's own publisher, on the
+///     origin they were already looking at**. That sentence is correct for the
+///     case it was written for (a `?site=` deep link that seeded a same-origin
+///     entry for a genuinely foreign peer) and is reached by a case it was not.
+///     AP33, exactly.
+///
+/// **The discriminator for the advice is `home`, and it is derived rather than
+/// stored.** The change map proposed a provenance bit — *did this home come from
+/// a deployment document* — and a durable `home_site` schema change to carry it.
+/// It is not needed and it is the weaker fact: what makes the Registry Browser
+/// advice absurd is not who configured the home, it is that the peer being
+/// described is the one this deployment is built around and whose origin the
+/// reader is already on. Both halves of that are readable now: the configured
+/// home site, and whether the registered origin is the same-origin sentinel.
+/// A user who chose that home themselves is owed the same true sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SiteAbsence<'a> {
+    /// Our own tree, our own missing site. Unchanged.
+    Local,
+    /// The peer named here was **superseded** and no longer publishes. Persisted
+    /// navigation resolves a retired peer to its successor at its decode point
+    /// (`ContentSiteState::from_entity`), so this is reachable only from a
+    /// *fresh* reference — a link, a `?site=` deep link, or a deployment
+    /// document that still names the retired identity. Those paths never had a
+    /// report for it at all.
+    Retired { peer: &'a str, successor: &'a str },
+    /// **The origin answered and does not carry this site.** A fact about the
+    /// publisher. `home` = this is the site the deployment is built around, so
+    /// "go find it on its own domain" is not advice we may give.
+    Withdrawn { peer: &'a str, origin: &'a str, home: bool },
+    /// **We asked and heard nothing usable.** A fact about the network. Never
+    /// evidence about what the publisher carries — which is why this may not
+    /// borrow the withdrawn sentence, in either direction.
+    Unreachable { peer: &'a str, origin: &'a str },
+    /// No route for this peer at all — nothing to ask.
+    NoRoute { peer: &'a str },
+}
+
+/// Classify an absent site: *which origin* (via [`classify_missing_site`]) plus
+/// *what happened when we asked* plus *is this the deployment's own home*.
+///
+/// Pure — no `Peers`, no DOM, no globals — so every branch is reachable from
+/// `make test`, which the renderer that consumes it is not (wasm-only).
+///
+/// `retired_to` is the successor if the location's peer was superseded, and
+/// **it wins over everything else**: if the publisher was replaced, "the origin
+/// does not carry this site" is true and useless — of course it does not, it is
+/// not that publisher any more.
+pub fn classify_site_absence<'a>(
+    our_peer: &str,
+    loc_peer: Option<&'a str>,
+    origin: Option<&'a str>,
+    answered: bool,
+    home: bool,
+    retired_to: Option<&'a str>,
+) -> SiteAbsence<'a> {
+    match classify_missing_site(our_peer, loc_peer, origin) {
+        MissingSite::Local => SiteAbsence::Local,
+        MissingSite::ForeignUnknownHost { peer } => match retired_to {
+            Some(successor) => SiteAbsence::Retired { peer, successor },
+            None => SiteAbsence::NoRoute { peer },
+        },
+        MissingSite::Foreign { peer, origin } => match retired_to {
+            Some(successor) => SiteAbsence::Retired { peer, successor },
+            None if answered => SiteAbsence::Withdrawn { peer, origin, home },
+            None => SiteAbsence::Unreachable { peer, origin },
+        },
+    }
+}
+
 #[cfg(test)]
 mod missing_site_tests {
     use super::*;
@@ -328,6 +416,91 @@ mod missing_site_tests {
         assert_eq!(
             classify_missing_site(ME, Some(THEM), None),
             MissingSite::ForeignUnknownHost { peer: THEM }
+        );
+    }
+
+    // ── The three-way distinction (map-C2) ────────────────────────────────
+
+    /// **P — an origin that ANSWERED is a fact about the publisher.** This is
+    /// cell #17: a returning visitor to a withdrawn site used to be told the
+    /// source was unreachable, while the source was answering perfectly.
+    #[test]
+    fn an_origin_that_answered_reports_a_withdrawal_not_an_outage() {
+        assert_eq!(
+            classify_site_absence(ME, Some(THEM), Some("https://them.example"), true, false, None),
+            SiteAbsence::Withdrawn {
+                peer: THEM,
+                origin: "https://them.example",
+                home: false
+            }
+        );
+    }
+
+    /// **N — the easy failure in the other direction, and the one to watch
+    /// for.** Relabelling every miss as "withdrawn" would be worse than the bug
+    /// it replaces: it turns a transient outage into a claim that the publisher
+    /// deleted something.
+    #[test]
+    fn an_origin_that_said_nothing_is_never_reported_as_a_withdrawal() {
+        assert_eq!(
+            classify_site_absence(ME, Some(THEM), Some("https://them.example"), false, false, None),
+            SiteAbsence::Unreachable { peer: THEM, origin: "https://them.example" }
+        );
+        // And the home bit must not smuggle a withdrawal in either — an
+        // unreachable home is still unreachable.
+        assert_eq!(
+            classify_site_absence(ME, Some(THEM), Some(""), false, true, None),
+            SiteAbsence::Unreachable { peer: THEM, origin: "" }
+        );
+    }
+
+    /// **The home bit is what makes the advice true.** Same publisher, same
+    /// answered 404, and the only difference is whether this is the site the
+    /// deployment is built around — which is exactly the difference between
+    /// "open it on its own domain" being useful and being absurd.
+    #[test]
+    fn the_deployments_own_home_is_distinguished_from_a_site_you_navigated_to() {
+        let visited =
+            classify_site_absence(ME, Some(THEM), Some(""), true, false, None);
+        let home = classify_site_absence(ME, Some(THEM), Some(""), true, true, None);
+        assert_eq!(visited, SiteAbsence::Withdrawn { peer: THEM, origin: "", home: false });
+        assert_eq!(home, SiteAbsence::Withdrawn { peer: THEM, origin: "", home: true });
+        assert_ne!(visited, home, "the two must not render the same advice");
+    }
+
+    /// **A superseded publisher wins over everything.** "The origin does not
+    /// carry this site" is true and useless when the origin is not that
+    /// publisher any more — and it is the sentence that sent an operator
+    /// looking for a deleted site during the re-key.
+    #[test]
+    fn a_retired_publisher_is_named_as_retired_whatever_the_origin_said() {
+        for (origin, answered) in
+            [(Some("https://them.example"), true), (Some(""), false), (None, true)]
+        {
+            assert_eq!(
+                classify_site_absence(ME, Some(THEM), origin, answered, false, Some("2KNewOne")),
+                SiteAbsence::Retired { peer: THEM, successor: "2KNewOne" },
+                "origin={origin:?} answered={answered}"
+            );
+        }
+    }
+
+    /// Our own tree is unaffected by any of it — a local miss is a local miss,
+    /// and none of these axes apply.
+    #[test]
+    fn a_local_miss_is_untouched_by_the_new_axes() {
+        assert_eq!(classify_site_absence(ME, None, None, true, true, None), SiteAbsence::Local);
+        assert_eq!(
+            classify_site_absence(ME, Some(ME), Some(""), false, true, Some("2KX")),
+            SiteAbsence::Local
+        );
+    }
+
+    #[test]
+    fn no_route_and_not_retired_stays_a_route_problem() {
+        assert_eq!(
+            classify_site_absence(ME, Some(THEM), None, false, false, None),
+            SiteAbsence::NoRoute { peer: THEM }
         );
     }
 }

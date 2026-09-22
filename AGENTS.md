@@ -187,7 +187,98 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   `a_supersession_the_domain_contradicts_is_dropped`). Two rules the naive version gets wrong:
   **no source this boot changes nothing** (a truncated doc must not be able to wipe good
   state — and D23's deadline makes that case *more* common), and **revalidate strictly after
-  adopting**, or a legitimate second divergence reads as a stale record.
+  adopting**, or a legitimate second divergence reads as a stale record. And the corollary that
+  looks like an optimization: **an origin's "I have none" is a fact you may REPORT, never one
+  you may write down.** `deployment_config::read_document` is four-state (`Served |
+  NoDocument | Unreadable | Unheard`) so the log can tell a domain that ships no config on
+  purpose from one nobody could reach — but caching that 404 to skip the next probe would be
+  AP30 with a shorter fuse: a deployment that *adds* the document later would never reach a
+  returning profile. Only `origin_answered()` may be branched on.
+- **When you SPLIT a collapsed value, the default arm gets the WEAKEST claim — AP40.** Twice in
+  one session a change that existed to stop conflating outcomes handed its most specific
+  statement to the `_ =>` arm: every non-2xx became *"this deployment serves no config **by
+  choice**"* (a 502 reporting the deployer's intent), and every answered-404 became *"the
+  publisher withdrew this site"* (regressing the wrong-host case the message it replaced was
+  earned on). **Enumerate what reaches each arm and ask what it licenses you to say; prefer an
+  evidence test over a status test.** Then check the test doubles, because a stub that
+  misreports which failure it produces makes the new distinction untestable (AP39) — the sweep
+  of every `impl BinSource` is on record.
+- **A sync read at construction reads nothing on the Worker arm and RACES the store on the
+  Direct one — and keeping the result is the bug, not the read (AP41).** `Peers::get_entity`/`tree_listing` answer from the
+  per-prefix cache mirror. Every window factory here reads (`model.initialize(pm)`) *before*
+  it subscribes, and **reordering does not fix it**: `observe` is async, so a subscription
+  makes the *next* read work and a constructor that caches has no next read. This is not the
+  "subscribe the prefix you read" rule — that one is about coverage; this is about
+  **retention**. Render from a cold read if you like; do not retain it. Use
+  `get_entity_async`/`tree_listing_async` (L1, subscription-independent on both arms) — the
+  rule `boot_load` already applies to the session config (*"the durable tree, not the cold
+  cache mirror"*) and `tree_listing_async`'s own doc comment states for listings. Two traps in
+  the repair: **an errored round-trip is not an answer** (keep what you have — AP30 corollary
+  (a)), and **a write that lands during it is newer than it** (guard with a generation counter,
+  or you drag the user backwards). Report the outcome as an enum — *restored / never had one /
+  could not tell / you moved first* are four facts (AP40). Measured 2026-08-30: every
+  returning reader on `?worker=1` was put back on the **build** default and shown *"No site
+  manifest at 'demo'"* — and **the shipped Direct-IDB arm has the same defect intermittently**
+  (the store fills from IndexedDB while `initialize` runs; measured as a 1-in-3 flake, and
+  neutering the fix reds BOTH arms). Do not file this class as Worker-only. Fixed for `content_site` (`hydrate_durable`, gated by
+  `a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm` on **both** arms); the
+  **Shell is measured red on the same shape** and five more models share it unmeasured. Note
+  what makes this reachable for windows: a reload restores **no** windows, but **window ids
+  restart at 1**, so a re-opened window inherits the last session's
+  `workspace/windows/{id}/state`. `make e2e-worker E2E_FEATURES=demo-apps,audit-worker-reads`
+  lights the lamp — but it is a **pointer, not a census** (it records subscription *intent*, so
+  subscribed-but-unmirrored stays silent). A behavioural gate is what measures the class.
+  Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+- **Window state is keyed by an id that is REUSED, so the decoder must check what wrote it —
+  AP42.** `next_id` restarts at 1 each session and **a reload is not a close** (only
+  `Action::CloseWindow` removes window state), so the entity at `workspace/windows/{id}/state`
+  was written by whatever window held that id last session, **of any type**. Decoding by field
+  name alone adopts it: measured, the Entity Tree took the Knowledge Base's `expanded_paths`
+  (the two mean different things by that name). All **eleven** decoders now open with
+  `if entity.entity_type != STATE_TYPE { return <no persisted state> }` — the discriminator
+  already existed, `Entity::new("app/state/{type}", …)`, and was being thrown away. **Any new
+  window model that persists state adds the same guard and a row to
+  `no_window_state_decoder_adopts_another_window_types_entity`** (`window.rs`), which is the
+  class-level enforcement point — a matrix, so a new type is covered against all ten others,
+  and it asserts `rows.len()` so an omission fails instead of passing quietly.
+  **Two window types must not SHARE a state type** — the guard separates readers that disagree
+  about their type and is blind to two that agree. Programs persisted `AppViewState` under the
+  Apps window's `app/state/games_view`; it now has `app/state/programs_view` and shares only
+  the codec (`from_entity_as`/`to_entity_as`). A shared codec is fine; a shared slot is not.
+  **Census by `grep -rln window_state_path src/views/`, never by the entity-type literal** —
+  the literal grep missed three (`content_site` and `games` had already promoted theirs to a
+  constant; `programs` writes through another module's codec).
+  Two honest limits: the adoption was **inert in production** (KB paths are relative, tree
+  paths are `/{peer}/…`, and `restore_expanded` is additive — coincidences, not guarantees),
+  and the guard does **not** stop the last holder of an id overwriting the previous one's
+  state. Type-scoping the path is the separate, larger change that also fixes resume.
+- **An idempotent write is not an event — a surface that shows UNPERSISTED state marks its own
+  watch dirty (AP43).** The store is content-addressed, so an identical put at the same path
+  fires no subscription and is indistinguishable from no write at all. The Shell signalled its
+  own rebuild by persisting and waiting for the watch on its own `window_state_path`;
+  `record_submit` skips a consecutive duplicate, so **re-running the last command produced a
+  byte-identical entity** and the section never rebuilt — scrollback (session-only by design)
+  stayed in the model with the `<pre>` frozen on the empty placeholder. Reported for a day as
+  *"a Shell after a reload renders nothing"*; warm-vs-cold is not the axis, *did the persisted
+  entity change* is. Keep the subscription (it catches an async `exec` completing) — it just
+  cannot be the trigger for output the surface produced itself. **Do not generalise:** the
+  other five windows that persist without marking dirty are correct, rendering either purely
+  persisted state or event-log rows whose paths are always new. And note D24 wants the
+  opposite on the Apps surface, where a spurious dirty restarts a running app.
+- **A documented invocation is a coupling no compiler maintains — run it before you write it
+  down (AP37).** Two gates' doc comments instructed `E2E_EXTRA='--ignored'`; the variable did
+  not exist, make ignored it silently, and the command printed `0 passed; 2 ignored` — a
+  green-looking run of the gates it was meant to execute. `E2E_EXTRA` and `E2E_FEATURES` are
+  real now; `WASM_FEATURES` is taken by `make wasm` and means something else.
+- **A guard that skips work answers ONE question — check every consequence is downstream of it
+  (AP36).** Three defects in this thread were one predicate standing in for two: `put_if_absent`
+  for *did the user set this?*, a presence check for *do I hold the CURRENT bytes?*, and
+  `home_is_local` for *may we read the domain's document at all?* — the last of which withheld
+  origins, supersession revalidation and every log line about the document from every
+  local-home profile. **Put the guard on the decision, never on the acquisition.** Boot now
+  reads `/entity-deployment.json` unconditionally and gates only the adoption
+  (`a_local_home_profile_reads_the_deployment_document_and_keeps_its_home` — whose N-critical
+  half reds if the guard is deleted rather than moved).
 - **`make e2e-worker T=pulled_demo` is the withdrawn-home gate — AP33.** A deployment's home
   site leaving its publisher's tree while the identity stays put: not a re-key, so nothing
   adopts and nothing heals. Availability survives it (E1, cell #17); **the reports do not** —

@@ -318,6 +318,165 @@ pub fn expand_origin(origin: &str) -> Option<String> {
     }
 }
 
+/// **What the origin said when we asked for its deployment document.**
+///
+/// The read used to collapse four different things into one `None`: a 404, a
+/// document that parsed but declared nothing, bytes we could not read, and
+/// hearing nothing at all inside D23's deadline. **Only the first two are facts
+/// about the deployment**; the last is a fact about the network and the third is
+/// a fact about some bytes. Flattening them is the same conflation that runs
+/// through this whole audit — `put_if_absent` could not tell *the user set this*
+/// from *we wrote it last boot*, and a presence check could not tell *I have a
+/// current copy* from *I have a copy* (D24). Here it means the line an incident
+/// gets debugged from cannot say which happened.
+///
+/// **Note what this deliberately does NOT do.** The dossier that asked for this
+/// also proposed *"a 404, once recorded, does not re-probe every boot."* That is
+/// rejected, and stating why is the point of writing it down: a durable record
+/// that the origin has no document, written because the origin said so once and
+/// never re-examined, is **AP30 exactly** — and it would re-create the wedge one
+/// layer up, because a deployment that ADDS `/entity-deployment.json` later
+/// would never reach a returning profile. It would also undo map-B2, which
+/// landed one commit ago specifically to make every warm boot re-read. The
+/// efficiency it was reaching for is already delivered by boot's
+/// `!config_was_absent` guard, which stops the *second* read within one boot —
+/// the only re-probe that was ever real.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentRead {
+    /// The origin served a document that declares something we can use.
+    Served(DeploymentConfig),
+    /// **The origin answered, and it has no deployment document.** A **404 or
+    /// 410**, or a document that parsed and declared nothing actionable. A
+    /// *fact about the deployment*: it is generic-bundle-on-build-time-defaults
+    /// by choice.
+    ///
+    /// **Only 404/410, and this is the line the first version of this enum got
+    /// wrong** — it mapped every non-2xx here, so a 502 from a CDN reported as
+    /// *"this deployment runs on build-time defaults by choice"*, which is a
+    /// false claim about the deployer's intent and the wrong instruction to an
+    /// operator. That is the exact conflation B3 exists to remove, one status
+    /// family over. `PollError::NotFound` states the same rule for the content
+    /// path and states it first; this is now consistent with it.
+    NoDocument { status: u16 },
+    /// **The origin answered with a failure** — a 403, a 5xx, a proxy error. It
+    /// answered, so this is not [`Unheard`](Self::Unheard); but a server fault
+    /// says *nothing* about whether a document exists, so it is not
+    /// [`NoDocument`](Self::NoDocument) either. Retryable, like every origin
+    /// fault that is not a deliberate 404.
+    OriginError { status: u16 },
+    /// The origin answered with bytes we could not read. A fact about the
+    /// **bytes** — a truncated or half-written file, a proxy error page served
+    /// with a 200 — never a fact about whether a document exists.
+    Unreadable { status: u16 },
+    /// **Nothing was heard**: unreachable, aborted, or D23's deadline expired.
+    /// A fact about nothing at all, and the one outcome from which no durable
+    /// conclusion may ever be drawn (AP30 corollary (a)).
+    Unheard,
+}
+
+impl DocumentRead {
+    /// The usable config, if there is one. The shape every existing caller
+    /// wants; the distinction above is for the caller that needs to *report*.
+    pub fn into_config(self) -> Option<DeploymentConfig> {
+        match self {
+            Self::Served(cfg) => Some(cfg),
+            _ => None,
+        }
+    }
+
+    /// A short stable tag for a structured log field — `served` / `not-served` /
+    /// `unreadable` / `unheard`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Served(_) => "served",
+            Self::NoDocument { .. } => "not-served",
+            Self::OriginError { .. } => "origin-error",
+            Self::Unreadable { .. } => "unreadable",
+            Self::Unheard => "unheard",
+        }
+    }
+
+    /// **Did the origin answer at all?** Literally: was there an HTTP response.
+    /// True for everything but [`Unheard`](Self::Unheard).
+    pub fn origin_answered(&self) -> bool {
+        !matches!(self, Self::Unheard)
+    }
+
+    /// **Is this a statement that the deployment has no document?**
+    ///
+    /// The *only* fact a caller may ever act on or write down, and it is
+    /// narrower than "the origin answered": a 502 answered, and said nothing
+    /// about whether a document exists. True for [`NoDocument`](Self::NoDocument)
+    /// alone.
+    ///
+    /// Even then — see the module note — this may be **reported**, never
+    /// cached: a deployment that adds `/entity-deployment.json` later must
+    /// reach a returning profile (AP30).
+    pub fn declares_no_document(&self) -> bool {
+        matches!(self, Self::NoDocument { .. })
+    }
+
+    /// The sentence a human debugging an incident reads. **Each outcome says
+    /// something different**, and that is the deliverable: the previous single
+    /// `None` produced one line for a domain that ships no config on purpose and
+    /// for a domain that could not be reached, which are opposite problems.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Served(_) => format!("{DEPLOYMENT_CONFIG_PATH} applied"),
+            Self::NoDocument { status } => format!(
+                "the origin answered {status}: it serves no {DEPLOYMENT_CONFIG_PATH} — this \
+                 deployment runs on build-time defaults by choice"
+            ),
+            Self::OriginError { status } => format!(
+                "the origin answered {status} for {DEPLOYMENT_CONFIG_PATH} — a server fault, \
+                 which says NOTHING about whether this deployment has a document"
+            ),
+            Self::Unreadable { status } => format!(
+                "the origin answered {status} with a {DEPLOYMENT_CONFIG_PATH} we could not \
+                 read — the file is malformed, not absent"
+            ),
+            Self::Unheard => format!(
+                "no answer for {DEPLOYMENT_CONFIG_PATH} within the boot deadline — \
+                 unreachable or too slow, and NOT evidence that the origin has none"
+            ),
+        }
+    }
+}
+
+/// Classify a bounded read of the deployment document. **Pure** — the whole
+/// point of the split, so every outcome has a native test rather than only the
+/// one a browser happened to produce.
+///
+/// `None` in means the bounded read gave us nothing: unreachable, aborted, or
+/// the deadline. That is [`DocumentRead::Unheard`] and nothing else.
+pub fn classify(resp: Option<crate::net::BoundedResponse>) -> DocumentRead {
+    let Some(resp) = resp else {
+        return DocumentRead::Unheard;
+    };
+    if !resp.ok {
+        // **Only 404/410 mean "there is none".** Everything else the origin can
+        // answer with — 403, 500, 502, a proxy page — is a fault that says
+        // nothing about whether a document exists, and calling it a deliberate
+        // absence turns a transient origin problem into a claim about the
+        // deployer's intent. Same rule, same reason, and the same wording as
+        // `PollError::NotFound` on the content path.
+        return match resp.status {
+            404 | 410 => DocumentRead::NoDocument { status: resp.status },
+            status => DocumentRead::OriginError { status },
+        };
+    }
+    match DeploymentConfig::parse(&resp.text) {
+        // Parsed and declares something we act on.
+        Some(cfg) if !cfg.is_empty() => DocumentRead::Served(cfg),
+        // Parsed and declares nothing. The origin ANSWERED and has, in every
+        // sense that matters to a boot, no deployment document — same outcome as
+        // a 404 and the same fact about the deployment.
+        Some(_) => DocumentRead::NoDocument { status: resp.status },
+        // Not a JSON object at all.
+        None => DocumentRead::Unreadable { status: resp.status },
+    }
+}
+
 /// Fetch and parse the per-domain deployment config from the SPA's own origin.
 /// Read-only, best-effort: any failure (not served, unreachable, unparseable,
 /// or an empty/unrecognized doc) returns `None` and the build-time defaults
@@ -340,54 +499,61 @@ pub fn expand_origin(origin: &str) -> Option<String> {
 /// promises and every caller already handles.
 #[cfg(target_arch = "wasm32")]
 pub async fn fetch() -> Option<DeploymentConfig> {
-    let resp = match crate::net::fetch_text_bounded(
-        DEPLOYMENT_CONFIG_PATH,
-        crate::net::BOOT_FETCH_DEADLINE_MS,
-    )
-    .await
-    {
-        Some(r) => r,
-        None => {
-            // Unreachable, aborted at the deadline, or unreadable. Logged at
-            // WARN rather than DEBUG because on a healthy origin it does not
-            // happen, and when it does it is the single most useful line in a
-            // "the page was blank" report.
-            tracing::warn!(
-                "deployment-config: {DEPLOYMENT_CONFIG_PATH} unreachable or timed out after \
-                 {}ms — booting on build-time defaults (D23: a deadline is a state the boot \
-                 proceeds from)",
-                crate::net::BOOT_FETCH_DEADLINE_MS
-            );
-            return None;
-        }
-    };
-    if !resp.ok {
-        tracing::debug!(
-            status = resp.status,
-            "deployment-config: {DEPLOYMENT_CONFIG_PATH} not served — using build-time defaults"
-        );
-        return None;
+    read_document().await.into_config()
+}
+
+/// The three-state read: ask the origin, classify what it said, and **say which
+/// of the four things happened** before handing back the answer.
+///
+/// [`fetch`] is the thin `Option` wrapper over this for the callers that only
+/// want the config. A caller that needs to *report* — the boot log, a future
+/// operator surface — takes the [`DocumentRead`] and keeps the distinction.
+#[cfg(target_arch = "wasm32")]
+pub async fn read_document() -> DocumentRead {
+    let out = classify(
+        crate::net::fetch_text_bounded(
+            DEPLOYMENT_CONFIG_PATH,
+            crate::net::BOOT_FETCH_DEADLINE_MS,
+        )
+        .await,
+    );
+    // The levels differ because the audiences do. `Unheard` is WARN: on a
+    // healthy origin it does not happen, and when it does it is the single most
+    // useful line in a "the page was blank" report. `NoDocument` is DEBUG
+    // because it is the normal state of a build served without the file — a
+    // WARN there would be the same cried-wolf failure C1 just fixed one surface
+    // over. `Unreadable` is WARN because somebody published a broken file.
+    match &out {
+        DocumentRead::Served(cfg) => tracing::info!(
+            outcome = out.label(),
+            surface = ?cfg.surface.as_deref(),
+            home_site = ?cfg.home_site.as_ref().map(|h| h.id.as_str()),
+            origins = cfg.origins.len(),
+            "deployment-config: applied {DEPLOYMENT_CONFIG_PATH}"
+        ),
+        DocumentRead::NoDocument { .. } => tracing::debug!(
+            outcome = out.label(),
+            "deployment-config: {} — using build-time defaults",
+            out.describe()
+        ),
+        DocumentRead::OriginError { .. } => tracing::warn!(
+            outcome = out.label(),
+            "deployment-config: {}",
+            out.describe()
+        ),
+        DocumentRead::Unreadable { .. } => tracing::warn!(
+            outcome = out.label(),
+            "deployment-config: served but unparseable — {}",
+            out.describe()
+        ),
+        DocumentRead::Unheard => tracing::warn!(
+            outcome = out.label(),
+            deadline_ms = crate::net::BOOT_FETCH_DEADLINE_MS,
+            "deployment-config: {} (D23: a deadline is a state the boot proceeds from)",
+            out.describe()
+        ),
     }
-    let text = resp.text;
-    match DeploymentConfig::parse(&text) {
-        Some(cfg) if !cfg.is_empty() => {
-            tracing::info!(
-                surface = ?cfg.surface.as_deref(),
-                home_site = ?cfg.home_site.as_ref().map(|h| h.id.as_str()),
-                origins = cfg.origins.len(),
-                "deployment-config: applied {DEPLOYMENT_CONFIG_PATH}"
-            );
-            Some(cfg)
-        }
-        Some(_) => {
-            tracing::debug!("deployment-config: served but empty — using build-time defaults");
-            None
-        }
-        None => {
-            tracing::warn!("deployment-config: served but unparseable — ignoring");
-            None
-        }
-    }
+    out
 }
 
 #[cfg(test)]
@@ -650,6 +816,148 @@ mod tests {
             Some("https://host.example/app"),
             "base-path origin is not rewritten — subpath deployments resolve under it"
         );
+    }
+
+    // ── The three-state read (map-B3) ─────────────────────────────────────
+    //
+    // These are native because [`classify`] is pure — the split exists so every
+    // outcome has a test instead of only the one a browser happened to produce.
+
+    fn answered(status: u16, body: &str) -> Option<crate::net::BoundedResponse> {
+        Some(crate::net::BoundedResponse {
+            status,
+            ok: (200..300).contains(&status),
+            text: body.to_string(),
+        })
+    }
+
+    /// **P — one variant per outcome, and each is a different KIND of fact.**
+    #[test]
+    fn every_outcome_of_a_document_read_has_its_own_variant() {
+        // Served: the origin answered and declared something.
+        let served = classify(answered(200, r#"{"surface":"site"}"#));
+        assert!(matches!(served, DocumentRead::Served(_)), "got {served:?}");
+        assert_eq!(served.clone().into_config().unwrap().surface.as_deref(), Some("site"));
+
+        // 404: a FACT about the deployment — it serves no document, by choice.
+        assert_eq!(classify(answered(404, "")), DocumentRead::NoDocument { status: 404 });
+        assert_eq!(classify(answered(410, "")), DocumentRead::NoDocument { status: 410 });
+        // Served-but-declares-nothing is the same fact by a different route.
+        assert_eq!(classify(answered(200, "{}")), DocumentRead::NoDocument { status: 200 });
+
+        // **And NOT any other non-2xx.** The first version of `classify` mapped
+        // every `!ok` to `NoDocument`, so a CDN 502 reported as "this deployment
+        // runs on build-time defaults BY CHOICE" — a false claim about the
+        // deployer's intent, and the exact conflation this enum exists to
+        // remove, one status family over. Found auditing this session's own
+        // work; `PollError::NotFound` had already written the rule down.
+        for status in [403u16, 500, 502, 503] {
+            assert_eq!(
+                classify(answered(status, "")),
+                DocumentRead::OriginError { status },
+                "a {status} says NOTHING about whether a document exists"
+            );
+        }
+
+        // A fact about the BYTES, never about whether a document exists. A
+        // truncated or half-written file, or a proxy error page served 200.
+        assert_eq!(
+            classify(answered(200, "{ this is not json")),
+            DocumentRead::Unreadable { status: 200 }
+        );
+
+        // Nothing heard: unreachable, aborted, or D23's deadline. A fact about
+        // nothing, and the only outcome from which no conclusion may be drawn.
+        assert_eq!(classify(None), DocumentRead::Unheard);
+    }
+
+    /// **N2 — a deadline expiry must be distinguishable from a 404, in the line
+    /// an incident is debugged from.**
+    ///
+    /// This is the whole deliverable. The previous single `None` produced one
+    /// outcome for a domain that ships no config on purpose and for a domain
+    /// nobody could reach — opposite problems, one message. Asserted on the
+    /// rendered sentence rather than on the variant, because the variant being
+    /// distinct is worth nothing if both render the same words.
+    #[test]
+    fn a_deadline_does_not_read_like_a_404() {
+        let not_served = classify(answered(404, ""));
+        let unheard = classify(None);
+        let unreadable = classify(answered(200, "nonsense"));
+
+        let origin_error = classify(answered(502, ""));
+        let all = [&not_served, &unheard, &unreadable, &origin_error];
+        for (i, a) in all.iter().enumerate() {
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a.describe(), b.describe(), "{a:?} vs {b:?} render the same words");
+                assert_ne!(a.label(), b.label(), "{a:?} vs {b:?} share a structured field");
+            }
+        }
+        assert!(
+            origin_error.describe().contains("says NOTHING"),
+            "a server fault must not read as a statement about the deployment: {}",
+            origin_error.describe()
+        );
+        // And each says the RIGHT thing, not merely a different thing.
+        assert!(
+            not_served.describe().contains("by choice"),
+            "a 404 is the deployment's decision: {}",
+            not_served.describe()
+        );
+        assert!(
+            unheard.describe().contains("NOT evidence"),
+            "a deadline must not read as 'the origin has none': {}",
+            unheard.describe()
+        );
+        assert!(
+            unreadable.describe().contains("malformed, not absent"),
+            "unreadable bytes are not an absent document: {}",
+            unreadable.describe()
+        );
+    }
+
+    /// **The only distinction a caller may branch on**: did the origin answer?
+    ///
+    /// Everything else is reporting. This is the line between a fact about the
+    /// deployment and a fact about the network, and it is what stops a future
+    /// caller from writing down "this origin has no document" because a boot
+    /// happened to time out (AP30 corollary (a)).
+    #[test]
+    fn only_a_404_is_a_fact_about_the_deployment() {
+        // `origin_answered` is the literal question: was there an HTTP response.
+        assert!(classify(answered(200, r#"{"surface":"site"}"#)).origin_answered());
+        assert!(classify(answered(404, "")).origin_answered());
+        assert!(classify(answered(502, "")).origin_answered());
+        assert!(classify(answered(200, "broken")).origin_answered());
+        assert!(!classify(None).origin_answered(), "a deadline is not an answer");
+
+        // **And it is NOT the predicate a caller may act on.** A 502 answered
+        // and said nothing about whether a document exists. Only `NoDocument`
+        // is a statement about the deployment — which is why the useful
+        // predicate is narrower than "did it answer", and why conflating them
+        // is what the first version of this enum did.
+        assert!(classify(answered(404, "")).declares_no_document());
+        assert!(classify(answered(200, "{}")).declares_no_document());
+        for other in [
+            classify(answered(200, r#"{"surface":"site"}"#)),
+            classify(answered(502, "")),
+            classify(answered(403, "")),
+            classify(answered(200, "broken")),
+            classify(None),
+        ] {
+            assert!(
+                !other.declares_no_document(),
+                "{other:?} is not the deployment saying it has no document"
+            );
+        }
+
+        // And only `Served` yields a config — nothing else may shape a boot,
+        // which `into_config` enforces at the type level rather than by
+        // convention.
+        assert!(classify(answered(404, "")).into_config().is_none());
+        assert!(classify(answered(502, "")).into_config().is_none());
+        assert!(classify(answered(200, "broken")).into_config().is_none());
+        assert!(classify(None).into_config().is_none());
     }
 
     #[test]

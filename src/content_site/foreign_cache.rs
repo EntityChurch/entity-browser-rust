@@ -535,6 +535,145 @@ mod tests {
         assert_eq!(held.0, Some(remote), "the store's content hash IS the published pointer");
     }
 
+    // ── The OTHER artifact kind, because "same code path" is a claim ──────
+    //
+    // Every test above uses [`ForeignArtifact::AppBundle`], because that is the
+    // artifact that wedged production. But A3 — the change that deleted
+    // `precache_origin_sites`' "skip manifests I already hold" — moves the
+    // **manifest** through this same entry point, and until these existed the
+    // `Manifest` arm was exercised by exactly one assertion: the shape of its
+    // URL. The two arms differ in `bin_url` / `store_path` and in nothing else,
+    // which is precisely the kind of "obviously identical" that a typo in a
+    // path builder makes false while every bundle test stays green.
+    //
+    // A stale manifest is a smaller blast radius than a stale bundle and worth
+    // stating exactly: page bodies do NOT go stale (`resolve_closure_via` is a
+    // pure-network two-hop with no store read), so what rots is the **directory
+    // listing** — which sites a peer appears to have, and their titles.
+
+    fn manifest_artifact(foreign: &str) -> ForeignArtifact {
+        ForeignArtifact::Manifest { peer: foreign.to_string(), site: "labs".into() }
+    }
+
+    fn publish_manifest(fx: &mut PublishedFixture, foreign: &str, title: &str) {
+        let manifest = crate::content_site::format::SiteManifest::new(
+            "labs",
+            title,
+            "index",
+            Vec::new(),
+        );
+        fx.publish(&format!("{foreign}/sites/labs/manifest.bin"), &manifest.to_entity());
+    }
+
+    fn origin_serving_manifest(foreign: &str, title: &str) -> PublishedFixture {
+        let mut fx = PublishedFixture::new(ORIGIN);
+        publish_manifest(&mut fx, foreign, title);
+        fx
+    }
+
+    #[test]
+    fn a_republished_manifest_replaces_the_copy_we_hold() {
+        // **P for A3.** A publisher renames a site (or edits its nav) under a
+        // stable identity. Before A1 this was a copy the boot sweep held forever
+        // — `if already.contains(...) { continue; }` — so a returning profile's
+        // directory rail showed a title nobody had used for weeks.
+        let (peers, me, writer) = me_with_writer();
+        let foreign = foreign_peer();
+        let what = manifest_artifact(&foreign);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut src = RecordingSource {
+            fx: origin_serving_manifest(&foreign, "Labs"),
+            seen: seen.clone(),
+            dead: false,
+        };
+        block_on(ensure_current(&src, &writer, held_hash(&peers, &me, &what), ORIGIN, &what));
+
+        publish_manifest(&mut src.fx, &foreign, "Labs — Renamed");
+        let out = block_on(ensure_current(
+            &src,
+            &writer,
+            held_hash(&peers, &me, &what),
+            ORIGIN,
+            &what,
+        ));
+
+        assert!(matches!(out, Currency::Fetched(_)), "the pointer moved → fetch. Got {out:?}");
+        let stored = peers.get_entity(&me, &what.store_path()).expect("still cached");
+        assert_eq!(
+            crate::content_site::format::SiteManifest::from_entity(&stored).title,
+            "Labs — Renamed",
+            "the directory listing must carry the title the publisher is serving NOW"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_manifest_costs_one_pointer_and_no_body() {
+        // **N1 for A3, and it is the half the boot sweeps pay for.** Both sweeps
+        // now ask about every manifest on every boot; if an unchanged one cost a
+        // body download, A3 would have traded a stale rail for a slower boot.
+        let (peers, me, writer) = me_with_writer();
+        let foreign = foreign_peer();
+        let what = manifest_artifact(&foreign);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let src = RecordingSource {
+            fx: origin_serving_manifest(&foreign, "Labs"),
+            seen: seen.clone(),
+            dead: false,
+        };
+        block_on(ensure_current(&src, &writer, held_hash(&peers, &me, &what), ORIGIN, &what));
+        assert_eq!(body_requests(&seen), 1, "the first call must download the body");
+        seen.borrow_mut().clear();
+
+        let out = block_on(ensure_current(
+            &src,
+            &writer,
+            held_hash(&peers, &me, &what),
+            ORIGIN,
+            &what,
+        ));
+
+        assert!(matches!(out, Currency::Unchanged), "same pointer → Unchanged. Got {out:?}");
+        assert_eq!(pointer_requests(&seen), 1, "hop 1 is ALWAYS issued");
+        assert_eq!(body_requests(&seen), 0, "an unchanged manifest re-downloaded its body");
+    }
+
+    #[test]
+    fn an_offline_origin_leaves_the_held_manifest_untouched() {
+        // **N2 for A3.** A cache that drops what it cannot re-verify turns a
+        // brief outage into an EMPTY directory rail — the peer looks like it
+        // hosts nothing, which reads as "gone" rather than "unreachable".
+        let (peers, me, writer) = me_with_writer();
+        let foreign = foreign_peer();
+        let what = manifest_artifact(&foreign);
+        let src = RecordingSource {
+            fx: origin_serving_manifest(&foreign, "Labs"),
+            seen: Rc::new(RefCell::new(Vec::new())),
+            dead: false,
+        };
+        block_on(ensure_current(&src, &writer, held_hash(&peers, &me, &what), ORIGIN, &what));
+        let before = peers.get_entity(&me, &what.store_path()).expect("cached");
+
+        let dead = RecordingSource {
+            fx: origin_serving_manifest(&foreign, "Labs"),
+            seen: Rc::new(RefCell::new(Vec::new())),
+            dead: true,
+        };
+        let out = block_on(ensure_current(
+            &dead,
+            &writer,
+            held_hash(&peers, &me, &what),
+            ORIGIN,
+            &what,
+        ));
+
+        assert!(matches!(out, Currency::Unavailable(_)), "nothing heard. Got {out:?}");
+        let after = peers.get_entity(&me, &what.store_path()).expect(
+            "an unreachable origin must never empty the directory rail — that reads as \
+             'this peer hosts nothing' rather than 'we could not ask'",
+        );
+        assert_eq!(before.content_hash, after.content_hash);
+    }
+
     #[test]
     fn artifact_urls_and_paths_agree_with_the_publishers_layout() {
         let m = ForeignArtifact::Manifest { peer: "P".into(), site: "labs".into() };

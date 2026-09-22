@@ -1872,8 +1872,18 @@ impl EntityApp {
             // on a fresh deployment. Best-effort: a 404 / unparseable doc
             // returns `None` and the build default stands (D16). `deployment`
             // is also threaded into the origin-registration below.
+            // (B3) The read is three-state now. `deployment` stays the
+            // `Option<DeploymentConfig>` every consumer below wants, but the
+            // OUTCOME is kept beside it — because "no config this boot" is four
+            // different situations and the lines that report on it were saying
+            // one thing for all of them. `not-heard` in particular is a fact
+            // about the network, never about whether the deployment has a
+            // document.
+            let mut doc_outcome = "not-read";
             let mut deployment = if durable.is_none() {
-                crate::deployment_config::fetch().await
+                let read = crate::deployment_config::read_document().await;
+                doc_outcome = read.label();
+                read.into_config()
             } else {
                 None
             };
@@ -1996,8 +2006,54 @@ impl EntityApp {
                 let never_established = cfg.home_site == crate::session_config::home_site_default();
                 let home_is_local =
                     !never_established && (stale_peer.is_empty() || stale_peer == system_pid);
+                // (B2) **READ the document on every warm boot; ADOPT only what a
+                // remote-home profile does not own.** The fetch used to sit
+                // inside the `!home_is_local` gate, which conflated two
+                // different questions — *may we adopt this profile's home?* and
+                // *may we read the domain's document at all?* — and answered
+                // both with the first. A profile whose home is LOCAL therefore
+                // re-read `/entity-deployment.json` exactly never, which cost it
+                // three things it is entitled to and does not own:
+                //
+                //   1. **Origins.** The registration loop below is inside
+                //      `if let Some(dc) = &deployment`, so a local-home profile
+                //      never adopted a moved origin — the CDN-move repair landed
+                //      for the deployed content-site profiles and for nobody
+                //      else. Origins are routing facts about OTHER peers; there
+                //      is nothing of this profile's in them.
+                //   2. **Supersession revalidation** (F2, below). It runs only
+                //      when a document was read this boot, so a local-home
+                //      profile's durable retirement records were never
+                //      re-examined against their own premise — boot audit B-5,
+                //      the same gap from the other end.
+                //   3. **Reportability.** `deployment-config: applied |
+                //      unreachable | not served` is emitted by `fetch()` itself.
+                //      With no fetch there is no line at ANY level, which is why
+                //      a devops seat could see nothing and correctly conclude
+                //      nothing — the observation that made the two halves of
+                //      this incident look inconsistent.
+                //
+                // **What does NOT change, and it is the whole reason the gate
+                // was written this way:** the obvious fix — dropping the
+                // `home_is_local` guard outright — is wrong and already rejected
+                // on the record. An empty `peer_id` is a documented sentinel for
+                // *the system peer* (`set_home_site`, `repair_for_deleted_peer`),
+                // so adopting the document's home every boot would overwrite a
+                // local-home user's deliberate setting, violating R1's own
+                // invariant that routing may be adopted and preferences may not.
+                // So the guard moves off the FETCH and onto the ADOPTION, which
+                // is where it always belonged.
+                //
+                // Cost: one same-origin GET of a ~400-byte document, bounded by
+                // D23, on warm boots that previously paid nothing. The
+                // `!config_was_absent` guard above still prevents the second
+                // fetch within one boot — the regression that took G1 from
+                // 3244 ms to 6195 ms and that only a budget printing on success
+                // caught.
+                let read = crate::deployment_config::read_document().await;
+                doc_outcome = read.label();
+                deployment = read.into_config();
                 if !home_is_local {
-                    deployment = crate::deployment_config::fetch().await;
                     if let Some(dc) = &deployment {
                         // An absent/empty `home_site.peer` is NOT a divergence —
                         // it is a doc that declines to say. Treating "says
@@ -2087,6 +2143,20 @@ impl EntityApp {
                             }
                         }
                     }
+                } else {
+                    // (B2) The local-home profile. The document was READ — its
+                    // origins are adopted below, F2 revalidation has its input,
+                    // and `fetch()` has already logged `applied` / `unreachable`
+                    // / `not served`. Nothing it declares about the HOME is
+                    // touched: that is this profile's own setting, and adopting
+                    // it here is the rejected fix, not the fix.
+                    tracing::debug!(
+                        home_site = %cfg.home_site.id,
+                        document = doc_outcome,
+                        "boot_load: local home — deployment document read for routing only \
+                         (origins, supersession revalidation); the home is this profile's own \
+                         and is not adopted from it"
+                    );
                 }
             }
 
@@ -2160,6 +2230,52 @@ impl EntityApp {
                 Err(e) => tracing::error!(error = %e, "boot_load: session config write failed"),
             }
 
+            // ADOPT THE PERSISTED LOCATION, authoritatively.
+            //
+            // `SiteOverlay::new` ran ~700 lines above this, synchronously, and
+            // its `ContentSiteModel::initialize` read the nav state with the
+            // SYNC `get_entity`. On the Worker arm — the arm a `?worker=1`
+            // browser defaults to — that answers from the per-prefix cache
+            // mirror, which holds only prefixes some `watch_prefix` has primed;
+            // the overlay subscribes *after* the read, and **nothing subscribes
+            // the overlay's state path at all**. So that read is `None` on every
+            // Worker boot, warm or cold, and the overlay opened on the build
+            // default with the user's real location sitting in the tree unread.
+            // Measured with the `audit-worker-reads` lamp
+            // (`docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md` §7).
+            //
+            // The rule is not new — it is the one stated 300 lines up for this
+            // very config (*"we read it from the durable tree (L1
+            // `get_entity_async`, not the cold cache mirror)"*) and in
+            // `tree_listing_async`'s doc comment for listings. The nav state
+            // never got it.
+            //
+            // Placement is load-bearing, both ends:
+            //   * AFTER the `put_and_wait` above, so the config this reads is
+            //     the final one and the default it derives is the deployment's
+            //     home rather than the build default;
+            //   * BEFORE the `config_was_absent || adopted_identity` re-point
+            //     below, so that branch decides against the real location and
+            //     its `navigate` — which bumps `nav_generation` — wins over
+            //     anything this adopted.
+            // It is unconditional on purpose: a local-home profile persists a
+            // location exactly like a remote-home one (AP36 — put the guard on
+            // the decision, never on the acquisition).
+            if let Some(overlay) = self.site_overlay.as_ref() {
+                // Four outcomes, one field — `adopted` alone would have said
+                // the same thing for "we restored your location" and "you have
+                // never had one", which is the conflation this whole thread has
+                // been about. `unheard` in particular is the one an incident is
+                // debugged from: it means the location on screen is a default
+                // standing in for a value we could not read, not a default
+                // because there is nothing to read.
+                let outcome = overlay.hydrate_durable(&self.peer_manager).await;
+                tracing::info!(
+                    location = outcome.label(),
+                    "boot_load: overlay location resolved against the durable tree"
+                );
+            }
+
             // Mirror the routing facts where a DEAD app can still be read.
             //
             // The `ecdeos.org` re-key was undiagnosed for days not because the
@@ -2225,13 +2341,22 @@ impl EntityApp {
             // overlapping triggers is how the first one came to hide the second.
 
             // (1.3 cut 2b) Register every HTTP origin the per-domain deployment
-            // config declares, durably + `put_if_absent` (a returning user's
-            // override wins), under the system peer. This is how a generic
-            // bundle on a CDN learns where each hosting peer's published
-            // artifacts live — the resolver HTTP-polls these on first browse —
-            // without a per-domain WASM rebuild. Covers the home peer's origin
-            // too; the `ENTITY_HOME_ORIGIN` env fallback in the home-provision
-            // branch below only fires when no deployment config supplied it.
+            // config declares, durably and **authoritatively adopted**
+            // (`adopt_deployment_origin` — see below; this used to be
+            // `put_if_absent`, and that rationale is retired), under the system
+            // peer. This is how a generic bundle on a CDN learns where each
+            // hosting peer's published artifacts live — the resolver HTTP-polls
+            // these on first browse — without a per-domain WASM rebuild. Covers
+            // the home peer's origin too; the `ENTITY_HOME_ORIGIN` env fallback
+            // in the home-provision branch below only fires when no deployment
+            // config supplied it.
+            //
+            // **Reachability, stated because it bounds the fix above:** this
+            // loop runs only when a document was READ this boot. A warm boot
+            // whose home is LOCAL never re-reads one (the `!home_is_local` gate
+            // on the R1 re-fetch), so a local-home profile never adopts a moved
+            // origin. That is map-B2, and until it lands the CDN-move repair
+            // covers the deployed content-site profiles and not the rest.
             if let Some(dc) = &deployment {
                 // Collect the resolved (peer, origin) pairs as we register them,
                 // to hand to the site-discovery warm-up below — sourced here
@@ -2419,12 +2544,22 @@ impl EntityApp {
                     if registered {
                         tracing::debug!(
                             home_peer = %home_peer,
+                            document = doc_outcome,
                             "boot_load: remote home origin is registered from an earlier boot \
                              (no deployment-config entry this boot, ENTITY_HOME_ORIGIN unset)"
                         );
                     } else {
+                        // (B3) `document` carries WHY there was no entry, and
+                        // the four answers are not the same problem. `unheard`
+                        // means we never reached the origin — the home may well
+                        // resolve on the next load — while `not-served` means
+                        // the domain genuinely declares nothing and somebody has
+                        // to go add it. One field, because the alternative is
+                        // the next incident debugged from a sentence that
+                        // cannot tell them apart, which is C1 all over again.
                         tracing::warn!(
                             home_peer = %home_peer,
+                            document = doc_outcome,
                             "boot_load: remote home has NO registered origin — no \
                              deployment-config entry, ENTITY_HOME_ORIGIN unset, and none \
                              persisted from an earlier boot. This home cannot resolve."

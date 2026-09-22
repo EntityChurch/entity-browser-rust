@@ -51,10 +51,39 @@ pub struct ResolvedPage {
 }
 
 /// Why a resolve failed.
+///
+/// **Three of these used to be one.** `ManifestMissing` was returned whether the
+/// origin had *answered* "that is not here", or had not answered at all, or had
+/// never been asked because the manifest simply was not in our tree — and every
+/// surface downstream therefore said the same sentence for all three. Measured
+/// (`a_pulled_demo_site_is_reported_not_blank`, brick-matrix cell #17): a
+/// returning visitor to a site its publisher had **withdrawn** was told *"This
+/// site's source is unreachable"*, which is false — the source answered
+/// perfectly and no longer carries the site — and a first-time visitor was told
+/// to *"open it there, or find it in the Registry Browser"* about **this
+/// deployment's own publisher, on the origin they were already looking at**.
+///
+/// The fact was never missing: [`PollError::NotFound`](super::http_poll::PollError::NotFound)
+/// carries it, its own doc comment says *"collapsing the two is how 'withheld'
+/// and 'unreachable' arrive as the same value"*, and `resolve_closure_via` then
+/// discarded it with `map_err(|_| ManifestMissing)`. Same shape as D24's: a
+/// mechanism that was already right, bypassed one layer up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveError {
-    /// No manifest entity at the site's manifest path.
+    /// No manifest entity at the site's manifest path, **and nobody was asked**
+    /// — the local-tree and durable-cache arms. Says nothing about any origin.
     ManifestMissing,
+    /// **The origin answered, and it does not carry this site.** A 404/410 on
+    /// the manifest pointer: the publisher's tree is intact and this site is not
+    /// in it. A *fact about the publisher*, not about the network — which is
+    /// what makes "the source is unreachable" the wrong sentence for it.
+    SiteWithdrawn,
+    /// **We asked an origin and heard nothing usable** — a network failure, a
+    /// 5xx, a decode failure, a truncated pointer. A fact about the network, and
+    /// never evidence about what the publisher does or does not carry.
+    /// Distinct from [`Unreachable`](Self::Unreachable), which is *no origin to
+    /// ask in the first place*.
+    OriginUnreachable,
     /// No page entity at the requested (or root) page path.
     PageMissing,
     /// The Location names a remote peer with **no resolvable route** — no

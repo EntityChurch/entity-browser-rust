@@ -29,6 +29,22 @@ use crate::peers::Peers;
 #[allow(unused_imports)]
 use crate::window::{WindowId, WindowType, WindowView};
 
+/// Entity type for **this** window's view-state.
+///
+/// It shares [`crate::views::games::AppViewState`]'s shape with the Apps
+/// window but is deliberately a **different type**, because both persist at
+/// `window_state_path` and a window id is reused across a reload: with one
+/// shared type, a Programs window inheriting an Apps window's id would decode
+/// its state and read a `selected` naming an app from another set as a program
+/// key. A type guard cannot separate two windows that agree on their type, so
+/// the separation has to be here (AP42).
+///
+/// **One-time cost, taken deliberately:** Programs state persisted before this
+/// split carries the Apps type and is now refused, so a returning user's
+/// "which program was open" resets once. That is `selected` on a launcher —
+/// the alternative was leaving two windows sharing a reused key.
+pub const PROGRAMS_VIEW_TYPE: &str = "app/state/programs_view";
+
 use crate::program_host::bundle::EMBEDDED_PROGRAMS;
 
 /// The save-path / grid key for built-in programs — distinct from the `games`
@@ -117,7 +133,11 @@ impl WindowView for ProgramsWindow {
                     selected: value.clone(),
                     ..Default::default()
                 };
-                peers.seed_write(&self.peer_id, self.state_path(), st.to_entity());
+                peers.seed_write(
+                    &self.peer_id,
+                    self.state_path(),
+                    st.to_entity_as(PROGRAMS_VIEW_TYPE),
+                );
                 self.watch.mark_dirty();
             }
         }
@@ -141,7 +161,9 @@ impl WindowView for ProgramsWindow {
         let title = crate::i18n::window_title("Programs"); // i18n-ignore — lookup key
         let selected = peers
             .get_entity(&self.peer_id, &self.state_path())
-            .map(|e| crate::views::games::AppViewState::from_entity(&e).selected)
+            .map(|e| {
+                crate::views::games::AppViewState::from_entity_as(&e, PROGRAMS_VIEW_TYPE).selected
+            })
             .unwrap_or_default();
 
         // Nothing selected → the launcher grid over the built-in programs. Each

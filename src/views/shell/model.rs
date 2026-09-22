@@ -84,6 +84,11 @@ pub struct ShellState {
     pub saved_draft: Option<String>,
 }
 
+/// Entity type of this window's persisted state. Window ids are reused across
+/// a reload, so a foreign type's state can sit at this path — see
+/// [`crate::views::entity_tree::model::STATE_TYPE`] for the full reason.
+pub const STATE_TYPE: &str = "app/state/shell";
+
 impl ShellState {
     pub fn initial(peer_id: &str) -> Self {
         Self {
@@ -138,10 +143,15 @@ impl ShellState {
         let mut buf = Vec::new();
         ciborium::into_writer(&ciborium::Value::Map(map), &mut buf)
             .expect("CBOR encode of ShellState");
-        Entity::new("app/state/shell", buf).expect("ShellState entity well-formed")
+        Entity::new(STATE_TYPE, buf).expect("ShellState entity well-formed")
     }
 
     pub fn from_entity(entity: &Entity) -> Self {
+        // Someone else's window state in our slot reads as "no persisted
+        // state", the same answer an undecodable one gives.
+        if entity.entity_type != STATE_TYPE {
+            return Self::initial("");
+        }
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
             Err(_) => return Self::initial(""),
@@ -3939,5 +3949,123 @@ mod tests {
         let s = model.state_snapshot();
         assert!(s.scrollback.iter().any(|l| l.is_error()
             && l.text_contains("unknown verb: frobnicate")));
+    }
+
+    /// **A Shell spawned AFTER a reload must still show what it prints.**
+    ///
+    /// Reported symptom (measured in a browser, Direct-IDB — the shipped
+    /// default): a Shell opened after a reload accepts commands — the input
+    /// clears, the state entity is written — while the `<pre>` stays on the
+    /// `shell.scrollback_cleared` placeholder. It works on the first spawn of
+    /// a session and fails on a spawn after a reload, the difference being
+    /// that the second one finds persisted state to restore.
+    ///
+    /// This pins the MODEL half of that: an empty scrollback at spawn is
+    /// correct and deliberate (scrollback is not persisted — `from_entity`
+    /// clears the welcome line `initial()` seeded), but every submission after
+    /// it must land in `render_output`. If this stays green, the defect is not
+    /// in the model and the next place to look is the dirty/rebuild layer.
+    #[tokio::test]
+    async fn a_shell_spawned_after_a_reload_still_shows_what_it_prints() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+
+        // Session 1: a shell runs a command, then persists its state.
+        let mut first = ShellModel::new(1, pid.clone());
+        first.initialize(&peers);
+        first.handle_submit("pwd", &peers, 1, flag());
+        first.save_state(&peers);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // The reload: no CloseWindow fires, so window 1's state is still in
+        // the tree, and `next_id` restarts at 1 — a new Shell reads it.
+        let mut returning = ShellModel::new(1, pid.clone());
+        returning.initialize(&peers);
+        assert!(
+            returning.render_output().scrollback.is_empty(),
+            "scrollback is deliberately not persisted — a restored shell starts empty"
+        );
+
+        // From here on it is an ordinary shell and must print.
+        returning.handle_submit("pwd", &peers, 1, flag());
+        let out = returning.render_output();
+        assert!(
+            !out.scrollback.is_empty(),
+            "a Shell restored from persisted state stopped rendering its own \
+             output — {} rows after a submission that wrote state",
+            out.scrollback.len()
+        );
+    }
+
+    /// **The scrollback only reaches the screen if the section REBUILDS, and
+    /// `handle_action` never marks the watch dirty itself.**
+    ///
+    /// It returns `dirty = true` for a submission and then only calls
+    /// `save_state`, relying on the write to the window's *own* state path
+    /// coming back through the subscription installed by the factory. So the
+    /// rebuild trigger is a round trip through the store, and this wires it
+    /// exactly as `ShellWindow::window_type()` does — `initialize` first, then
+    /// `watch_prefix` on the state path — to measure whether a submission
+    /// actually dirties the window on a warm start.
+    ///
+    /// Three submissions, because the axis is not warm-vs-cold: it is whether
+    /// the submission happens to CHANGE the persisted entity. `record_submit`
+    /// skips a consecutive duplicate, and `to_entity` persists no scrollback,
+    /// so re-running the last command produces byte-identical state — and a
+    /// content-addressed put of identical bytes is not a change, so no event
+    /// fires and nothing rebuilds. Scrollback is session state; deriving its
+    /// rebuild trigger from persisted state is what loses it.
+    #[tokio::test]
+    async fn a_submission_that_changes_no_persisted_state_still_rebuilds() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let state_path = crate::app_paths::window_state_path(crate::app_paths::APP_ID, &pid, 1);
+
+        // Drive the SHIPPED path: the real factory does `initialize` then
+        // installs the state-path subscription, and `handle_action` is what
+        // decides whether anything rebuilds. Reproducing that wiring by hand
+        // here would let the gate pass while the window still failed.
+        let factory = crate::views::shell::ShellWindow::window_type().create;
+        let mut window = factory(1, &pid, &peers);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        window.watch().take_dirty(); // clear whatever the seed produced
+        assert!(
+            peers.get_entity(&pid, &state_path).is_some(),
+            "the factory should have seeded this window's state"
+        );
+
+        async fn submit_and_take(
+            window: &mut Box<dyn crate::window::WindowView>,
+            peers: &Peers,
+            line: &str,
+        ) -> bool {
+            window.handle_action(
+                &crate::action::Action::ShellSubmit {
+                    window_id: 1,
+                    line: line.to_string(),
+                },
+                peers,
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            window.watch().take_dirty()
+        }
+
+        // 1. A first command: history [] → ["pwd"], so the entity changes.
+        let first = submit_and_take(&mut window, &peers, "pwd").await;
+        // 2. A different command: history grows again, entity changes again.
+        let different = submit_and_take(&mut window, &peers, "help").await;
+        // 3. The same command twice — the dedupe case. Nothing persisted
+        //    changes, but the shell still printed two more rows.
+        let repeat = submit_and_take(&mut window, &peers, "help").await;
+
+        assert!(first, "a first submission must rebuild the section");
+        assert!(different, "a new command must rebuild the section");
+        assert!(
+            repeat,
+            "re-running the last command printed to the scrollback but did not \
+             dirty the window, so the section never rebuilds and the <pre> keeps \
+             whatever it last rendered. Scrollback is session state and must not \
+             depend on the persisted entity changing"
+        );
     }
 }

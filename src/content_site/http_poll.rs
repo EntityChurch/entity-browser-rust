@@ -397,9 +397,20 @@ pub async fn resolve_closure_via(
 ) -> Result<ResolvedPage, ResolveError> {
     let pid = loc.peer_id.clone().unwrap_or_default();
 
+    // **The decode point, and the fact this used to throw away.** `PollError`
+    // already separates "the origin ANSWERED and it is not here" (404/410 — the
+    // one outcome an origin *chooses*) from every retryable failure; its own doc
+    // comment says collapsing the two is how "withheld" and "unreachable" arrive
+    // as the same value. This was `map_err(|_| ManifestMissing)`, which did
+    // exactly that, and every surface downstream then had to guess.
     let manifest_ent = fetch_entity_two_hop(src, origin, &manifest_bin_url(origin, &pid, &loc.site_id))
         .await
-        .map_err(|_| ResolveError::ManifestMissing)?;
+        .map_err(|e| match e {
+            PollError::NotFound(_) => ResolveError::SiteWithdrawn,
+            // A 5xx, a dropped connection, a truncated pointer, a hash mismatch:
+            // we do not know what the publisher carries, and must not say we do.
+            _ => ResolveError::OriginUnreachable,
+        })?;
     let manifest = SiteManifest::from_entity(&manifest_ent);
 
     let page_slug = if loc.page.is_empty() { manifest.root().to_string() } else { loc.page.clone() };
@@ -729,11 +740,16 @@ mod tests {
             url: String,
             _freshness: Freshness,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PollError>>>> {
-            let r = self
-                .0
-                .get(&url)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| PollError::Decode(format!("404 {url}")));
+            // **`NotFound`, not `Decode`.** A path a static origin does not
+            // carry is a 404 — the one failure an origin *chooses* — and this
+            // double used to report it as `Decode(format!("404 {url}"))`: a
+            // string that says 404 while the variant says "the bytes were
+            // unreadable". Harmless while everything downstream collapsed both
+            // into `ManifestMissing`; the moment the decode point started
+            // preserving the distinction (map-C2), a test double that lies
+            // about which outcome it is producing makes the new behaviour
+            // untestable — or, worse, quietly proves the opposite.
+            let r = self.0.get(&url).map(<[u8]>::to_vec).ok_or(PollError::NotFound(404));
             Box::pin(std::future::ready(r))
         }
     }
@@ -789,14 +805,52 @@ mod tests {
         assert!(rp.page.body.contains("Welcome"));
     }
 
+    /// **The decode point keeps the fact the origin gave it — map-C2.**
+    ///
+    /// An origin that *answers* 404 has told us something: its tree is intact
+    /// and does not carry this site. An origin that says nothing has told us
+    /// nothing. This used to be `map_err(|_| ManifestMissing)`, and every
+    /// surface downstream then said "the source is unreachable" for both —
+    /// which is false in the first case and is what a returning visitor to a
+    /// withdrawn site was shown (cell #17).
     #[test]
-    fn async_closure_missing_manifest_is_manifest_error() {
+    fn an_origin_that_answered_404_is_a_withdrawal_not_an_outage() {
         let origin = "http://empty.example";
         let src = FixtureBinSource(PublishedFixture::new(origin));
         let loc = Location { peer_id: Some("P".into()), site_id: "ghost".into(), page: String::new() };
         assert_eq!(
             block_on(resolve_closure_via(&src, origin, &loc)),
-            Err(ResolveError::ManifestMissing)
+            Err(ResolveError::SiteWithdrawn),
+            "the fixture ANSWERS 404 — that is the publisher's own statement about its tree"
+        );
+    }
+
+    /// **N — and this is the direction to guard.** Relabelling every miss as a
+    /// withdrawal would be worse than the bug it replaces: it turns a transient
+    /// outage into a claim that the publisher deleted something.
+    #[test]
+    fn an_origin_that_said_nothing_is_never_a_withdrawal() {
+        /// Every request fails the way a browser reports a refused or dropped
+        /// connection (`fetch_bytes` maps a rejected `fetch()` to `Decode`) —
+        /// not a variant invented for the test.
+        struct DeadOrigin;
+        impl BinSource for DeadOrigin {
+            fn get(
+                &self,
+                _url: String,
+                _freshness: Freshness,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, PollError>>>>
+            {
+                Box::pin(std::future::ready(Err(PollError::Decode(
+                    "fetch failed: origin is offline".into(),
+                ))))
+            }
+        }
+        let loc = Location { peer_id: Some("P".into()), site_id: "labs".into(), page: String::new() };
+        assert_eq!(
+            block_on(resolve_closure_via(&DeadOrigin, "http://down.example", &loc)),
+            Err(ResolveError::OriginUnreachable),
+            "we heard nothing — we do not know what that publisher carries"
         );
     }
 

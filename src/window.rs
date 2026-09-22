@@ -511,4 +511,231 @@ mod tests {
         let data2 = crate::format::format_entity_data(&e2.unwrap().data);
         assert!(!data2.contains("current_path"), "window 2 should have no current_path");
     }
+
+    /// **Window ids are reused, and window state outlives the window that
+    /// wrote it.** [`WindowManager::new`] restarts `next_id` at 1 every
+    /// session, and a reload is not a close — only `Action::CloseWindow`
+    /// removes window state — so the entity at `workspace/windows/1/state`
+    /// on this boot was written by whatever window held id 1 on the last
+    /// one, of **any** type.
+    ///
+    /// Measured before this guard existed: the Entity Tree and the Knowledge
+    /// Base both persist `expanded_paths` and mean different things by it, so
+    /// decoding by field name alone made one adopt the other's. Every
+    /// window-state decoder must reject a foreign `entity_type` and answer
+    /// "no persisted state" instead.
+    ///
+    /// This is the enforcement point for the class, not for one pair: a new
+    /// window type that persists a field name an existing one already uses is
+    /// otherwise a silent cross-type read waiting to happen.
+    ///
+    /// Every row carries its own **control** — the same bytes under the row's
+    /// own type must still decode — so a payload that decodes to nothing
+    /// cannot make this pass vacuously (AP39).
+    #[test]
+    fn no_window_state_decoder_adopts_another_window_types_entity() {
+        use entity_entity::Entity;
+
+        // (label, entity written by that window type, "did a decode adopt it?")
+        type Probe = Box<dyn Fn(&Entity) -> bool>;
+        let rows: Vec<(&str, Entity, Probe)> = vec![
+            (
+                crate::views::shell::model::STATE_TYPE,
+                {
+                    let mut s = crate::views::shell::model::ShellState::initial("PEER");
+                    s.wd = "/PEER/docs/".into();
+                    s.to_entity()
+                },
+                // The shell's "no persisted state" answer is `initial("")`,
+                // not `Default` — compare against that, not a literal.
+                Box::new(|e| {
+                    crate::views::shell::model::ShellState::from_entity(e).wd
+                        != crate::views::shell::model::ShellState::initial("").wd
+                }),
+            ),
+            (
+                crate::views::entity_tree::model::STATE_TYPE,
+                crate::views::entity_tree::model::EntityTreeState {
+                    current_path: Some("/PEER/a/b".into()),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::entity_tree::model::EntityTreeState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::knowledge_base::model::STATE_TYPE,
+                crate::views::knowledge_base::model::KnowledgeBaseState {
+                    expanded_paths: vec!["guides".into()],
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::knowledge_base::model::KnowledgeBaseState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::query_console::model::STATE_TYPE,
+                crate::views::query_console::model::QueryState {
+                    path_prefix: "/PEER/x".into(),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::query_console::model::QueryState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::execute_console::model::STATE_TYPE,
+                crate::views::execute_console::model::ExecuteState {
+                    resource: "/PEER/x".into(),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::execute_console::model::ExecuteState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::peer_connections::model::STATE_TYPE,
+                crate::views::peer_connections::model::PeerConnectionsState {
+                    address: "ws://elsewhere:9999".into(),
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::peer_connections::model::PeerConnectionsState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::chain_trace::model::STATE_TYPE,
+                crate::views::chain_trace::model::ChainTraceState {
+                    chain_id: "chain-1".into(),
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::chain_trace::model::ChainTraceState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::theme_editor::model::STATE_TYPE,
+                crate::views::theme_editor::model::ThemeEditorState {
+                    editing: "midnight".into(),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::theme_editor::model::ThemeEditorState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::content_site::model::STATE_TYPE,
+                crate::views::content_site::model::ContentSiteState {
+                    site_id: "blog".into(),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::content_site::model::ContentSiteState::from_entity(e)
+                        != Default::default()
+                }),
+            ),
+            (
+                crate::views::games::APP_VIEW_TYPE,
+                crate::views::games::AppViewState {
+                    selected: "games/chess".into(),
+                    ..Default::default()
+                }
+                .to_entity(),
+                Box::new(|e| {
+                    crate::views::games::AppViewState::from_entity(e) != Default::default()
+                }),
+            ),
+            // Programs shares AppViewState's SHAPE with the Apps window above
+            // and must not share its SLOT: same fields, different vocabulary
+            // for `selected`, both at `window_state_path` under a reused id.
+            (
+                crate::views::programs::PROGRAMS_VIEW_TYPE,
+                crate::views::games::AppViewState {
+                    selected: "life".into(),
+                    ..Default::default()
+                }
+                .to_entity_as(crate::views::programs::PROGRAMS_VIEW_TYPE),
+                Box::new(|e| {
+                    crate::views::games::AppViewState::from_entity_as(
+                        e,
+                        crate::views::programs::PROGRAMS_VIEW_TYPE,
+                    ) != Default::default()
+                }),
+            ),
+        ];
+
+        // The roster is the denominator: every window type that persists state
+        // at `window_state_path` needs a row here, and the list was derived by
+        // grep once already and came up three short (`content_site`, `games`,
+        // `programs`). If you add a window with persisted state, add its row.
+        assert_eq!(
+            rows.len(),
+            11,
+            "window-state decoder census changed — re-run \
+             `grep -rln window_state_path src/views/` and add the missing rows"
+        );
+
+        // **Distinct types, asserted first.** The cross-check below skips
+        // `writer == reader`, so two window types that SHARE a state type are
+        // invisible to it — and that is not hypothetical: Programs reused the
+        // Apps window's `app/state/games_view` at its own reused-id path, and
+        // the first version of this test passed with them merged. A guard
+        // cannot separate two readers that agree on their type; only distinct
+        // types can.
+        let mut seen: Vec<&str> = Vec::new();
+        for (label, _, _) in &rows {
+            assert!(
+                !seen.contains(label),
+                "two window types persist state as `{label}` at \
+                 `window_state_path`, whose id is reused across a reload — the \
+                 type guard cannot tell them apart. Give one its own type"
+            );
+            seen.push(label);
+        }
+
+        for (label, own, probe) in &rows {
+            assert_eq!(
+                own.entity_type, *label,
+                "{label}: to_entity must stamp the declared STATE_TYPE"
+            );
+            assert!(
+                probe(own),
+                "{label}: control failed — its OWN populated state does not \
+                 decode, so the cross-type assertions below prove nothing"
+            );
+        }
+
+        // The adversarial case, deliberately stronger than a realistic one:
+        // give each reader ITS OWN payload — every field it looks for, all
+        // decodable — stamped with another window type. Only the type field
+        // can refuse it, so all 56 pairs falsify the guard rather than just
+        // the `expanded_paths` pair that occurs naturally today.
+        for (reader, own, probe) in &rows {
+            for (writer, _, _) in &rows {
+                if writer == reader {
+                    continue;
+                }
+                let foreign = Entity::new(*writer, own.data.clone()).unwrap();
+                assert!(
+                    !probe(&foreign),
+                    "{reader} adopted state stamped {writer} — window ids are \
+                     reused across a reload, so this is reachable by opening \
+                     {reader} first in the next session"
+                );
+            }
+        }
+    }
 }

@@ -575,8 +575,30 @@ E2E_DISPLAY_ARGS = $(shell \
 #   make e2e-worker T=frontend_idb        # only tests whose name contains this
 #   make e2e-worker UNTIL=20              # monolith stops after Phase 20
 #   make e2e-worker SKIP_BUILD=1          # reuse dist/ — skip the trunk rebuild
+#   make e2e-worker T=on_the_worker_arm E2E_EXTRA=--ignored   # run the #[ignore]d gates
+#   make e2e-worker E2E_FEATURES=demo-apps,audit-worker-reads   # break-glass lamp on
 # `make e2e-phases` lists the phase labels UNTIL accepts.
 E2E_UNTIL_ENV = $(if $(strip $(UNTIL)),-e E2E_UNTIL=$(strip $(UNTIL)),)
+
+# Extra arguments after cargo test's `--`. The knob exists because two
+# `#[ignore]`d gates' doc comments already INSTRUCTED a reader to pass
+# `E2E_EXTRA='--ignored'` and make silently ignores an unknown variable — so
+# that invocation ran the *default* filter, reported `0 passed; 2 ignored`, and
+# read as a green run of the very gates it was meant to execute. AP37: a
+# documented invocation is a coupling no compiler maintains.
+E2E_EXTRA ?=
+
+# Cargo features for the e2e `dist/` build. `demo-apps` is load-bearing (see the
+# recipe); override to ADD to it, never to replace it — e.g.
+# `E2E_FEATURES=demo-apps,audit-worker-reads` turns on the unsubscribed-read
+# lamp (`peers_worker::warn_if_unsubscribed`) for a diagnostic run.
+#
+# Deliberately NOT `WASM_FEATURES`: that name is taken, by `make wasm`, and it
+# holds the whole `--features X` FLAG rather than a feature list. Reusing it
+# produced `trunk build --features --features demo-apps` and a clap error — a
+# cheap collision, and the reason this comment names the distinction instead of
+# leaving the next reader to rediscover it.
+E2E_FEATURES ?= demo-apps
 
 # Hard wall-clock cap on an e2e run (see the `timeout` note in e2e-worker).
 # A healthy full suite is ~285s; 15m is ~3x headroom for a loaded box, so it
@@ -607,7 +629,7 @@ ifeq ($(strip $(SKIP_BUILD)),)
 	# gate pass only on a `dist/` inherited from a previous `make wasm` and fail
 	# on a clean run of its OWN target — green by inheritance, which is the
 	# shape of a gate that is not really a gate.
-	$(call RUN,trunk build --features demo-apps --dist $(DIST) && ./tools/check-dist.sh $(DIST) && ./tools/build-stamp.sh $(DIST))
+	$(call RUN,trunk build --features $(strip $(E2E_FEATURES)) --dist $(DIST) && ./tools/check-dist.sh $(DIST) && ./tools/build-stamp.sh $(DIST))
 else
 	@echo ">>> SKIP_BUILD=1 — reusing the existing $(DIST)/ (NOT a gate-grade run)"
 	@./tools/check-dist.sh $(DIST)
@@ -630,7 +652,7 @@ endif
 	# never fires on one; it exists so a hang FAILS instead of sitting silent
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
-	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1 $(strip $(E2E_EXTRA)),--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
 
 # The MULTI-HOST federation origin — the publisher on its own host, so a
 # consumer's fetches are real network hops rather than loopback ones. Prints the

@@ -37,8 +37,16 @@ impl Default for QueryState {
     }
 }
 
+/// Entity type of this window's persisted state. Window ids are reused across
+/// a reload, so a foreign type's state can sit at this path — see
+/// [`crate::views::entity_tree::model::STATE_TYPE`] for the full reason.
+pub const STATE_TYPE: &str = "app/state/query_console";
+
 impl QueryState {
     pub fn from_entity(entity: &Entity) -> Self {
+        if entity.entity_type != STATE_TYPE {
+            return Self::default();
+        }
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
             Err(_) => return Self::default(),
@@ -104,7 +112,7 @@ impl QueryState {
             _ => true,
         });
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs));
-        Entity::new("app/state/query_console", data).unwrap()
+        Entity::new(STATE_TYPE, data).unwrap()
     }
 }
 

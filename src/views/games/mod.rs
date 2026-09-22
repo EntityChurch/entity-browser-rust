@@ -332,11 +332,31 @@ pub struct AppViewState {
     pub focus: String,
 }
 
-/// Entity type for the embedded-app window view-state (app/state/ prefix).
+/// Entity type for the **Apps** window's view-state (app/state/ prefix).
+///
+/// `AppViewState` is the shared *shape*, not a shared *slot*: the Programs
+/// window persists the same fields with the same meaning-per-window but a
+/// different vocabulary for `selected` (it is always a `PROGRAMS_SET` key,
+/// where the Apps window's names its set), and both persist at
+/// `window_state_path`, whose id is **reused** across a reload. Two windows
+/// sharing one entity type at a reused key is precisely the case a type guard
+/// cannot separate — so they carry distinct types and share the codec via
+/// [`AppViewState::from_entity_as`] / [`AppViewState::to_entity_as`].
+/// See [`crate::views::programs::PROGRAMS_VIEW_TYPE`] (AP42).
 pub const APP_VIEW_TYPE: &str = "app/state/games_view";
 
 impl AppViewState {
+    /// Decode a view-state written by the Apps window.
     pub fn from_entity(entity: &Entity) -> Self {
+        Self::from_entity_as(entity, APP_VIEW_TYPE)
+    }
+
+    /// Decode a view-state, refusing any entity that is not `expected_type` —
+    /// the window-id slot may hold another window's leftovers (AP42).
+    pub fn from_entity_as(entity: &Entity, expected_type: &str) -> Self {
+        if entity.entity_type != expected_type {
+            return Self::default();
+        }
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
             Err(_) => return Self::default(),
@@ -358,7 +378,13 @@ impl AppViewState {
         out
     }
 
+    /// Encode as the Apps window's view-state.
     pub fn to_entity(&self) -> Entity {
+        self.to_entity_as(APP_VIEW_TYPE)
+    }
+
+    /// Encode under a caller-chosen entity type — see [`APP_VIEW_TYPE`].
+    pub fn to_entity_as(&self, entity_type: &str) -> Entity {
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
             (
                 entity_ecf::Value::Text("selected".into()),
@@ -377,7 +403,7 @@ impl AppViewState {
                 entity_ecf::text(&self.focus),
             ),
         ]));
-        Entity::new(APP_VIEW_TYPE, data).unwrap()
+        Entity::new(entity_type, data).unwrap()
     }
 }
 

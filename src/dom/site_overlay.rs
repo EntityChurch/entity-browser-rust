@@ -169,6 +169,23 @@ impl SiteOverlay {
         self.model.back(peers);
     }
 
+    /// Adopt this surface's persisted location from the **durable** tree.
+    ///
+    /// [`new`](Self::new) cannot: its `ContentSiteModel::initialize` runs
+    /// before the `watch_prefix` calls below it, and nothing subscribes the
+    /// overlay's own state path at all, so on the Worker arm the constructor's
+    /// read is guaranteed empty and the overlay opens on the *build default*
+    /// with a perfectly good location sitting in the tree. `boot_load` awaits
+    /// this before it decides whether to re-point the overlay, so the re-point
+    /// logic sees the real location rather than the fallback.
+    /// See `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+    pub async fn hydrate_durable(
+        &self,
+        peers: &Peers,
+    ) -> crate::views::content_site::model::Hydration {
+        self.model.hydrate_durable(peers).await
+    }
+
     /// Render the active site into `#site-layer`, rebuilding only when the
     /// output changed since the last frame. `sink`/`repaint` are the
     /// renderer's shared action sink + repaint signal (nav clicks push

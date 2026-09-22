@@ -3239,6 +3239,113 @@ mod tests {
         );
     }
 
+    // ── A3: a site MANIFEST that moves under a stable identity ──────────
+    //
+    // The artifact A3 is about. `precache_origin_sites` used to skip any
+    // manifest it already held (`if already.contains(…) { continue; }`) while
+    // its sibling `warm_peer_sites` refetched every one — two functions that
+    // their own comments call siblings, disagreeing about the trigger.
+    //
+    // **What the stale copy costs, corrected against the code** (the audit said
+    // "the directory listing — which sites a peer appears to have, and their
+    // titles"; the rail renders `SiteEntry`, which carries no title at all):
+    //
+    //   * NOT page bodies — `resolve_closure_via` is a pure-network two-hop with
+    //     no store read, so a live navigation always re-resolves.
+    //   * NOT which sites appear — a NEWLY published site was never in the skip
+    //     set, so the old code fetched it too. A gate built on "a new site shows
+    //     up" would be green with the fix reverted (AP31).
+    //   * The one surface a *cached* manifest reaches is the **manifest-pinned
+    //     shell**: the site chrome (title + nav) rendered from the durable copy
+    //     when the live resolve cannot answer — offline, or an origin that is
+    //     down. That is where a stale manifest is visible, and it is what the
+    //     gate asserts.
+    //
+    // So this fixture publishes TWO sites under one identity and moves the
+    // second one's title. The second site is the discriminator on purpose: the
+    // consumer never navigates to it, so the resolver's own cache write-through
+    // never touches it and the ONLY thing that can refresh its stored manifest
+    // is the boot sweep — which is A3.
+    const MANIFEST_REPUBLISH_SEED: [u8; 32] = *b"entity-manifest-republish-seed\0\0";
+
+    /// The site the consumer lands on (its home). Navigated, so its manifest is
+    /// refreshed by the resolver regardless of the sweep — which is exactly why
+    /// it is NOT the site under test.
+    const MR_HOME_SITE: &str = "front";
+    /// The site the consumer never opens until the origin is dead. Only the boot
+    /// sweep can have refreshed this one.
+    const MR_QUIET_SITE: &str = "quiet";
+
+    fn emit_manifest_republish_fixture(quiet_title: &str) {
+        let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
+        let render = std::env::temp_dir().join("entity-manifest-republish-render");
+        let _ = std::fs::remove_dir_all(&render);
+
+        for (id, title) in [(MR_HOME_SITE, "Front Desk"), (MR_QUIET_SITE, quiet_title)] {
+            let dir = render.join(id);
+            std::fs::create_dir_all(dir.join("pages")).expect("stage the render dir");
+            std::fs::write(
+                dir.join("site.manifest.json"),
+                format!(r#"{{"site_id":"{id}","title":"{title}"}}"#),
+            )
+            .expect("write site.manifest.json");
+            std::fs::write(
+                dir.join("pages").join("index.md"),
+                format!("# {title}\n\nThe {id} site.\n"),
+            )
+            .expect("write the landing page");
+        }
+
+        let hex = crate::vault_codec::seed_to_hex(&MANIFEST_REPUBLISH_SEED);
+        let _ = run(&[
+            "publish".to_string(),
+            out.clone(),
+            "--deployment-config".to_string(),
+            "--surface=site".to_string(),
+            format!("--config-site={MR_HOME_SITE}"),
+            format!("--identity-seed={hex}"),
+            format!("--ingest={}", render.display()),
+        ]);
+
+        // Asserted on the ARTIFACT: a publish that reported success while
+        // emitting one site would stage a scenario with no discriminator in it.
+        let peer = entity_crypto::Keypair::from_seed(MANIFEST_REPUBLISH_SEED).peer_id().to_string();
+        let root = std::path::Path::new(&out).join(&peer).join("sites");
+        for id in [MR_HOME_SITE, MR_QUIET_SITE] {
+            assert!(
+                root.join(id).join("manifest.bin").is_file(),
+                "manifest-republish fixture: no manifest for '{id}' — the publish emitted \
+                 fewer sites than the scenario needs"
+            );
+        }
+        let doc = std::fs::read_to_string(std::path::Path::new(&out).join("entity-deployment.json"))
+            .expect("the deployment config must be emitted");
+        assert!(
+            doc.contains(MR_HOME_SITE),
+            "manifest-republish fixture: the document must home on '{MR_HOME_SITE}', so the \
+             quiet site stays un-navigated: {doc}"
+        );
+    }
+
+    /// The build the returning visitor cached.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_manifest_republish_v1() {
+        emit_manifest_republish_fixture("Quiet Corner");
+    }
+
+    /// The republish. Same identity, same site ids, the quiet site RETITLED.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_manifest_republish_v2() {
+        // **Disjoint from v1's title, not an extension of it.** "Quiet Corner
+        // Renamed" would make the gate's negative half ("the OLD title is not
+        // still on screen") unsatisfiable by construction, because the new
+        // string contains the old one. Measured, by writing it that way first —
+        // and the same trap the app fixture avoids with V1/V2 markers.
+        emit_manifest_republish_fixture("Back Room");
+    }
+
     /// The build a returning visitor met first.
     #[test]
     #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
@@ -3264,6 +3371,20 @@ mod tests {
         assert_ne!(mine, pid(REKEY_SEED_BEFORE), "collides with REKEY_SEED_BEFORE");
         assert_ne!(mine, pid(REKEY_SEED_AFTER), "collides with REKEY_SEED_AFTER");
         assert_ne!(mine, pid(DEMO_PUBLISH_SEED), "collides with the demo publisher");
+        assert_ne!(mine, pid(MANIFEST_REPUBLISH_SEED), "collides with the manifest fixture");
+    }
+
+    /// Same rule for the manifest-republish publisher, and the same reason: a
+    /// collision would let one fixture publish over another's tree and pass
+    /// while testing something else.
+    #[test]
+    fn manifest_republish_seed_is_a_distinct_identity() {
+        let pid = |s: [u8; 32]| entity_crypto::Keypair::from_seed(s).peer_id();
+        let mine = pid(MANIFEST_REPUBLISH_SEED);
+        assert_ne!(mine, pid(REKEY_SEED_BEFORE), "collides with REKEY_SEED_BEFORE");
+        assert_ne!(mine, pid(REKEY_SEED_AFTER), "collides with REKEY_SEED_AFTER");
+        assert_ne!(mine, pid(DEMO_PUBLISH_SEED), "collides with the demo publisher");
+        assert_ne!(mine, pid(APP_REPUBLISH_SEED), "collides with the app fixture");
     }
 
     /// The fixtures must name two DIFFERENT publishers, and neither may collide

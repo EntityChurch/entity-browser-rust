@@ -74,7 +74,14 @@
 pub const BOOT_FETCH_DEADLINE_MS: i32 = 3_000;
 
 /// The outcome of a bounded read. `text` is empty unless `ok`.
-#[cfg(target_arch = "wasm32")]
+///
+/// **Not `cfg`-gated, unlike [`fetch_text_bounded`] itself.** It is plain data
+/// with no `web-sys` in it, and un-gating it is what lets the *classification*
+/// of a read — did the origin answer, and what did it say — be a pure function
+/// with native unit tests, while only the five lines that actually touch
+/// `window.fetch` stay wasm-only. A classifier that can only run in a browser is
+/// one nothing asserts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundedResponse {
     pub status: u16,
     pub ok: bool,

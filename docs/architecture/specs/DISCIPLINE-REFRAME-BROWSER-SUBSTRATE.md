@@ -1513,6 +1513,293 @@ these shipped in this repo.
   [D9, D14, `bindings/wasm-worker-proxy/src/webrtc_session.rs` `PortPump` /
   `outbound_piece_size`, `make e2e-webrtc-file-crossengine` (mutation-checked: red on the
   unfixed pump, green on the fixed one, same rig)]
+- **AP36 — One predicate standing in for two questions.** A single test guards both *may we
+  ACQUIRE this?* and *may we ADOPT it?*, and answering the first with the second silently
+  withholds everything the acquisition was also good for. The tell is a guard whose *name*
+  answers one question and whose *position* answers another.
+  *Incident (2026-08-30):* `deployment_config::fetch()` sat inside boot's `!home_is_local`
+  gate. `home_is_local` is a correct and load-bearing answer to *may we adopt the document's
+  home?* — an empty `peer_id` is the system-peer sentinel, so adopting it every boot would
+  overwrite a user's deliberate local home. It is not an answer to *may we read the domain's
+  document at all?*, and because it stood in for one, a local-home profile never adopted a
+  moved origin (map-B1's repair reached the deployed domains and nobody else), never
+  revalidated a supersession record (boot audit B-5), and emitted **no line at any level**
+  about the document — which is why a devops seat could look, see nothing, and be right.
+  **This is the third instance of the same shape in one audit thread**, which is what makes it
+  a catalog entry rather than a bug: `put_if_absent` stood in for *did the user set this?*
+  (AP30's origin half), a presence check stood in for *do I hold the CURRENT bytes?* (D24), and
+  `home_is_local` stood in for *may we read?*. Each time the fix was the same move — put the
+  guard on the **decision**, never on the **acquisition** — and each time the wrong version
+  read as the conservative one.
+  **Rule: when a guard is about to skip work, name the question it answers and check that
+  every consequence of skipping is downstream of THAT question.** The consequences here —
+  origins, revalidation, reportability — were about other peers, other records, and the
+  operator; none of them were about this profile's home.
+  [D24, AP30, `app.rs` `boot_load` (the fetch is unconditional; `!home_is_local` guards only
+  the adoption), `make e2e-worker T=a_local_home_profile_reads_the_deployment_document`]
+- **AP37 — A gate's diagnostic half, unmaintained by the compiler.** A gate greps the captured
+  log for a string it does not assert on — a `println!`, a counted "signature" — and when the
+  string moves, nothing goes red. The gate keeps passing while the artifact it exists to
+  produce quietly becomes empty.
+  *Incident (2026-08-30):* the re-key gate collects and prints every
+  `remote home has no registered origin` line, described in its own comment as *"the
+  reproduction signature, the same shape as the operator's captured console"*. C1 rewrote that
+  line to `has NO registered origin` in a different commit. The filter is
+  case-**sensitive** and is a `println!`, so the suite stayed green at 38/0 and the gate began
+  reporting **zero** occurrences of the thing it was built to characterize — for the incident
+  it was built for.
+  **Rule: a string a gate reads is a coupling whether or not it is asserted. Either assert it
+  (so a rename reds) or match on the part that cannot move; and when you change a log line,
+  grep the test tree for it in the same diff.** Same family as AP31 — a gate that says
+  something it has not earned — but the failure is in the *reporting* half, which no
+  pass/fail rule reaches.
+  [D18, `tests/e2e_worker.rs` `rekey_scenario`]
+- **AP38 — An anti-vacuity guard that hides the gate behind it.** A gate asserts its staging
+  first (*"this run really was the scenario"*) and its product claim second, which is correct
+  ordering — and it means the **falsification run only exercises the guard.** The product
+  assertion, the one the gate exists for, is never observed red, so it is a claim with a
+  passing test in front of it.
+  *Incident (2026-08-30):* `a_moved_origin_reaches_a_returning_profile` was neutered by
+  reverting `adopt_deployment_origin` to `put_if_absent` semantics. It went red — on
+  *"the boot never reported `Updated`"*, the anti-vacuity assertion. Only after suppressing
+  that assertion and re-running the same neuter did the real one speak: *"the returning profile
+  stayed on the old one. Player body was 101 character(s)"* — the stale bundle, still on
+  screen. Had the falsification stopped at the first red, a gate whose content assertion was
+  (say) matching an empty string would have looked mutation-checked.
+  **Rule: a gate with N independent assertion tiers needs N falsification runs, or you have
+  only observed the outermost one. Record which tier each red came from.** The cheap technique
+  is to short-circuit the outer assertion (`true || guard`) and re-run the SAME neuter, so the
+  two reds are known to come from one defect.
+  [D18, AP31, the falsification log in
+  `docs/plans/PLAN-2026-08-29-THE-CHANGE-MAP-EVERY-CHANGE-AUDITED-AND-ITS-GATES.md` §7]
+- **AP39 — A test double that misreports WHICH failure it is producing.** A stub returns a
+  plausible-looking error of the wrong *kind* — the right words in the wrong variant. It is
+  invisible for exactly as long as the code under test collapses those kinds together, and it
+  becomes load-bearing the moment somebody stops collapsing them: the new behaviour is then
+  untestable, or, if the assertion is written to match the double rather than reality, the
+  suite proves the opposite of the truth and looks rigorous doing it.
+  *Incident (2026-08-30):* `FixtureBinSource` (`http_poll`'s own test source) mapped a path the
+  fixture does not carry to `PollError::Decode(format!("404 {url}"))` — a string that says 404
+  while the variant says *"the bytes did not decode"*. `PollError` distinguishes those on
+  purpose, in a doc comment that says *"collapsing the two is how 'withheld' and 'unreachable'
+  arrive as the same value"*. Harmless while `resolve_closure_via` discarded the error anyway;
+  the moment C2 made the decode point preserve it, the new `an_origin_that_answered_404_is_a_
+  withdrawal_not_an_outage` failed **against correct product code**. Its sibling double in
+  `foreign_cache` had it right (`PollError::NotFound(404)`), which is how the diagnosis was one
+  minute rather than an afternoon.
+  **Rule: a double must be honest about the distinction under test, and about every distinction
+  the type it fakes draws — a stub is an implementation of a contract, not a convenience.**
+  When a variant exists to be told apart from another, no fixture may produce the two
+  interchangeably. Check the doubles before changing the meaning of an error type, and prefer
+  one shared constructor (`poll_error_for_io`) over per-fixture guesses.
+  [D18, `src/content_site/http_poll.rs` `FixtureBinSource`, `poll_error_for_io`]
+- **AP40 — Splitting a collapsed value, and giving the strongest claim to the widest bucket.**
+  A change exists to stop conflating outcomes; it introduces distinct variants; and its **own
+  new mapping** then hands the most specific, most actionable statement to the `_ =>` arm. The
+  split reads as a correction and ships the same defect one boundary over — with the extra
+  hazard that everyone now trusts the value, because it is typed.
+  *Incidents (2026-08-30, both found auditing the session that introduced them, hours apart):*
+  **map-B3** split *"is there a deployment document"* into four states and then mapped **every**
+  non-2xx to `NoDocument`, whose message is *"this deployment runs on build-time defaults **by
+  choice**"* — so a CDN 502 reported the deployer's *intent*. **map-C2** split *"the site is not
+  here"* by whether the origin answered, and then treated every answered-404 on a foreign site as
+  a withdrawal — regressing the `?site=` deep-link case (*we asked a host that never had it*)
+  that the message family it replaced had been earned on. In both, the rule was already written
+  down in this repo (`PollError::NotFound`: *"Only 404/410 map here, deliberately"*) and imported
+  incompletely.
+  **Rule: in a split, the narrowest input gets the strongest claim and the default arm gets the
+  weakest. Enumerate the inputs that reach each arm and ask what each one licenses you to
+  say — a `_ =>` that produces a specific diagnosis is the smell.** And prefer an evidence test
+  over a status test: C2's fix is *"assert a withdrawal only where something vouches this origin
+  is where that peer publishes"* — a held copy, or the deployment's own declaration — which is a
+  fact we have, where "it answered 404" is not.
+  Same family as AP33 (a report right for the case it was written for, reached by a case it was
+  not); AP40 is the *manufacturing* step, and it is where to look first after any "we now
+  distinguish X from Y" change.
+  [D13, AP30, AP33, `deployment_config::classify` + `declares_no_document`,
+  `views/content_site/model.rs` `error_output`,
+  `a_withdrawn_foreign_site_we_never_held_is_not_claimed_as_a_withdrawal`]
+- **AP41 — A timing-dependent read, CACHED as if it were a fact.** A surface reads durable
+  state once, at construction, through an accessor whose answer depends on *when* it is
+  called; stores the result in memory; and never reads again. The surface then spends its
+  entire session acting on a value it invented, while the real one sits in the tree — and the
+  failure is *silent by construction*, because a default is a legitimate value and nothing
+  distinguishes it from an answer.
+  **Do not assume this is confined to the arm where the accessor is obviously wrong.** The
+  incident below was filed as Worker-only on exactly that reasoning, and a falsification run
+  refuted it: on the Direct-IDB arm the store fills from IndexedDB *while the constructor
+  runs*, so the same read is **racy** rather than reliably correct — measured as a 1-in-3
+  flake, and neutering the fix turns **both** arms red. **Structural on one arm, intermittent
+  on the other** is the general shape, and the intermittent one is the shipped default, which
+  is where it hurts. **The "control" that cannot fail is the thing to falsify first** — this
+  one was written as a no-op assertion and turned out to be the finding.
+  **This is NOT the known "subscribe the prefix you read" rule
+  (`feedback_worker_cache_get_needs_subscription`), and applying that rule would not have
+  fixed it.** Two reasons, and both had to be true: the read happens *before* the subscribe
+  in the same synchronous block (`SiteOverlay::new` reads at `:75` and subscribes at `:88`;
+  the window factory does the same), and `observe` is asynchronous, so **even a correctly
+  ordered subscription cannot make a same-tick read authoritative.** Subscription fixes the
+  *next* read. The bug is that there is no next read.
+  *Incident (2026-08-30):* `ContentSiteModel::initialize` read the persisted
+  `ContentSiteState` — and the `home_site` config it derives its fallback from — with the
+  sync `Peers::get_entity`. On the Worker arm both answered `None`, measured with the
+  `audit-worker-reads` lamp on a `warm-durable` boot. Every returning reader on `?worker=1`
+  was silently put back on the **build** default (`demo`, peerless), which renders
+  *"No site manifest at 'demo' (peer: …)"* — an availability defect that presented for a day
+  as a narrow re-key regression, because the only two gates that read navigation state back
+  on that arm were re-key gates.
+  **Rule: if a read can be empty for reasons of timing rather than of truth, you may render
+  from it but you may not RETAIN it. Either read authoritatively (`get_entity_async` /
+  `tree_listing_async`, subscription-independent on both arms) or re-read when the source
+  becomes readable — and say which of the two you did.** The corollaries the fix is built
+  from, because the naive repair introduces two new bugs: **a read that FAILS is not an
+  answer** (keep what you have — AP30 corollary (a); `Hydration::Unheard`), and **a write
+  that lands during the round-trip is newer than it** (do not drag the user backwards —
+  `nav_generation`). And do not report the outcome as a `bool`: *"we restored your
+  location"*, *"you never had one"*, *"we could not tell"* and *"you moved first"* are four
+  facts, and collapsing them is AP40 (the first draft of `Hydration` did exactly that).
+  **Counter-example worth keeping in view:** `SettingsModel` has the same cold read and is
+  *not* broken, because it re-reads on every render — it self-heals by accident, which is
+  why "it works in Settings" was never evidence about anything else.
+  **Eight window models share the retaining shape** (`content_site`, `shell`, `entity_tree`,
+  `knowledge_base`, `query_console`, `execute_console`, `peer_connections`, `chain_trace`).
+  `content_site` is fixed; the **Shell is measured red on the same shape** — a re-opened window
+  starts at the default working directory — which is what promotes the inventory from a code
+  reading to a second confirmed instance. The remaining six are named, unmeasured open work.
+  **What makes this reachable for window models is not obvious and took a wrong turn to find:**
+  a reload restores **no** windows at all (`app.rs`: *"No default window spawn. A Chrome/Full
+  boot opens ZERO windows"*), but **window ids restart at 1**, so a re-opened window inherits
+  the previous session's `workspace/windows/{id}/state` — and the `surface=window` deployment
+  shape re-spawns window 1 on every boot and reads it every time.
+  [D13, D15, D16, AP4, AP30, AP40, `views/content_site/model.rs` `hydrate_durable`,
+  `a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm`,
+  `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`]
+
+- **AP42 — A durable slot keyed by a REUSED id, decoded without asking what wrote it.** Two
+  facts that are individually fine compose into a silent cross-read: an identifier is handed
+  out again after a restart, and the state it keys outlives the thing that wrote it. The
+  decoder then reads whatever is in the slot **by field name**, so an entity written by a
+  different *kind* of thing is adopted field-by-field wherever the two happen to agree — no
+  error, no log line, and a default is indistinguishable from an answer (AP41's silence, from
+  the other direction).
+  *Incident (2026-08-30, latent — measured, not yet observed in production):* window state
+  lives at `workspace/windows/{id}/state`; `WindowManager::new` restarts `next_id` at 1 every
+  session, and **a reload is not a close** — only `Action::CloseWindow` removes window state
+  (`app.rs:3149`, D9 satisfied *there*) — so the entity at window 1's path on this boot was
+  written by whatever window held id 1 on the last one, **of any type**. The Entity Tree and
+  the Knowledge Base both persist `expanded_paths` and mean different things by it (entity
+  paths vs. doc-tree folders), and the Entity Tree adopted the KB's: measured at the adoption
+  site, `pending_expand_restore == {"guides", "guides/testing"}`.
+  **Report the severity honestly, and this one is LATENT, not live.** The adopted set is inert
+  today for two reasons that are coincidences rather than guarantees: KB folder paths are
+  relative while tree paths are `/{peer_id}/…`, so no key matches; and `restore_expanded` is
+  **additive** (it sets `expanded = true` on a hit and never collapses), so a non-matching set
+  is a no-op. Neither is enforced by anything. `expanded_paths` is also the *only* field name
+  shared across the eight decoders today — which is a fact about today's field names, not a
+  property of the design.
+  **Rule: when a slot's key can be reused, the thing in it must say what it is, and the reader
+  must check.** Here the discriminator already existed and was being thrown away — every
+  window state is stamped `Entity::new("app/state/{type}", …)` — so the fix was to read the
+  field, not to invent one: `if entity.entity_type != STATE_TYPE { return <no persisted
+  state> }` in every decoder, with the type literal promoted to a `STATE_TYPE` constant
+  so `to_entity` and `from_entity` cannot drift apart. Note the answer for a foreign entity is
+  the model's **"no persisted state"** value, which is not always `Default` (the Shell's is
+  `initial("")`).
+  **Corollary, and it is the half a type guard CANNOT deliver: two window types must not share
+  one state type.** The guard separates readers that disagree about their type; it is blind to
+  two windows that agree. `ProgramsWindow` persisted `AppViewState` under the Apps window's
+  `app/state/games_view` at its own `window_state_path`, so a Programs window inheriting an
+  Apps window's id decoded it and read a `selected` naming another set's app as a program key.
+  Programs now carries `app/state/programs_view` and the shape is shared through
+  `from_entity_as` / `to_entity_as` — **a shared codec is fine, a shared slot is not.** The
+  gate asserts type distinctness *before* the cross-matrix, because the matrix skips
+  `writer == reader` and was therefore green while the two were merged: **the first
+  falsification of this finding failed to go red, and that is what exposed the hole.**
+  **Count from the roster, not from a grep.** The decoder list was first derived with
+  `grep 'Entity::new("app/state'` over `src/views/` and came up **three short** — it missed
+  `content_site` and `games`, which had already promoted their literal to a constant (so the
+  literal was not there to find), and `programs`, which writes through another module's codec
+  entirely. The census is `grep -rln window_state_path src/views/`: **eleven** window types,
+  and the gate asserts `rows.len()` so the next omission fails rather than passes quietly.
+  **What this does and does not buy.** It converts *silently adopt another type's fields* into
+  *behave as if there were no state* — it does **not** stop the last window to hold an id from
+  overwriting the previous holder's state, which is ordinary loss and unchanged. It is
+  therefore a correctness floor, not the resume semantics; type-scoping the path
+  (`windows/{type}/{ordinal}/state`) is the separate, larger change that would also make
+  resume order-independent, and it is a product decision with a migration cost.
+  **Why it was worth doing FIRST:** the six remaining AP41 repairs make these reads reliable.
+  Repairing a read whose key still collides makes a wrong answer arrive *dependably* — the
+  same shape as every defect in this thread, a mechanism working correctly and delivering
+  something nobody decided.
+  *Process lesson, and it cost the first version of the gate:* **the first assertion was
+  written against a derived view and passed while the defect was fully present.**
+  `state_snapshot().expanded_paths` reports what is expanded in the *loaded* tree, which in a
+  unit test with no entities loaded is empty no matter what was read. **Assert at the adoption
+  site, not at a render-derived one** — a rendered assertion is right for a behavioural gate
+  (AP31) and can measure nothing at all in a unit test whose fixture never populates the view.
+  *Two things the same review turned up in the surrounding data model, neither a defect:*
+  (a) the **stated convention is sound and was being applied** — `app_paths.rs` declares
+  `app/{app_id}/workspace/…` for per-window state and `app/{app_id}/settings/…` for global
+  configuration, which is why `SettingsModel` is not an exception: it holds theme, language
+  and the like, is a *stateless typed accessor* over one global entity, and ignores its own
+  `window_id`. Two Settings windows showing one configuration is the convention working, not
+  a special case. (b) **`window_results_path` has no writer and no reader** — its only uses
+  are its definition, its unit test, and the `CloseWindow` removal, so the close path deletes
+  a slot nothing creates. Left in place deliberately: ADR-0027 authors published commits fresh
+  at the release boundary, so `git log -S` over this history **cannot** establish that no
+  earlier build wrote one, and a cleanup for a legacy slot is cheaper than stranding it.
+  [AP31, AP39, AP41, D9, `window.rs` `STATE_TYPE` / `next_id`,
+  `no_window_state_decoder_adopts_another_window_types_entity`,
+  `a_foreign_window_states_expanded_paths_are_not_adopted`,
+  `views/programs/mod.rs` `PROGRAMS_VIEW_TYPE`]
+
+- **AP43 — "I wrote it" used as a proxy for "it changed": an IDEMPOTENT WRITE IS NOT AN
+  EVENT.** A surface signals its own re-render by persisting something and letting its own
+  subscription come back to it. That works right up until the write is byte-identical — and in
+  a **content-addressed** store an identical put at the same path is not a change, emits no
+  event, and is silently indistinguishable from a write that never happened. Everything the
+  surface did that was *not* in that entity is then stranded: computed, held in memory, and
+  never drawn.
+  **The tell is a surface that displays state it deliberately does not persist.** If what the
+  user sees is a pure function of the persisted entity, this cannot bite — no change, nothing
+  to redraw. The bug lives exactly where the two diverge.
+  *Incident (2026-08-30):* the Shell's scrollback is session-only by design (`to_entity`
+  persists `wd`/`history`/`draft`, never scrollback — refresh wipes it, the conventional shell
+  behaviour). `ShellWindow::handle_action` returned `dirty = true` for a submission and then
+  only called `save_state`, relying on the watch it had installed on its **own**
+  `window_state_path`. But `record_submit` skips a consecutive duplicate, so re-running the
+  last command changes `history` not at all, clears an already-clear `draft`, and produces the
+  identical entity — no event, no rebuild, and the `<pre>` keeps the empty-scrollback
+  placeholder while the model holds the rows. **Measured natively on the Direct arm:** first
+  command dirties, a different command dirties, the repeat does not, with 7 rows sitting in
+  the model.
+  **This presented for a day as *"a Shell opened after a reload renders nothing"*, and that
+  framing is what made it look undiagnosable.** Warm-vs-cold is not the axis; *did the
+  persisted entity change* is. It correlates with a reload because a cold shell's first
+  command always grows an empty history, while a returning shell starts with history restored
+  — and the natural response to "nothing happened" is to type it again, which is guaranteed to
+  be the duplicate case. The earlier hypothesis (*"something re-reads state and wipes the
+  scrollback"*) was wrong in the informative way: **nothing wipes anything. The rows are all
+  there. The section simply never rebuilds.**
+  **Rule: a surface that displays unpersisted state marks its own watch dirty; it may not
+  infer a redraw from a write.** The subscription stays for writes made *elsewhere* (an async
+  `exec` completing) — it just cannot be the trigger for output the surface produced itself.
+  **Do not generalise this into "mark dirty everywhere".** Checked rather than assumed: six
+  windows persist in `handle_action` without marking dirty, and the other five are correct
+  because everything they render is either persisted (`entity_tree`, `knowledge_base`,
+  `chain_trace`, `settings` — display is a pure function of the entity) or arrives on a
+  *different* subscription that does see a real change (`query_console` /`execute_console`
+  render results out of the event-log prefix, where every entry is a new sequence-numbered
+  path). The Shell is the only surface here with a substantial session-only display buffer.
+  **Tension worth holding in view, because the same property is load-bearing in both
+  directions:** D24 records *"`Unchanged` writes nothing and flips nothing dirty"* as a
+  **feature** — on the Apps surface a spurious dirty restarts a running app. That is the same
+  no-op-write behaviour that lost the Shell's output. Neither is wrong; the lesson is that
+  "nothing changed in the store" and "nothing changed on screen" are different questions, and
+  a surface has to answer the second one itself.
+  [D9, AP31, AP41, D24, `views/shell/mod.rs` `handle_action`,
+  `a_submission_that_changes_no_persisted_state_still_rebuilds`,
+  `a_shell_spawned_after_a_reload_still_shows_what_it_prints`]
 
 ---
 

@@ -14898,6 +14898,7 @@ async fn rekey_scenario(
     after_fixture: &str,
     read_js: &str,
     label: &str,
+    extra_query: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (client, _server) = setup().await?;
     let read_site = read_js;
@@ -14932,7 +14933,7 @@ async fn rekey_scenario(
         .spawn()?;
     let _serving = FederationServer(server);
     sleep(Duration::from_millis(400)).await;
-    let url = format!("http://localhost:{port}/?log=trace");
+    let url = format!("http://localhost:{port}/?log=trace{extra_query}");
 
     let mut planted: Vec<String> = Vec::new();
 
@@ -14962,13 +14963,21 @@ async fn rekey_scenario(
         if !home_text.contains("Welcome to the Entity Demo Site") {
             print_log(&cold);
         }
-        // Staging: the cold boot must really have adopted A, on the IDB arm, and
-        // rendered A's home. If this fails the re-key was never set up and every
-        // assertion after it would be meaningless.
+        // Staging: the cold boot must really have adopted A, on the arm this run
+        // is about, and rendered A's home. If this fails the re-key was never set
+        // up and every assertion after it would be meaningless.
+        //
+        // **The arm is asserted, not assumed.** `?worker=1` is a *request*: the
+        // Worker bootstrap can fail and fall back to Direct (C5b), which would
+        // silently turn a Worker-arm run into a second Direct one — a gate green
+        // by inheritance on the arm it claims to cover (AP31).
+        let want_arm =
+            if extra_query.contains("worker=1") { "DurableWorker" } else { "DurableDirectIdb" };
         assert!(
-            cold.iter().any(|l| l.contains("DurableDirectIdb")),
-            "re-key repro: the default boot must select the main-thread IDB peer \
-             (the arm the incident is on)"
+            cold.iter().any(|l| l.contains(want_arm)),
+            "re-key repro: this run must boot on the {want_arm} arm; `?worker=1` is a request \
+             and the Worker bootstrap can fall back to Direct, which would make this a second \
+             copy of the Direct gate"
         );
         assert!(
             cold.iter().any(|l| l.contains("deployment-config: applied")),
@@ -15035,9 +15044,16 @@ async fn rekey_scenario(
         // The reproduction signature, printed whether or not we go on to fail —
         // it is the artifact this test exists to produce, and it is the same
         // shape as the operator's captured console.
+        // Case-INSENSITIVE, and that is not fussiness: C1 rewrote this line from
+        // "has no registered origin" to "has NO registered origin", and because
+        // this is a `println!` rather than an assertion nothing went red — the
+        // gate built to produce the incident's signature quietly began reporting
+        // zero of them. A diagnostic that rots silently is the same failure shape
+        // as a gate that passes vacuously (AP31); match on what both wordings
+        // share.
         let unresolvable: Vec<&String> = warm
             .iter()
-            .filter(|l| l.contains("remote home has no registered origin"))
+            .filter(|l| l.to_lowercase().contains("remote home has no registered origin"))
             .collect();
         let reconcile_fired = warm
             .iter()
@@ -15048,8 +15064,15 @@ async fn rekey_scenario(
         // why they saw nothing), and it describes the wrong thing — "the source
         // is unreachable" rather than "the publisher you are asking for was
         // replaced" — so it cannot be acted on even when it is seen.
+        // Both cached-outline notices, because C2 split them: an origin that
+        // answered 404 now says the publisher removed the site, and only an
+        // origin that said nothing says "unreachable". A diagnostic that
+        // matched one of them would go quietly to zero the moment the other
+        // fired — AP37, which this file has already been bitten by once.
         const STALE_OUTLINE: &str = "This site's source is unreachable";
-        let showed_stale_outline = warm_text.contains(STALE_OUTLINE);
+        const WITHDRAWN_OUTLINE: &str = "publisher has removed this site";
+        let showed_stale_outline =
+            warm_text.contains(STALE_OUTLINE) || warm_text.contains(WITHDRAWN_OUTLINE);
         println!(
             "  [{label}] warm boot — (1.2.5) reconcile fired: {reconcile_fired}; \
              unresolvable-home reports: {}; stale cached outline shown: {showed_stale_outline}",
@@ -15130,6 +15153,11 @@ async fn rekey_scenario(
 
 /// The locked-kiosk **site** surface — the WORST CASE, not a shipped shape.
 ///
+/// Read the site overlay's rendered text — the site-surface probe both re-key
+/// callers use.
+const SITE_LAYER_TEXT: &str =
+    r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
+
 /// The old label here said "`ecdeos.org`-shaped"; that was stale. Measured
 /// 2026-08-28: `ecdeos.org` serves `surface: chrome`, `site_mode.enabled:
 /// false`, and overlays are off on all four production domains. Keep this
@@ -15141,10 +15169,760 @@ async fn rekeyed_domain_heals_on_next_boot() -> Result<(), Box<dyn std::error::E
     rekey_scenario(
         "emit_rekey_fixture_before",
         "emit_rekey_fixture_after",
-        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#,
+        SITE_LAYER_TEXT,
         "surface=site",
+        "",
     )
     .await
+}
+
+/// **The re-key on the WORKER arm — §4's "genuinely untested" half.**
+///
+/// The change map is explicit that the boot path is the part of the Worker arm
+/// which is *not* arm-neutral by inspection: `put_if_absent` and
+/// `remove_and_wait` have distinct Worker implementations, and every
+/// supersession gate quoted anywhere in that thread ran Direct-IDB. This run
+/// exercises the whole chain on the arm a real browser defaults to —
+/// `peer_supersession::load` at boot, the R1 deployment-document reconcile,
+/// `persist` of the retirement record, and the read-time `resolve` at
+/// `ContentSiteState::from_entity` — against a mirror that fills
+/// asynchronously rather than an in-process store.
+///
+/// Unlike the cache gates, there is no "green for the wrong reason" hazard
+/// here: the anti-vacuity assertions inside `rekey_scenario` require the boot to
+/// have *detected* the re-key and *recorded* a supersession, which a profile
+/// that failed to load its state cannot do.
+///
+/// # It was RED, and the defect it found was real — fixed 2026-08-30
+///
+/// **It healed and then lost the heal.** Step 4 passed on this arm: the re-key
+/// was detected, the supersession recorded, the site rendered under the new
+/// publisher. **Step 5 — a plain reload with nothing else changed — failed**:
+///
+/// ```text
+/// the adopted publisher did not persist — the boot after the heal broke again
+/// got: "… No site manifest at 'demo' (peer: 2K9DnQPP…)"
+/// ```
+///
+/// `err_no_manifest`, the **Local** branch — so the location the overlay tried
+/// to resolve carried no peer at all, while the same boot logged
+/// `remote home origin came from the deployment config` and
+/// `peer-supersession: loaded retired …`. Boot state was fine; navigation state
+/// was not.
+///
+/// **The cause, confirmed rather than inferred.** `ContentSiteModel::initialize`
+/// read the persisted `ContentSiteState` with the SYNC `Peers::get_entity`,
+/// which on this arm answers from the per-prefix cache mirror — and the mirror
+/// holds only prefixes a `watch_prefix` has primed. `SiteOverlay::new` reads
+/// *before* it subscribes, and **nothing subscribes the overlay's state path at
+/// all**, so that read returned `None` on every Worker boot and the overlay fell
+/// back to a default built from a config read that missed the same way: the
+/// build default, peerless. The `audit-worker-reads` lamp names both paths in
+/// sequence, immediately before `boot_load: begin boot_class="warm-durable"`.
+/// Step 4 masked it because the adoption path calls `overlay.navigate()` with an
+/// explicit `entity://{peer}/…` URI and never reads persisted state.
+///
+/// **The fix** is `hydrate_durable`: an authoritative L1 `get_entity_async`
+/// (subscription-independent on both arms), awaited in `boot_load` before the
+/// re-point decision. Falsified 2026-08-30 by returning `None` from
+/// `hydration_job` on wasm — this gate and the supersession one both return to
+/// red, at the same two assertions they were originally measured at.
+/// Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+///
+/// **Bisected before it was fixed.** `dist/` rebuilt from `6256975` failed
+/// identically, so it was never a regression from the cache/boot/report work —
+/// it was the hole change-map §4 named, invisible for as long as the arm was.
+#[tokio::test(flavor = "current_thread")]
+async fn rekeyed_domain_heals_on_next_boot_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    rekey_scenario(
+        "emit_rekey_fixture_before",
+        "emit_rekey_fixture_after",
+        SITE_LAYER_TEXT,
+        "surface=site[worker]",
+        "&worker=1",
+    )
+    .await
+}
+
+/// **The Worker-arm navigation defect, ISOLATED from the re-key that found it.**
+///
+/// The two gates above are the reproduction we happened to have, and they were
+/// misleading about the size of the thing: both are re-key scenarios, so for a
+/// day the defect read as *"the re-key repair does not survive a reload"*. It
+/// is not about re-keying at all. **Any** warm boot on the Worker arm dropped
+/// the reader's location, because `ContentSiteModel::initialize` read persisted
+/// nav state with the sync `Peers::get_entity` — the per-prefix cache mirror,
+/// which holds only prefixes a `watch_prefix` has primed, and which nothing
+/// primes for this path. A returning visitor was silently put back on the
+/// deployment's home page, or worse, on the *build* default, because the config
+/// read missed the same way.
+///
+/// So this gate does the smallest thing that shows it: **read a page, come
+/// back, still be on it.** No re-key, no republish, no withdrawn site. If the
+/// hydration regresses, this fails and says plainly what a user lost, where the
+/// re-key gates would blame the re-key.
+///
+/// **Both arms — and the Direct one turned out NOT to be a mere control.** It
+/// was added as one, on the theory that the sync read is authoritative on Direct
+/// so the repair should be a no-op there. Falsification says otherwise: with
+/// `hydration_job` neutered, **Direct fails too**. On the Direct-IDB arm the
+/// store is filled from IndexedDB and `ContentSiteModel::initialize` runs at
+/// `EntityApp::new` time, so its synchronous read is *racy* rather than
+/// reliably-correct — measured as a 1-in-3 flake before the authoritative read
+/// was in place. So the defect is **structural on Worker and intermittent on the
+/// shipped default arm**, and this fix repairs both. Stability after the fix:
+/// 4/4 runs, both arms.
+///
+/// What it deliberately does NOT cover, so nobody reads it as more:
+/// `Hydration::Unheard` — a round-trip that *fails* must leave the current
+/// location alone rather than reset to the default. That is unreachable from a
+/// browser without faulting the worker port; it is pinned at unit level
+/// (`hydrate_with_nothing_persisted_keeps_the_default` and the `Unheard` arm's
+/// own assertion in `views::content_site::model`).
+///
+/// Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    location_survives_reload_scenario("worker", "&worker=1").await
+}
+
+/// The Direct-arm control for
+/// [`a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm`] —
+/// the arm that was always correct, asserted so the repair is proven not to
+/// have cost it anything.
+#[tokio::test(flavor = "current_thread")]
+async fn a_returning_reader_is_still_on_the_page_they_left_on_the_direct_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    location_survives_reload_scenario("direct", "").await
+}
+
+/// **Which PAGE is on screen**, as a short identifying string.
+///
+/// Deliberately not [`SITE_LAYER_TEXT`]: that returns the whole layer's
+/// `textContent`, which begins with the renderer's injected stylesheet — over a
+/// kilobyte of CSS that is **byte-identical on every page**. A "did the page
+/// change" assertion built on a prefix of it compares two copies of the same
+/// CSS and passes for any pair of pages, which is a gate that cannot fail. So
+/// read the rendered document's own heading, and fall back to a slice of its
+/// body when a page has no heading.
+const SITE_PAGE_PROBE: &str = r#"
+    const sl = document.getElementById('site-layer');
+    if (!sl) return '';
+    const doc = sl.querySelector('.cs-doc');
+    if (!doc) return '';
+    const h = doc.querySelector('h1, h2');
+    const t = h ? (h.textContent || '') : (doc.textContent || '');
+    return t.trim().slice(0, 80);
+"#;
+
+/// How many durable writes of the site-overlay's navigation state this session
+/// has made so far. Counted, not existence-checked — see the call site.
+async fn count_nav_state_puts(client: &Client) -> Result<usize, Box<dyn std::error::Error>> {
+    let log = capture_log(client).await?;
+    Ok(log
+        .iter()
+        .filter(|l| {
+            l.contains("tree put: stored") && l.contains("workspace/site-overlay/location")
+        })
+        .count())
+}
+
+async fn location_survives_reload_scenario(
+    label: &str,
+    extra_query: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Same isolation rule as `rekey_scenario`: publish into a COPY of the SPA on
+    // its own port, never into the shared `dist/`. See that function for the
+    // Phase-27 "publisher bound no signature" failure this prevents.
+    let root = format!("target/e2e-location-{label}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace{extra_query}");
+
+    let r = async {
+        // A locked overlay deployment, the surface with the least room to
+        // report — the same reason `rekey_scenario` uses it.
+        run_rekey_fixture("emit_rekey_fixture_before", &root);
+
+        // ── 1. Cold boot: land on the deployment's home ──────────────────────
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let home =
+            poll_rendered(&client, SITE_PAGE_PROBE, "Welcome to the Entity Demo Site").await?;
+        let cold = capture_log(&client).await?;
+        if !home.contains("Welcome to the Entity Demo Site") {
+            print_log(&cold);
+        }
+        // The arm is ASSERTED, never assumed: `?worker=1` is a request, and a
+        // failed Worker bootstrap falls back to Direct (C5b) — which would turn
+        // this into a second copy of the Direct control and pass for a reason
+        // that has nothing to do with the arm it names (AP31).
+        let want_arm = if extra_query.contains("worker=1") { "DurableWorker" } else { "DurableDirectIdb" };
+        assert!(
+            cold.iter().any(|l| l.contains(want_arm)),
+            "[{label}] this run must boot on the {want_arm} arm"
+        );
+        assert!(
+            home.contains("Welcome to the Entity Demo Site"),
+            "[{label}] staging: the deployment home did not render on the cold boot; got: {home:?}"
+        );
+
+        // **Count the nav-state writes BEFORE the click.**
+        //
+        // Waiting for "a `tree put` to site-overlay/location exists" is NOT the
+        // same as waiting for THIS navigation to persist, and the difference is
+        // a real flake: a cold boot with no durable config re-points the overlay
+        // at the deployment home (`config_was_absent`), which itself calls
+        // `go_to` -> `persist_state` -> a put to that exact path. So the naive
+        // poll matched a write that happened before the reader clicked anything,
+        // returned instantly, and let the reload race the click's write. Direct
+        // failed 1 run in 3 that way — an assertion satisfied by the wrong
+        // evidence, which is AP31's family.
+        let nav_puts_before = count_nav_state_puts(&client).await?;
+
+        // ── 2. The reader navigates somewhere else ──────────────────────────
+        //
+        // A real click on a real link, so the persist path is the shipped one
+        // (`go_to` → `dispatch_write`), not a tree write the test performed.
+        let nav = client
+            .execute(
+                r#"
+                const sl = document.getElementById('site-layer');
+                if (!sl) return { clicked: false, links: [] };
+                // ONLY the site's own navigation — the sidebar's page list and
+                // the top nav. A bare `querySelectorAll('a')` over the layer
+                // also returns the BRAND link ("⌂ <site title>"), which points
+                // at the home page: the first version of this gate clicked it,
+                // never left home, and was caught by the anti-vacuity assertion
+                // below rather than by passing. That is the assertion earning
+                // its keep, and the reason this selector is narrow.
+                const links = Array.from(
+                    sl.querySelectorAll('.cs-sidebar-list a, .cs-nav-desktop a')
+                );
+                const current = (() => {
+                    const doc = sl.querySelector('.cs-doc');
+                    const h = doc ? doc.querySelector('h1, h2') : null;
+                    return h ? (h.textContent || '').trim() : '';
+                })();
+                const link = links.find(a => {
+                    const t = (a.textContent || '').trim();
+                    if (!t) return false;
+                    // Already here — clicking it proves nothing. Two spellings
+                    // of "here": the rendered heading, and the nav's own label
+                    // for the root page. The heading test alone is not enough —
+                    // the sidebar says "Home" while the index page's `<h1>` says
+                    // "Welcome to the Entity Demo Site", so a heading-only
+                    // comparison walked us straight back to the page we were on
+                    // (measured; caught by the anti-vacuity assertion again).
+                    if (t === current) return false;
+                    if (/^home$/i.test(t)) return false;
+                    // The pre-rendered document page renders into a SANDBOXED
+                    // iframe, whose text this probe cannot read from the parent
+                    // document — landing there would make the comparison below
+                    // empty-vs-empty. Excluded by name, deliberately.
+                    if (/pre-rendered document/i.test(t)) return false;
+                    return true;
+                });
+                if (!link) return { clicked: false, current,
+                    links: links.map(a => (a.textContent||'').trim()) };
+                const label = (link.textContent || '').trim();
+                link.click();
+                return { clicked: true, label, current,
+                    links: links.map(a => (a.textContent||'').trim()) };
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            nav.get("clicked").and_then(|v| v.as_bool()),
+            Some(true),
+            "[{label}] staging: no in-site link to navigate to: {nav:?}"
+        );
+        let target = nav.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        println!("  [{label}] the reader navigated to {target:?} (nav offered: {:?})", nav.get("links"));
+
+        // Poll for the navigation to land — never a fixed sleep (the harness
+        // rule; a guessed sleep is the known source of load-dependent flake).
+        let mut moved = String::new();
+        let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < deadline {
+            moved = client
+                .execute(SITE_PAGE_PROBE, vec![])
+                .await?
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            // "Not the home page" is NOT the same as "settled on the new page":
+            // a remote resolve renders `contentsite.loading_page` first, and
+            // capturing THAT as the page we left on made the reload comparison
+            // meaningless (measured — the gate failed with
+            // `left on: "Loading the live page…"`). Wait for a real page.
+            let settled = !moved.is_empty()
+                && !moved.contains("Welcome to the Entity Demo Site")
+                && !moved.contains("Loading the live page");
+            if settled {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        // **Anti-vacuity, and both halves are load-bearing.** If the click never
+        // left the home page, step 3 would assert "still on the home page" and
+        // pass with the fix reverted — green by construction (AP31/AP38). And an
+        // EMPTY probe would make the `contains` below trivially true, which is
+        // the same failure wearing the other hat.
+        assert!(
+            !moved.contains("Welcome to the Entity Demo Site"),
+            "[{label}] staging: the click did not leave the home page, so the reload \
+             assertion below would be vacuous; got: {moved:?}"
+        );
+        assert!(
+            moved.len() >= 8 && !moved.contains("Loading the live page"),
+            "[{label}] staging: the page probe read nothing identifying ({moved:?}), so \
+             'we came back to the same page' could not be asserted against it"
+        );
+        let left_on = moved.clone();
+
+        // ── 2b. Wait for the location to be DURABLE, on a signal ────────────
+        //
+        // `go_to` renders from memory and persists through `dispatch_write`,
+        // which is fire-and-forget on both arms — so the heading changes before
+        // the write lands, and reloading on the heading alone races the persist.
+        // That is not the defect under audit (it is "reload 100 ms after a
+        // click"), and letting it in would make this gate flaky in a way that
+        // reads as the bug it is meant to guard.
+        //
+        // So poll for the tree put itself rather than sleeping on a guess (the
+        // harness rule). If this times out, that is its own finding — a
+        // navigation that never reaches durable storage — and the message says
+        // so rather than blaming the reload.
+        let mut persisted = false;
+        let persist_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < persist_deadline {
+            if count_nav_state_puts(&client).await? > nav_puts_before {
+                persisted = true;
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        assert!(
+            persisted,
+            "[{label}] the reader navigated to {target:?} and the new location NEVER reached \
+             durable storage — a separate defect from the one this gate guards, and a worse \
+             one: nothing could restore a location that was never written"
+        );
+
+        // ── 3. A plain reload. Nothing else changed. ────────────────────────
+        //
+        // No storage wipe, no republish, no re-key — the single most ordinary
+        // thing a reader does, and the thing that lost their place.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let after = poll_rendered(&client, SITE_PAGE_PROBE, &left_on).await?;
+        let warm = capture_log(&client).await?;
+        if after != left_on {
+            print_log(&warm);
+        }
+        // THREE assertion tiers, ordered so whichever fires names what actually
+        // happened. The order was chosen from the falsification run, not
+        // guessed: with the fix neutered the Worker arm does NOT land on the
+        // home page — it renders an *error*, because the lost location decodes
+        // to a peerless default whose site does not exist locally. A gate whose
+        // first tier said "you were put back on the home page" would have
+        // reported the wrong symptom for the real defect (AP38, and AP33's rule
+        // that a report must not state a cause it cannot tell apart).
+        let site_text = client.execute(SITE_LAYER_TEXT, vec![]).await?;
+        let site_text = site_text.as_str().unwrap_or("");
+        assert!(
+            !after.is_empty(),
+            "[{label}] THE DEFECT: after a plain reload there is no rendered page at all — \
+             the persisted location was not read, and what resolved in its place was an \
+             error. left on: {left_on:?}; site layer says: {:?}",
+            site_text.chars().rev().take(160).collect::<String>().chars().rev().collect::<String>()
+        );
+        assert!(
+            !after.contains("Welcome to the Entity Demo Site"),
+            "[{label}] THE DEFECT: a plain reload put the reader back on the deployment's \
+             home page. Their location WAS persisted (asserted above); the warm boot did \
+             not read it. left on: {left_on:?}; got: {after:?}"
+        );
+        assert_eq!(
+            after, left_on,
+            "[{label}] the reload landed on neither the home page nor the page they were \
+             reading"
+        );
+        // And the boot said so, in the field an incident is debugged from —
+        // `adopted` here, distinct from `none-persisted` and from `unheard`.
+        assert!(
+            warm.iter().any(|l| l.contains("overlay location resolved against the durable tree")),
+            "[{label}] boot did not report how it resolved the overlay's location"
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    client.close().await.ok();
+    r
+}
+
+/// **AP41's CLASS, measured on a second surface — is the Shell a sibling or not?**
+///
+/// The navigation audit found that `ContentSiteModel::initialize` cached a
+/// construction-time sync read that is empty on the Worker arm, and then
+/// counted the shape: **eight** window models do `initialize` → sync
+/// `read_window_state` → store in `inner`, never re-read. That count is a code
+/// reading. This gate turns one row of it into a measurement, because "seven
+/// more are probably broken" is exactly the kind of claim this repo requires
+/// evidence for before it is written down as a fact.
+///
+/// The Shell is the representative: its whole persisted state is a working
+/// directory, it is the most legible thing to assert (the prompt prints it),
+/// and losing it is the class's *typical* symptom — lost session state rather
+/// than the error page the content site produced.
+///
+/// **What a red here means, and what it does not.** Red = the class is real
+/// beyond the one surface that was fixed, and the remaining six are worth
+/// fixing on the same evidence. Green = the Shell is not a sibling, and the
+/// inventory must say why — which would itself be worth knowing, because the
+/// only known reason a model escapes (`SettingsModel`) is that it re-reads
+/// every render.
+///
+/// Both arms, for the same reason as the navigation gate: Direct is the control
+/// that says the read was always fine there.
+///
+/// # MEASURED RED, 2026-08-30 — the class is real on a second surface
+///
+/// ```text
+/// [worker] AP41's class, on the Shell: a plain reload put the window back at its
+/// DEFAULT working directory instead of the one it was left in.
+///   left at:                    "/2K9Z9H1…/system"
+///   after reload `pwd` says:    "/2K9Z9H1…/"
+/// ```
+///
+/// So the eight-model inventory in the navigation audit is not a code reading
+/// any more: a **second** model loses persisted state on this arm, by the same
+/// mechanism (`ShellModel::initialize` caches a sync `get_entity` that answers
+/// from an unprimed cache mirror), and the fix shape is the same
+/// (`hydrate_durable`). Six models remain unmeasured.
+///
+/// **How this is reachable at all is worth knowing, and it took a wrong turn to
+/// find:** windows are **not** restored by a reload — `app.rs` says *"No default
+/// window spawn. A Chrome/Full boot opens ZERO windows"*, and the first version
+/// of this gate failed asserting one came back. What makes per-window state
+/// outlive a session is that **window ids restart at 1**, so a re-opened Shell
+/// gets the same `workspace/windows/1/state` path the previous session wrote.
+/// (Whether id reuse across sessions is a good idea is a separate question. It
+/// is why a user experiences "my shell remembered where I was" — and why they
+/// notice when it stops.)
+///
+/// Left `#[ignore]`d rather than landed red: a permanently red suite stops being
+/// read, and an assertion relaxed to accommodate a defect is how the defect
+/// becomes the specification. `make e2e-worker T=returns_to_its_working_directory
+/// E2E_EXTRA=--ignored`. Audit:
+/// `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "MEASURED RED — AP41's class on a second surface (the Shell). Unfixed: the fix is \
+            the same `hydrate_durable` shape, deliberately not applied blind. See the doc comment."]
+async fn a_shell_window_returns_to_its_working_directory_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    shell_wd_survives_reload_scenario("worker", "?log=trace&worker=1").await
+}
+
+/// The Direct-arm control for
+/// [`a_shell_window_returns_to_its_working_directory_on_the_worker_arm`] — and
+/// it does **not** currently function as one, which is its own finding.
+///
+/// # MEASURED, 2026-08-30 — a SECOND and separate defect, on the DEFAULT arm
+///
+/// A Shell window opened **after a reload** accepts commands and renders
+/// nothing. The input clears (so the submit fires) and the app writes
+/// `app/state/shell` to `workspace/windows/1/state` on **every** submission —
+/// caught at the wire, ~24 puts across the polling budget — while the rendered
+/// `<pre>` stays on the `shell.scrollback_cleared` placeholder:
+///
+/// ```text
+/// DIAG: { window_count: 1, shells: [ { input_value: "", input_disabled: false,
+///         scrollback: "(scrollback cleared)" } ] }
+/// ```
+///
+/// So the model is executing and persisting; the scrollback is not reaching the
+/// screen. It works on the FIRST spawn in a session (this gate's own staging
+/// `cd`/`pwd` pass) and fails on a spawn **after a reload** — the difference
+/// being that the second one restores persisted state. `ShellState.scrollback`
+/// is documented as *not persisted*; a plausible and **unconfirmed** reading is
+/// that a re-read of state on the window's own write drops the in-memory rows.
+/// Stated as the hypothesis it is: it has not been traced, and this repo grades
+/// by measured consequence, not asserted cause.
+///
+/// **This is on the Direct-IDB arm — the shipped browser default** — so it is
+/// not a Worker-arm curiosity. It is recorded here rather than fixed because it
+/// surfaced while measuring something else and diagnosing it properly is its own
+/// pass.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "MEASURED — a shell opened after a reload writes state on every command and renders \
+            an empty scrollback, on the DEFAULT arm. Undiagnosed; see the doc comment."]
+async fn a_shell_window_returns_to_its_working_directory_on_the_direct_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    shell_wd_survives_reload_scenario("direct", "?log=trace").await
+}
+
+/// `shell_submit`, but firing an `input` event before Enter.
+///
+/// The shell's `<input>` is **draft-tracked** (`components::text_input`), so the
+/// value the submit handler reads is the DRAFT map, not `input.value`. The
+/// shared `shell_submit` sets `.value` and dispatches only `keydown`, which
+/// works everywhere it is used today because those phases type into a window
+/// whose draft starts empty and stays in step. On a window spawned *after* a
+/// reload — a restored `ShellState` carries a `draft` — it submitted the stale
+/// draft instead, the scrollback stayed at "(scrollback cleared)", and the
+/// Direct control read that as "Direct lost the working directory too", which is
+/// the opposite of the truth (measured).
+///
+/// A real user typing fires `input`. This does the same. Kept local rather than
+/// folded into `shell_submit` so it cannot perturb the ~15 phases that rely on
+/// the existing helper's exact behaviour.
+async fn shell_type_and_submit(
+    client: &Client,
+    line: &str,
+    settle_ms: u64,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let v = client
+        .execute(
+            r#"
+            const [line] = arguments;
+            const layer = document.getElementById('dom-layer');
+            if (!layer) return { ok: false, reason: 'no-dom-layer' };
+            const root = layer.shadowRoot || layer;
+            let shellSection = null;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const title = sec.querySelector('header h3');
+                if (title && title.textContent.trim() === 'Shell') { shellSection = sec; break; }
+            }
+            if (!shellSection) return { ok: false, reason: 'no-shell-section' };
+            const input = shellSection.querySelector("[data-field='shell-input']");
+            if (!input) return { ok: false, reason: 'no-shell-input' };
+            input.focus();
+            input.value = line;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+            }));
+            return { ok: true };
+            "#,
+            vec![serde_json::Value::String(line.to_string())],
+        )
+        .await?;
+    assert_eq!(
+        v.get("ok").and_then(|x| x.as_bool()),
+        Some(true),
+        "shell_type_and_submit({line:?}) failed: {:?}",
+        v.get("reason")
+    );
+    sleep(Duration::from_millis(settle_ms)).await;
+    shell_scrollback(client).await
+}
+
+/// Click the palette's `+ Shell` spawn, polling for it — the palette is built by
+/// the frame loop, so it exists a frame or two after `Frame loop started` and a
+/// single read right after boot races it.
+async fn spawn_shell_window(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    let mut last = String::new();
+    let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+    while std::time::Instant::now() < deadline {
+        last = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                if (!layer) return 'no-dom-layer';
+                const root = layer.shadowRoot || layer;
+                const btns = root.querySelectorAll('button.spawn-btn');
+                for (const b of btns) {
+                    if (b.textContent.trim() === '+ Shell') { b.click(); return 'clicked'; }
+                }
+                return `no-shell-btn-of-${btns.length}`;
+                "#,
+                vec![],
+            )
+            .await?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if last == "clicked" {
+            sleep(Duration::from_millis(800)).await;
+            return Ok(());
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    panic!("spawn_shell_window: never found the `+ Shell` spawn button ({last})");
+}
+
+async fn shell_wd_survives_reload_scenario(
+    label: &str,
+    query: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/{query}", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let log = capture_log(&client).await?;
+        let want_arm = if query.contains("worker=1") { "DurableWorker" } else { "DurableDirectIdb" };
+        assert!(
+            log.iter().any(|l| l.contains(want_arm)),
+            "[{label}] this run must boot on the {want_arm} arm"
+        );
+        // The palette's first option IS the primary peer — the same list
+        // `open_peer_shell` selects from, so reading it here means the two can
+        // never disagree about which peer this gate is about.
+        // `open_peer_shell` is not usable here and the reason is worth stating:
+        // the palette's peer selector is only rendered when `selectable.len() >
+        // 1` (`dom/mod.rs` `rebuild_palette`), and a freshly-wiped profile has
+        // exactly one peer. Peer-scoped spawns bind the system peer when there
+        // is no selector, so clicking `+ Shell` is both sufficient and closer to
+        // what a first-time user does.
+        spawn_shell_window(&client).await?;
+
+        // The default working directory IS `/{pid}/`, so read it rather than
+        // reconstructing the peer id from a palette that does not exist.
+        let first = shell_type_and_submit(&client, "pwd", 400).await?;
+        let default_wd = last_shell_output(&first, "pwd").trim().to_string();
+        let pid = default_wd.trim_matches('/').to_string();
+        assert!(
+            !pid.is_empty() && !pid.contains(' '),
+            "[{label}] staging: `pwd` did not return a bare peer root; got {default_wd:?}"
+        );
+
+        // `cd` somewhere that is NOT the default, so "we came back" is
+        // distinguishable from "we reset".
+        // No trailing slash: `pwd` prints `/{pid}/system`, and a target with one
+        // fails a `contains` against it (measured — the staging assertion caught
+        // it, which is what it is for).
+        let target_wd = format!("/{pid}/system");
+        let out = shell_type_and_submit(&client, &format!("cd {target_wd}"), 400).await?;
+        let pwd = shell_type_and_submit(&client, "pwd", 400).await?;
+        let shown = last_shell_output(&pwd, "pwd").trim().to_string();
+        assert!(
+            shown.contains(&target_wd),
+            "[{label}] staging: `cd` did not move the shell — `pwd` says {shown:?} \
+             (cd output was {:?}). Nothing after this would mean anything.",
+            last_shell_output(&out, &format!("cd {target_wd}")).trim()
+        );
+
+        // Wait for the WRITE, not the render — same rule as the navigation gate.
+        let mut persisted = false;
+        let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < deadline {
+            let log = capture_log(&client).await?;
+            if log.iter().any(|l| {
+                l.contains("tree put: stored") && l.contains("workspace/windows/")
+            }) {
+                persisted = true;
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        assert!(
+            persisted,
+            "[{label}] the shell's working directory never reached durable storage"
+        );
+
+        // A plain reload.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        // **Windows are NOT restored by a reload — measured, and by design:**
+        // `app.rs` says *"No default window spawn. A Chrome/Full boot opens ZERO
+        // windows"*. So this gate cannot be "the window came back"; the reader
+        // opens a new one, exactly as a returning user does.
+        //
+        // That is what makes the sibling class reachable at all, and it is worth
+        // being precise about the mechanism: window ids restart at 1 each
+        // session, so the newly-spawned Shell gets the SAME
+        // `workspace/windows/1/state` path the previous session wrote — and its
+        // model reads it in `initialize`. (Whether per-session id reuse is a
+        // good idea is a separate question; it is the current behaviour, and it
+        // is what a user experiences as "my shell remembered where I was".)
+        spawn_shell_window(&client).await?;
+
+        // Poll for `pwd`'s OUTPUT, not for a fixed settle. A fresh window's
+        // scrollback starts at "(scrollback cleared)", and reading too early
+        // returned exactly that on the Direct arm — which would have been
+        // recorded as "Direct lost the directory too", the opposite of what it
+        // does (measured).
+        let mut after_wd = String::new();
+        let pwd_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < pwd_deadline {
+            let sb = shell_type_and_submit(&client, "pwd", 300).await?;
+            after_wd = last_shell_output(&sb, "pwd").trim().to_string();
+            if after_wd.starts_with('/') {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        let diag = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                if (!layer) return { err: 'no-dom-layer' };
+                const root = layer.shadowRoot || layer;
+                const shells = [];
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const t = sec.querySelector('header h3');
+                    if (!t || t.textContent.trim() !== 'Shell') continue;
+                    const inp = sec.querySelector("[data-field='shell-input']");
+                    const pre = sec.querySelector("[data-field='shell-scrollback']");
+                    shells.push({
+                        header: (sec.querySelector('header')||{}).textContent || '',
+                        input_value: inp ? inp.value : null,
+                        input_disabled: inp ? inp.disabled : null,
+                        scrollback: pre ? (pre.textContent||'').slice(0, 300) : null,
+                    });
+                }
+                return { window_count: root.querySelectorAll('section.window').length,
+                         shells };
+                "#,
+                vec![],
+            )
+            .await?;
+        if !after_wd.contains(&target_wd) {
+            print_log(&capture_log(&client).await?);
+        }
+        assert!(
+            after_wd.contains(&target_wd),
+            "[{label}] AP41's class, on the Shell: a plain reload put the window back at its \
+             DEFAULT working directory instead of the one it was left in. left at: \
+             {target_wd:?}; after reload `pwd` says: {after_wd:?}\nDIAG: {diag:?}"
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    client.close().await.ok();
+    r
 }
 
 /// The maximized Site Browser **window** surface — `entitychurchfoundation.org`-
@@ -15167,6 +15945,7 @@ async fn rekeyed_domain_heals_on_next_boot_window_surface(
            const w=root.querySelector('section.window.maximized')||root.querySelector('section.window');
            return w?(w.textContent||'').trim():'';"#,
         "surface=window",
+        "",
     )
     .await
 }
@@ -15326,40 +16105,39 @@ async fn demo_pull_scenario(
             warm_text.chars().count()
         );
 
-        // ── 4. The bar: it boots, and it says something ──────────────────────
+        // ── 4. The bar: it boots, and it says the TRUE thing ─────────────────
         // `wait_for_boot` above already proves the frame loop reached the point
-        // it reports from. What is asserted here is D13: the state is REPORTED,
-        // not merely survived. Two strings qualify because two surfaces produce
-        // them, and both name the condition to a reader.
+        // it reports from. What is asserted here is D13 — the state is REPORTED,
+        // not merely survived — **and, since map-C2, that the report is right.**
         //
-        // **All three of these misdescribe THIS failure, and that is a finding
-        // this gate records rather than asserts away.** Each was written for a
-        // case it is correct about:
+        // *This bar used to be lower, deliberately, and the comment that stood
+        // here said why:* three strings could be produced and all three
+        // misdescribed this failure. `offline_source_unreachable` ("this site's
+        // source is unreachable") is right for a dead network, and here the
+        // origin answered promptly with a 404 — the publisher deliberately
+        // stopped carrying the site. `err_no_manifest_foreign` ("belongs to
+        // another peer … probably hosted on its own domain, open it there") is
+        // right for a shared link to somebody else's site (measured 2026-08-24,
+        // which is why it exists), and here the named peer is *this
+        // deployment's own publisher* on the origin the reader is already on, so
+        // the advice sends them away from the only place it could have been.
+        // None of them could say the true thing, so the gate asserted only that
+        // *something* was said.
         //
-        //  * `offline_source_unreachable` — "this site's source is unreachable"
-        //    is right for a dead network. Here the origin answered promptly with
-        //    a 404: the publisher deliberately stopped carrying the site.
-        //  * `err_no_manifest_foreign` — "belongs to another peer … probably
-        //    hosted on its own domain, open it there" is right for a shared link
-        //    to somebody else's site (measured 2026-08-24, which is why it
-        //    exists). Here the named peer is *this deployment's own publisher*,
-        //    served from the origin the user is already on, so the advice sends
-        //    them away from the only place it could ever have been.
-        //  * `err_no_manifest` — "no site manifest" is true but says nothing
-        //    about who could fix it.
-        //
-        // None of them can say the true thing — *the publisher of this
-        // deployment no longer carries this site* — because nothing on this path
-        // knows that the home came from a deployment document. The gate asserts
-        // the state is REPORTED (D13); it deliberately does not assert the
-        // report is right, because it is not.
-        const NO_MANIFEST: &str = "No site manifest";
-        const FOREIGN_MANIFEST: &str = "Nothing is published at";
-        const STALE_OUTLINE: &str = "This site's source is unreachable";
-        let says_something = warm_text.contains(NO_MANIFEST)
-            || warm_text.contains(FOREIGN_MANIFEST)
-            || warm_text.contains(STALE_OUTLINE);
-        if !says_something {
+        // **C2 made the true sentence available**, by keeping the fact the
+        // decode point used to discard: `PollError::NotFound` → `SiteWithdrawn`,
+        // separate from `OriginUnreachable`, plus one bit of context — is this
+        // the site the deployment is built around. So the bar moves to where it
+        // belonged, and the negative half is not optional: **the withdrawn
+        // sentence must NOT appear when the origin merely failed to answer**,
+        // which is the easy way to "fix" this by relabelling every miss.
+        const WITHDRAWN_OUTLINE: &str = "publisher has removed this site";
+        const WITHDRAWN_HOME: &str = "no longer published at";
+        const WRONG_OUTAGE: &str = "This site's source is unreachable";
+        const WRONG_ADVICE: &str = "find it in the Registry Browser";
+        let says_withdrawn =
+            warm_text.contains(WITHDRAWN_OUTLINE) || warm_text.contains(WITHDRAWN_HOME);
+        if !says_withdrawn {
             print_log(&warm);
         }
         assert!(
@@ -15368,11 +16146,23 @@ async fn demo_pull_scenario(
              page is the failure this gate exists to rule out"
         );
         assert!(
-            says_something,
-            "demo-pull: the surface rendered but never named the condition. It must say one of \
-             {NO_MANIFEST:?} / {FOREIGN_MANIFEST:?} / {STALE_OUTLINE:?}, because a profile \
-             pointed at a site its publisher no longer carries has no other way to learn \
-             that. Got: {warm_text:?}"
+            says_withdrawn,
+            "demo-pull: the surface must say the publisher REMOVED this site. The origin \
+             answered a 404 — it is up, it is serving, and it no longer carries the site — so \
+             one of {WITHDRAWN_OUTLINE:?} / {WITHDRAWN_HOME:?} is the true report. \
+             Got: {warm_text:?}"
+        );
+        assert!(
+            !warm_text.contains(WRONG_OUTAGE),
+            "demo-pull: the surface still calls a live, answering origin UNREACHABLE. That \
+             sends the reader to check a network that is working, and reads as temporary when \
+             the state is permanent until the publisher acts (cell #17). Got: {warm_text:?}"
+        );
+        assert!(
+            !warm_text.contains(WRONG_ADVICE),
+            "demo-pull: the surface tells the reader to go find this deployment's OWN \
+             publisher in the Registry Browser — about the origin they are already looking \
+             at. Got: {warm_text:?}"
         );
 
         // ── 4b. The visitor who arrives AFTER the pull ───────────────────────
@@ -15387,7 +16177,7 @@ async fn demo_pull_scenario(
         wipe_all_storage(&client).await?;
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
-        let fresh_text = poll_rendered(&client, read_site, FOREIGN_MANIFEST).await?;
+        let fresh_text = poll_rendered(&client, read_site, WITHDRAWN_HOME).await?;
         let fresh = capture_log(&client).await?;
         let fresh_tail: String = {
             let t = fresh_text.trim_end();
@@ -15400,14 +16190,15 @@ async fn demo_pull_scenario(
              surface tail:            …{fresh_tail}\n",
             fresh_text.chars().count()
         );
-        // Measured: this path produces `err_no_manifest_foreign`, not the plain
-        // `err_no_manifest` the audit expected — the home peer is remote, so the
-        // "foreign" branch fires. It is the more informative of the two (it
-        // names the origin and the peer) and the more wrongly-advised: the peer
-        // it tells the user to go find elsewhere is this deployment's own
-        // publisher, on the origin they are already looking at.
-        let fresh_reports =
-            fresh_text.contains(FOREIGN_MANIFEST) || fresh_text.contains(NO_MANIFEST);
+        // **This is the surface C2 changed most.** With no cached outline there
+        // is no shell, so the reader gets the bare error — which used to be
+        // `err_no_manifest_foreign`: "belongs to another peer … probably hosted
+        // on its own domain, open it there, or find it in the Registry Browser",
+        // said about this deployment's own publisher on the origin they are
+        // already looking at. The location IS the configured home, so the report
+        // is now the home-withdrawal one: the host is up, the publisher removed
+        // the site, and only the site's operator can put it back.
+        let fresh_reports = fresh_text.contains(WITHDRAWN_HOME);
         if fresh_text.trim().is_empty() || !fresh_reports {
             print_log(&fresh);
         }
@@ -15418,10 +16209,15 @@ async fn demo_pull_scenario(
         );
         assert!(
             fresh_reports,
-            "demo-pull: a first-time visitor must be told the home site does not resolve. With \
-             no cache there is no outline to show, so one of {FOREIGN_MANIFEST:?} / \
-             {NO_MANIFEST:?} is the only report left, and its absence means the state is \
-             silent. Got: {fresh_text:?}"
+            "demo-pull: a first-time visitor must be told the deployment's OWN home site was \
+             withdrawn — {WITHDRAWN_HOME:?}. With no cache there is no outline, so this is \
+             the only report left, and it is the one the reader can act on. Got: {fresh_text:?}"
+        );
+        assert!(
+            !fresh_text.contains(WRONG_ADVICE),
+            "demo-pull: a first-time visitor is still being sent to the Registry Browser to \
+             look for this deployment's own publisher, on the origin they are already on. \
+             That is the advice C2 exists to retire. Got: {fresh_text:?}"
         );
 
         // ── 5. Is there an exit? ─────────────────────────────────────────────
@@ -15556,13 +16352,67 @@ fn supersession_records(log: &[String]) -> usize {
 #[tokio::test(flavor = "current_thread")]
 async fn a_supersession_the_domain_contradicts_is_dropped(
 ) -> Result<(), Box<dyn std::error::Error>> {
+    supersession_revalidate_scenario("target/e2e-supersession-revalidate", "").await
+}
+
+/// **The same correction on the WORKER arm.**
+///
+/// `peer_supersession`'s durable half is `put_and_wait` / `remove_and_wait`, and
+/// `remove_and_wait` has a **distinct Worker implementation** (`peers.rs`) — the
+/// one call in this whole chain whose native reading says least about the
+/// shipped default arm. The assertion here is the record COUNT after a reboot,
+/// which is the only thing that can distinguish "the drop reached durable
+/// storage" from "the drop happened in a mirror that gets rebuilt anyway", so a
+/// Worker run of it is worth strictly more than a Worker run of a render
+/// assertion would be.
+///
+/// # MEASURED, 2026-08-30 — the half it was written for PASSES
+///
+/// **The record count is right on this arm: the boot after the repair loads
+/// exactly one record.** So `remove_and_wait`'s Worker implementation does reach
+/// durable storage, and the predicate does not take the good record with the bad
+/// one. That is the claim this gate exists to make, and on the Worker arm it
+/// holds.
+///
+/// It then fails on its *secondary* assertion — "the site stopped rendering
+/// after the records were revalidated" — with `No site manifest at 'demo'
+/// (peer: …)`, the **same signature** as
+/// [`rekeyed_domain_heals_on_next_boot_on_the_worker_arm`]: the first boot that
+/// has to read persisted navigation state back, rather than being navigated
+/// explicitly. One defect, two gates; the diagnosis and the bisect are in that
+/// doc comment.
+///
+/// # GREEN since 2026-08-30 — and it is the second half of one repair
+///
+/// The defect was `ContentSiteModel::initialize` reading persisted navigation
+/// state with the SYNC `Peers::get_entity`, which on this arm answers from the
+/// per-prefix cache mirror and therefore answered nothing. `boot_load` now
+/// adopts the location through an authoritative L1 round-trip
+/// (`ContentSiteModel::hydrate_durable`) before it decides anything about
+/// re-pointing. Falsified 2026-08-30 by making `hydration_job` return `None` on
+/// wasm: this gate returns to red at this same assertion, and so does the
+/// re-key gate. Audit:
+/// `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_supersession_the_domain_contradicts_is_dropped_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    supersession_revalidate_scenario(
+        "target/e2e-supersession-revalidate-worker",
+        "&worker=1",
+    )
+    .await
+}
+
+async fn supersession_revalidate_scenario(
+    root: &str,
+    extra_query: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let (client, _server) = setup().await?;
-    let read_site =
-        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
+    let read_site = SITE_LAYER_TEXT;
 
     // Same isolation rule as `rekey_scenario`: publish into a copy, never into
     // the shared `dist/`.
-    let root = "target/e2e-supersession-revalidate".to_string();
+    let root = root.to_string();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
@@ -15579,7 +16429,7 @@ async fn a_supersession_the_domain_contradicts_is_dropped(
         .spawn()?;
     let _serving = FederationServer(server);
     sleep(Duration::from_millis(400)).await;
-    let url = format!("http://localhost:{port}/?log=trace");
+    let url = format!("http://localhost:{port}/?log=trace{extra_query}");
 
     let r = async {
         // ── 1. The domain as it really is: publisher A, met cold ─────────────
@@ -17608,6 +18458,29 @@ async fn connect_browser() -> Result<Client, Box<dyn std::error::Error>> {
 /// wire, not reported by the thing under test.
 #[tokio::test]
 async fn boot_survives_a_blackholed_deployment_config() -> Result<(), Box<dyn std::error::Error>> {
+    blackholed_boot_scenario("", "G1").await
+}
+
+/// **G1 on the WORKER arm.** §4 of `PLAN-2026-08-29-THE-CHANGE-MAP…` lists the
+/// boot path as the part of that arm which is *genuinely* untested and not
+/// arm-neutral by inspection — `put_if_absent` and `remove_and_wait` both have
+/// distinct Worker implementations, and every boot-path gate quoted anywhere in
+/// that thread ran Direct-IDB.
+///
+/// This one is arm-neutral **by argument**: the deadline lives in the page
+/// (`net::fetch_text_bounded`), above the SDK split, so it should bound the
+/// fetch identically on both. That argument is exactly the kind this repo has
+/// been wrong about before, which is why it is now a run rather than a sentence.
+#[tokio::test]
+async fn boot_survives_a_blackholed_deployment_config_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    blackholed_boot_scenario("&worker=1", "G1[worker]").await
+}
+
+async fn blackholed_boot_scenario(
+    extra_query: &str,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let server = start_blackhole_server(&["/entity-deployment.json"])?;
     let client = connect_browser().await?;
     let port = blackhole_server_port();
@@ -17617,7 +18490,7 @@ async fn boot_survives_a_blackholed_deployment_config() -> Result<(), Box<dyn st
     // a real visitor. C1's deadline lives in the page, so it bounds the fetch
     // whether the SW is in the path or not — and a gate that quietly excluded
     // the SW would be testing a configuration no user is in.
-    let url = format!("http://localhost:{port}/?log=trace");
+    let url = format!("http://localhost:{port}/?log=trace{extra_query}");
     let goto = client.goto(&url).await;
 
     let boot = wait_for_boot(&client, BOOT_BUDGET_MS).await;
@@ -17650,7 +18523,7 @@ async fn boot_survives_a_blackholed_deployment_config() -> Result<(), Box<dyn st
     let boot_ms = boot.as_ref().copied().unwrap_or(0);
     boot.map_err(|e| {
         format!(
-            "G1 RED — boot never reached the frame loop against an origin that accepts \
+            "{label} RED — boot never reached the frame loop against an origin that accepts \
              and never answers /entity-deployment.json ({asked} such request(s) stalled).\n\
              This is brick-matrix cell #1 at E6: no frame loop, so no frozen-frame \
              watchdog, no banner, no message, and no exit for the user.\n\
@@ -17668,7 +18541,7 @@ async fn boot_survives_a_blackholed_deployment_config() -> Result<(), Box<dyn st
     // pass is vacuous; far above would mean something else on the path is also
     // waiting, and the §4A enumeration is incomplete.
     println!(
-        "  G1: booted in {boot_ms}ms with {asked} black-holed \
+        "  {label}: booted in {boot_ms}ms with {asked} black-holed \
          /entity-deployment.json request(s) ({stalled} stalled at the wire). \
          Expect ~3s (the deadline) + a healthy boot."
     );
@@ -18359,6 +19232,80 @@ async fn a_cached_shell_survives_an_origin_that_stalls_the_body(
     Ok(())
 }
 
+// ── Shared Apps-window probes ─────────────────────────────────────────────────
+//
+// Hoisted out of the republish gate when the origin-move gate below needed the
+// same four scripts. They are the only way this suite reads foreign content that
+// genuinely crossed HTTP from a publisher's origin: the launcher grid and the
+// sandboxed player's `srcdoc`.
+
+/// Open the Apps window from the palette; idempotent (the workspace persists
+/// across a reload, so a warm boot may already have it open).
+const OPEN_APPS: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    if (!layer) return 'no-layer';
+    const root = layer.shadowRoot || layer;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h3 = sec.querySelector('header h3');
+        if (h3 && h3.textContent.trim() === 'Apps') return 'already-open';
+    }
+    for (const b of root.querySelectorAll('button.spawn-btn')) {
+        if (b.textContent.trim().replace(/^\+\s*/, '') === 'Apps') { b.click(); return 'spawned'; }
+    }
+    return 'no-spawn-button';
+"#;
+
+/// The launcher grid's card labels, as one string so `poll_rendered` can wait on
+/// the foreign catalog arriving (the fetch is async and off the boot path).
+const READ_CARDS: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    if (!layer) return '';
+    const root = layer.shadowRoot || layer;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h3 = sec.querySelector('header h3');
+        if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+        return Array.from(sec.querySelectorAll('button'))
+            .filter(b => !b.hasAttribute('data-chip'))
+            .map(b => b.textContent.trim()).join(' | ');
+    }
+    return '';
+"#;
+
+/// Launch the fixture app from the grid.
+const CLICK_MARKER_APP: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    if (!layer) return 'no-layer';
+    const root = layer.shadowRoot || layer;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h3 = sec.querySelector('header h3');
+        if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+        const card = Array.from(sec.querySelectorAll('button'))
+            .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('Marker App'));
+        if (!card) return 'no-marker-card';
+        card.click();
+        return 'clicked';
+    }
+    return 'no-apps-window';
+"#;
+
+/// The bytes that reached the sandbox. Self-contained apps are delivered as the
+/// iframe's `srcdoc` (`src/dom/games.rs`, `AppDelivery::Srcdoc`), so this is the
+/// app's actual body — readable from the host document without crossing the
+/// sandbox boundary.
+const READ_PLAYER_SRCDOC: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    if (!layer) return '';
+    const root = layer.shadowRoot || layer;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h3 = sec.querySelector('header h3');
+        if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+        const fr = sec.querySelector('iframe[sandbox]');
+        if (!fr) return '';
+        return fr.getAttribute('srcdoc') || '';
+    }
+    return '';
+"#;
+
 // ── The republish gate — AP30's cache shape, and the sequence no gate covers ──
 //
 // **Why this exists.** Every gate in this repo boots a profile against an origin
@@ -18398,14 +19345,48 @@ async fn a_cached_shell_survives_an_origin_that_stalls_the_body(
 #[tokio::test(flavor = "current_thread")]
 async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
 ) -> Result<(), Box<dyn std::error::Error>> {
+    app_republish_scenario("target/e2e-app-republish", "", "app-republish").await
+}
+
+/// **The same sequence on the WORKER arm — a second assertion, never the proof.**
+///
+/// §4 of `PLAN-2026-08-29-THE-CHANGE-MAP…` is explicit about why this is not the
+/// gate to quote. On the Worker arm `get_entity` answers from a per-subscription
+/// mirror that fills **asynchronously** after `watch_prefix`, so the presence
+/// check the wedge depended on was already unreliable here: a Worker run can go
+/// green because the window asked before the mirror was primed, saw `None`, and
+/// refetched — accidentally doing the right thing, for a reason that has nothing
+/// to do with `ensure_current`. **Direct is where the defect is deterministic.**
+/// What this run says is smaller and still worth having: the shipped default arm
+/// is not broken BY the change. (AP31's shape — green by inheritance is not
+/// green by the property.)
+///
+/// It is also the first time any of this work has executed on the arm a real
+/// browser defaults to, which is what §4 asked for.
+#[tokio::test(flavor = "current_thread")]
+async fn an_app_republished_reaches_a_returning_profile_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    app_republish_scenario(
+        "target/e2e-app-republish-worker",
+        "&worker=1",
+        "app-republish[worker]",
+    )
+    .await
+}
+
+async fn app_republish_scenario(
+    root: &str,
+    extra_query: &str,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let (client, _server) = setup().await?;
+    let root = root.to_string();
 
     // Same isolation rule as `rekey_scenario` / `demo_pull_scenario`, for the
     // same earned reason: publish into a COPY of the SPA on its own port, never
     // into the shared `dist/`, or Phase 27's fixture fails with "publisher bound
     // no signature" and the suite reads as flaky in a file that has nothing to
     // do with this.
-    let root = "target/e2e-app-republish".to_string();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
@@ -18422,74 +19403,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
         .spawn()?;
     let _serving = FederationServer(server);
     sleep(Duration::from_millis(400)).await;
-    let url = format!("http://localhost:{port}/?log=trace");
-
-    // Open the Apps window from the palette and return what its grid holds. The
-    // window may already be open on the warm boot (the workspace persists), so
-    // this is idempotent: it spawns only when no Apps window is present.
-    const OPEN_APPS: &str = r#"
-        const layer = document.getElementById('dom-layer');
-        if (!layer) return 'no-layer';
-        const root = layer.shadowRoot || layer;
-        for (const sec of root.querySelectorAll('section.window')) {
-            const h3 = sec.querySelector('header h3');
-            if (h3 && h3.textContent.trim() === 'Apps') return 'already-open';
-        }
-        for (const b of root.querySelectorAll('button.spawn-btn')) {
-            if (b.textContent.trim().replace(/^\+\s*/, '') === 'Apps') { b.click(); return 'spawned'; }
-        }
-        return 'no-spawn-button';
-    "#;
-
-    // The launcher grid's card labels, as one string so `poll_rendered` can wait
-    // on the foreign catalog arriving (the fetch is async and off the boot path).
-    const READ_CARDS: &str = r#"
-        const layer = document.getElementById('dom-layer');
-        if (!layer) return '';
-        const root = layer.shadowRoot || layer;
-        for (const sec of root.querySelectorAll('section.window')) {
-            const h3 = sec.querySelector('header h3');
-            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
-            return Array.from(sec.querySelectorAll('button'))
-                .filter(b => !b.hasAttribute('data-chip'))
-                .map(b => b.textContent.trim()).join(' | ');
-        }
-        return '';
-    "#;
-
-    const CLICK_MARKER_APP: &str = r#"
-        const layer = document.getElementById('dom-layer');
-        if (!layer) return 'no-layer';
-        const root = layer.shadowRoot || layer;
-        for (const sec of root.querySelectorAll('section.window')) {
-            const h3 = sec.querySelector('header h3');
-            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
-            const card = Array.from(sec.querySelectorAll('button'))
-                .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('Marker App'));
-            if (!card) return 'no-marker-card';
-            card.click();
-            return 'clicked';
-        }
-        return 'no-apps-window';
-    "#;
-
-    // The bytes that reached the sandbox. Self-contained apps are delivered as
-    // the iframe's `srcdoc` (`src/dom/games.rs`, `AppDelivery::Srcdoc`), so this
-    // is the app's actual body — readable from the host document without
-    // crossing the sandbox boundary.
-    const READ_PLAYER_SRCDOC: &str = r#"
-        const layer = document.getElementById('dom-layer');
-        if (!layer) return '';
-        const root = layer.shadowRoot || layer;
-        for (const sec of root.querySelectorAll('section.window')) {
-            const h3 = sec.querySelector('header h3');
-            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
-            const fr = sec.querySelector('iframe[sandbox]');
-            if (!fr) return '';
-            return fr.getAttribute('srcdoc') || '';
-        }
-        return '';
-    "#;
+    let url = format!("http://localhost:{port}/?log=trace{extra_query}");
 
     let r = async {
         // ── 1. The build the visitor met first ────────────────────────────
@@ -18499,7 +19413,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
         let catalog_bin = format!("{root}/{publisher}/apps/apps/catalog.bin");
         let v1_bundle = std::fs::read(&bundle_bin)?;
         let v1_catalog = std::fs::read(&catalog_bin)?;
-        println!("  app-republish: published V1 as {publisher}");
+        println!("  {label}: published V1 as {publisher}");
 
         client.goto(&url).await?;
         wipe_all_storage(&client).await?;
@@ -18538,7 +19452,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
              boot. Got {} character(s)",
             cold_body.chars().count()
         );
-        println!("  app-republish: V1 is on screen");
+        println!("  {label}: V1 is on screen");
 
         // ── 2. The republish ──────────────────────────────────────────────
         // Same publisher, same catalog, new app code. Published for real through
@@ -18567,7 +19481,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
              catalog would let the existing once-per-open catalog refresh carry the \
              bundle, hiding the defect"
         );
-        println!("  app-republish: V2 published — bundle moved, catalog byte-identical");
+        println!("  {label}: V2 published — bundle moved, catalog byte-identical");
 
         // ── 3. The returning visitor ──────────────────────────────────────
         // Same profile, same storage, one reload. No wipe: a wiped profile is a
@@ -18591,7 +19505,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
         // back to the grid.
         let mut warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
         if warm_body.is_empty() {
-            println!("  app-republish: warm boot restored the LAUNCHER, not the player");
+            println!("  {label}: warm boot restored the LAUNCHER, not the player");
             let warm_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
             assert!(
                 warm_cards.contains("Marker App"),
@@ -18605,7 +19519,7 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
             );
             warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
         } else {
-            println!("  app-republish: warm boot restored the PLAYER directly (persisted selection)");
+            println!("  {label}: warm boot restored the PLAYER directly (persisted selection)");
         }
         let warm_log = capture_log(&client).await?;
         if !warm_body.contains("APP-MARKER-V2") {
@@ -18628,10 +19542,803 @@ async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
             "app-republish: the V1 bundle is STILL on screen alongside V2 — the refresh \
              landed but the stale copy is still being rendered"
         );
-        println!("  app-republish: V2 reached the returning profile ✓");
+        println!("  {label}: V2 reached the returning profile ✓");
 
         let panics = count_panics(&warm_log);
         assert!(panics.is_empty(), "panics across the republish boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Rewrite the `origins` map of a staged `entity-deployment.json` in place,
+/// leaving every other field exactly as the publisher emitted it.
+///
+/// The two origin gates below both work by moving the deployment's *declaration*
+/// out from under a profile that already believes something — which is the only
+/// way to reach `adopt_deployment_origin`'s interesting branches from outside.
+/// `Some(o)` sets `origins = {publisher: o}`; `None` removes the key entirely
+/// (a document that declines to say where the publisher lives).
+fn rewrite_deployment_origin(
+    root: &str,
+    publisher: &str,
+    origin: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = format!("{root}/entity-deployment.json");
+    let raw = std::fs::read_to_string(&path)?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
+    let obj = doc.as_object_mut().ok_or("deployment config is not a JSON object")?;
+    match origin {
+        Some(o) => {
+            let mut origins = serde_json::Map::new();
+            origins.insert(publisher.to_string(), serde_json::Value::String(o.to_string()));
+            obj.insert("origins".into(), serde_json::Value::Object(origins));
+        }
+        None => {
+            obj.remove("origins");
+        }
+    }
+    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&doc)?))?;
+    Ok(())
+}
+
+/// Every captured console line as one flat string per entry, for log assertions.
+fn log_has(lines: &[String], needles: &[&str]) -> bool {
+    lines.iter().any(|l| needles.iter().all(|n| l.contains(n)))
+}
+
+// ── The origin-move gate — map-B1's call site, which the unit tests cannot see ──
+//
+// **Why this exists, and why the unit tests are not enough.** `6256975` gave
+// origin records a `source` marker and replaced boot's `put_if_absent` with
+// `origins::adopt_deployment_origin`, so a deployment that moves a peer to a new
+// CDN under a STABLE publisher identity can actually move a returning profile.
+// Four unit tests in `src/content_site/origins.rs` pin that function's decision
+// table exactly. **None of them tests that boot calls it** — and "a correct
+// mechanism plus a consumer free to skip it" is the precise shape D24 was
+// ratified over, one layer down. So this gate asserts the sequence, on the
+// shipped surface.
+//
+// **The scenario is the CDN migration devops has not run yet.** Publish V1 at the
+// origin the document names, let a profile settle on it, then republish V2 at a
+// DIFFERENT path, delete the old tree so the old origin 404s exactly as a
+// decommissioned host does, and move the document's `origins` entry. Same
+// publisher identity throughout — R1 cannot help here, because R1 compares
+// identity and the identity never changed.
+//
+// **Two assertions, and neither is redundant:**
+//
+//  * **V2 on screen** proves the repair. It cannot be satisfied from cache: the
+//    old tree is gone, so the V2 bytes exist at exactly one place on the network.
+//  * **`Updated { from: <old origin> }` in the log** proves the run was the
+//    scenario. A profile that had cold-booted would say `Seeded` and would reach
+//    V2 trivially, passing a test that exercised nothing — the same anti-vacuity
+//    the re-key gate needs and for the same reason.
+//
+// Direct-IDB arm, like the republish gate beside it (§4 of the change map).
+#[tokio::test(flavor = "current_thread")]
+async fn a_moved_origin_reaches_a_returning_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Isolated SPA copy on its own port — never publish into the shared `dist/`.
+    let root = "target/e2e-origin-move".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. The publisher on the origin the profile first met ───────────
+        run_rekey_fixture("emit_app_republish_v1", &root);
+        let publisher = deployment_home_peer(&root);
+        let old_origin = format!("http://localhost:{port}");
+        println!("  origin-move: published V1 as {publisher} at {old_origin}");
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        assert_ne!(
+            client.execute(OPEN_APPS, vec![]).await?.as_str().unwrap_or(""),
+            "no-spawn-button",
+            "origin-move: no '+ Apps' button in the palette — the window roster moved"
+        );
+        let cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        assert!(
+            cards.contains("Marker App"),
+            "origin-move: the published app never reached the launcher on the cold boot, so \
+             the profile never settled on the old origin. Cards: {cards:?}"
+        );
+        assert_eq!(
+            client.execute(CLICK_MARKER_APP, vec![]).await?.as_str().unwrap_or(""),
+            "clicked",
+            "origin-move: could not launch Marker App on the cold boot"
+        );
+        let cold_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V1").await?;
+        let cold_log = capture_log(&client).await?;
+        if !cold_body.contains("APP-MARKER-V1") {
+            print_log(&cold_log);
+        }
+        assert!(
+            cold_body.contains("APP-MARKER-V1"),
+            "origin-move: V1 never reached the player on the cold boot — nothing below would \
+             be about a returning profile. Player body was {} character(s)",
+            cold_body.chars().count()
+        );
+        // STAGING, asserted rather than assumed: a first contact SEEDS. If this
+        // said `Updated` the profile was not clean and the warm assertion would
+        // be measuring the wrong transition.
+        if !log_has(&cold_log, &["registered deployment-config origin", "Seeded"]) {
+            print_log(&cold_log);
+        }
+        assert!(
+            log_has(&cold_log, &["registered deployment-config origin", "Seeded"]),
+            "origin-move: the cold boot did not SEED the publisher's origin, so this profile \
+             is not the clean first contact the scenario needs"
+        );
+        println!("  origin-move: V1 on screen, origin seeded ✓");
+
+        // ── 2. The CDN move ────────────────────────────────────────────────
+        // A new location, the SAME publisher identity, and the old host stops
+        // serving — which is what decommissioning one looks like from a browser.
+        let moved = format!("{root}/moved");
+        std::fs::create_dir_all(&moved)?;
+        run_rekey_fixture("emit_app_republish_v2", &moved);
+        assert_eq!(
+            deployment_home_peer(&moved),
+            publisher,
+            "origin-move: the publisher identity moved — that is the RE-KEY scenario, which \
+             heals by a mechanism this test is specifically not exercising"
+        );
+        std::fs::remove_dir_all(format!("{root}/{publisher}")).map_err(|e| {
+            format!("origin-move: could not retire the old origin's tree: {e}")
+        })?;
+        assert!(
+            !std::path::Path::new(&format!("{root}/{publisher}")).exists(),
+            "origin-move: the old origin must 404 — otherwise a profile that never moved \
+             still resolves and this gate proves nothing"
+        );
+        assert!(
+            std::path::Path::new(&format!("{moved}/{publisher}/sites.list")).exists(),
+            "origin-move: the new origin must be serving the publisher's tree"
+        );
+        // A root-relative origin is the same-origin case WITH a hosting prefix —
+        // `deployment_config::expand_origin` turns it into `{own-origin}/moved`.
+        rewrite_deployment_origin(&root, &publisher, Some("/moved"))?;
+        println!("  origin-move: {publisher} moved to /moved; the old tree is retired");
+
+        // ── 3. The returning visitor ───────────────────────────────────────
+        // Same profile, same storage, one reload. No wipe — a wiped profile is a
+        // first-time visitor and reaches the new origin without adopting anything.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+
+        let mut warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
+        if warm_body.is_empty() {
+            let warm_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+            assert!(
+                warm_cards.contains("Marker App"),
+                "origin-move: the app vanished from the launcher on the warm boot. \
+                 Cards: {warm_cards:?}"
+            );
+            assert_eq!(
+                client.execute(CLICK_MARKER_APP, vec![]).await?.as_str().unwrap_or(""),
+                "clicked",
+                "origin-move: could not launch Marker App on the warm boot"
+            );
+            warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
+        }
+        let warm_log = capture_log(&client).await?;
+        let adopted = log_has(&warm_log, &["registered deployment-config origin", "Updated"]);
+        if !warm_body.contains("APP-MARKER-V2") || !adopted {
+            print_log(&warm_log);
+        }
+
+        // ANTI-VACUITY first, so a failure names the right thing: the boot must
+        // have carried a record naming the OLD origin and replaced it.
+        assert!(
+            adopted,
+            "origin-move: the boot never reported `Updated` for the publisher's origin. \
+             Either the profile was not warm (a cold boot says `Seeded` and would reach the \
+             new origin trivially) or `adopt_deployment_origin` is not on the boot path"
+        );
+        assert!(
+            log_has(&warm_log, &[&old_origin as &str, "Updated"]),
+            "origin-move: the adoption did not report replacing {old_origin} — the record it \
+             replaced was not the one this profile was stranded on"
+        );
+        assert!(
+            warm_body.contains("APP-MARKER-V2"),
+            "RED — a deployment moved its publisher to a new origin and the returning profile \
+             stayed on the old one. The old host is retired, so these bytes exist at exactly \
+             one place on the network: this is the CDN-move strand (`put_if_absent` on the \
+             origin registry). Player body was {} character(s)",
+            warm_body.chars().count()
+        );
+        assert!(
+            !warm_body.contains("APP-MARKER-V1"),
+            "origin-move: the V1 bundle is still on screen beside V2"
+        );
+        println!("  origin-move: the returning profile followed the publisher to /moved ✓");
+
+        let panics = count_panics(&warm_log);
+        assert!(panics.is_empty(), "panics across the origin-move boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+// ── The home-origin diagnostic gate — map-C1, and the half that keeps its teeth ─
+//
+// **Why this exists.** `boot_load` used to warn *"remote home has no registered
+// origin"* whenever the document named no origin and `ENTITY_HOME_ORIGIN` was
+// unset — including on a perfectly healthy profile whose origin was persisted on
+// an earlier boot and whose every fetch succeeded. The warning's own text
+// conceded it (*"it will only resolve if the origin is persisted/registered
+// elsewhere"*), which is an admission that it could not tell the cases apart. A
+// devops seat debugging the stale-bundle incident read it as the cause; it cost
+// the operator two round trips. `6256975` made boot ask before diagnosing.
+//
+// **The dangerous half is the second one.** Quieting a warning is trivial and
+// indistinguishable, from the outside, from deleting a diagnostic — and that
+// failure stays invisible until the next incident, when the line that should
+// have fired does not. So this gate asserts BOTH branches against the same
+// document, and the negative case is the one to read first if it goes red.
+//
+// It also runs a shape nothing else here has: **a deployment document that names
+// a home peer and declares no origin for it** (the change map's "row 10").
+#[tokio::test(flavor = "current_thread")]
+async fn a_home_origin_warns_only_when_it_genuinely_cannot_resolve(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-origin-warn".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    /// The words the broken case must still say.
+    const CANNOT_RESOLVE: &str = "NO registered origin";
+    /// The words the healthy case says instead.
+    const FROM_EARLIER_BOOT: &str = "registered from an earlier boot";
+
+    let r = async {
+        // ── 1. A first contact that DOES declare the origin ────────────────
+        run_rekey_fixture("emit_app_republish_v1", &root);
+        let publisher = deployment_home_peer(&root);
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+        let cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        assert!(
+            cards.contains("Marker App"),
+            "home-origin: the app never reached the launcher on the cold boot, so the origin \
+             was never registered and step 2 would test the wrong branch. Cards: {cards:?}"
+        );
+        println!("  home-origin: {publisher}'s origin registered on first contact ✓");
+
+        // ── 2. The document goes quiet, the profile stays healthy ──────────
+        // This is the devops case exactly: no deployment-config entry this boot,
+        // `ENTITY_HOME_ORIGIN` unset, and an origin persisted from earlier that
+        // resolves fine. The old code warned here.
+        rewrite_deployment_origin(&root, &publisher, None)?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        // Give the Apps window's async refresh a chance to speak before we read
+        // the log, so a fetch failure would be IN it rather than after it.
+        client.execute(OPEN_APPS, vec![]).await?;
+        let warm_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        let warm = capture_log(&client).await?;
+        let warned = warm.iter().filter(|l| l.contains(CANNOT_RESOLVE)).count();
+        if warned > 0 {
+            print_log(&warm);
+        }
+        assert_eq!(
+            warned, 0,
+            "RED — boot warned that the remote home has no registered origin on a profile \
+             where it IS registered and every fetch succeeded. That is the line a devops seat \
+             read as the cause of an unrelated incident (AP33, one surface out from the user)"
+        );
+        // Anti-vacuity: prove we reached the branch under test rather than the
+        // deployment-declared one. Without this, deleting the whole block passes.
+        assert!(
+            warm.iter().any(|l| l.contains(FROM_EARLIER_BOOT)),
+            "home-origin: boot never reported the persisted-origin case, so the quiet above \
+             may be quiet for some other reason. The document declares no origins, so this \
+             branch is the only one that can have run"
+        );
+        // And the escape hatch the old warning described was REAL: the content
+        // still resolves off the persisted origin.
+        assert!(
+            warm_cards.contains("Marker App"),
+            "home-origin: the app stopped resolving once the document went quiet — then the \
+             warning would have been TRUE and quieting it would be the bug. Cards: \
+             {warm_cards:?}"
+        );
+        println!("  home-origin: healthy profile, document silent — no warning, content fine ✓");
+
+        // ── 3. The broken case must still warn ─────────────────────────────
+        // Nothing declared, nothing persisted, no env fallback. This home really
+        // cannot resolve, and a diagnostic that has been quieted into uselessness
+        // is worse than the one we replaced.
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let cold = capture_log(&client).await?;
+        if !cold.iter().any(|l| l.contains(CANNOT_RESOLVE)) {
+            print_log(&cold);
+        }
+        assert!(
+            cold.iter().any(|l| l.contains(CANNOT_RESOLVE)),
+            "RED — a deployment document names a home peer, declares NO origin for it, \
+             nothing is persisted and ENTITY_HOME_ORIGIN is unset. This home genuinely \
+             cannot resolve and boot said nothing. The C1 change deleted a diagnostic \
+             instead of fixing one"
+        );
+        println!("  home-origin: genuinely unresolvable home still warns ✓");
+
+        let panics = count_panics(&cold);
+        assert!(panics.is_empty(), "panics across the home-origin boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+// ── The manifest-currency gate — map-A3, on the one surface it reaches ────────
+//
+// **A3 is the change that deleted `precache_origin_sites`' "skip any manifest I
+// already hold". Until this gate it had no test of its own** — every
+// `foreign_cache` unit test used `AppBundle`, and the sweep's own printed counts
+// were the only evidence.
+//
+// **Getting the assertion right took correcting the audit.** Three surfaces look
+// like candidates and two of them would be green with the fix reverted (AP31):
+//
+//   * **Page bodies** do not go stale. `resolve_closure_via` is a pure-network
+//     two-hop with no store read, so a live navigation always re-resolves.
+//   * **Which sites appear in the rail** does not depend on A3: a NEWLY
+//     published site was never in the skip set, so the old code fetched it too.
+//     (And the rail renders `SiteEntry`, which carries no title — the audit's
+//     "their titles" was wrong about the surface.)
+//   * The one place a **cached** manifest is rendered is the manifest-pinned
+//     **shell**: the site chrome — title and nav — drawn from the durable copy
+//     when the live resolve cannot answer. That is what goes stale, and it is
+//     what this asserts.
+//
+// **The quiet site is the discriminator.** The consumer lands on `front` and
+// never opens `quiet`, so the resolver's own cache write-through never touches
+// `quiet`'s manifest and the ONLY thing that can refresh it is the boot sweep.
+// Then the origin is killed, so the shell is all there is to render — and its
+// title is whichever manifest the sweep left behind.
+#[tokio::test(flavor = "current_thread")]
+async fn a_republished_manifest_reaches_the_shell_a_returning_profile_renders(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-manifest-republish".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let url = format!("http://localhost:{port}/?log=trace");
+    const OLD_TITLE: &str = "Quiet Corner";
+    // Disjoint strings, deliberately: a new title that CONTAINS the old one
+    // makes the negative half of this gate unsatisfiable.
+    const NEW_TITLE: &str = "Back Room";
+
+    // The site overlay's rendered text — the surface that draws the shell.
+    let read_site = SITE_LAYER_TEXT;
+
+    let r = async {
+        // ── 1. The build the profile cached ────────────────────────────────
+        run_rekey_fixture("emit_manifest_republish_v1", &root);
+        let publisher = deployment_home_peer(&root);
+        let serve = || -> Result<FederationServer, Box<dyn std::error::Error>> {
+            let child = Command::new("python3")
+                .args(["tools/cors-serve.py", &root, &port.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()?;
+            Ok(FederationServer(child))
+        };
+        let mut serving = Some(serve()?);
+        sleep(Duration::from_millis(400)).await;
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let home = poll_rendered(&client, read_site, "Front Desk").await?;
+        let cold = capture_log(&client).await?;
+        if !home.contains("Front Desk") {
+            print_log(&cold);
+        }
+        assert!(
+            home.contains("Front Desk"),
+            "manifest-republish: the home site did not render on the cold boot, so nothing \
+             below is about a profile that cached this publisher. Got: {home:?}"
+        );
+        // STAGING, asserted: the sweep must have cached the QUIET site's manifest
+        // too. Without it there is no stale copy to refresh and the gate is
+        // vacuous — the warm boot would simply be a first fetch.
+        // Match on the COUNT, not on "the line is absent from a substring": both
+        // sweeps print "…, 0 already current" on a cold boot, so a naive
+        // `!contains(" 0 ")` rejects a perfectly good sweep. (Measured, by
+        // writing it that way first.)
+        let swept = cold.iter().any(|l| {
+            (l.contains("warm_peer_sites: cached") && !l.contains("cached 0 foreign"))
+                || (l.contains("precache:") && !l.contains("precache: 0 manifest"))
+        });
+        if !swept {
+            print_log(&cold);
+        }
+        assert!(
+            swept,
+            "manifest-republish: the boot sweep cached no foreign manifests, so the quiet \
+             site was never held and there is nothing for the republish to make stale"
+        );
+        println!("  manifest-republish: {publisher} published, sweep cached its manifests ✓");
+
+        // ── 2. The republish — same identity, the quiet site RETITLED ──────
+        run_rekey_fixture("emit_manifest_republish_v2", &root);
+        assert_eq!(
+            deployment_home_peer(&root),
+            publisher,
+            "manifest-republish: the publisher identity moved — that is the re-key scenario"
+        );
+
+        // ── 3. A warm boot: only the sweep can refresh the quiet manifest ──
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        poll_rendered(&client, read_site, "Front Desk").await?;
+        let warm = capture_log(&client).await?;
+        let panics = count_panics(&warm);
+        assert!(panics.is_empty(), "panics on the warm boot:\n{panics:#?}");
+
+        // ── 4. Kill the origin, then open the quiet site ───────────────────
+        // With nothing to fetch, the overlay renders the manifest-pinned shell —
+        // whose title is whatever the sweep left in the store. This is the ONLY
+        // surface a cached manifest reaches, and killing the origin is what
+        // makes it the only thing on screen.
+        drop(serving.take());
+        sleep(Duration::from_millis(400)).await;
+
+        let open_quiet = format!(
+            "http://localhost:{port}/?log=trace&site={publisher}/quiet"
+        );
+        // The origin is dead, so the SPA itself must come from the service
+        // worker's cached shell; if that fails there is nothing to assert on and
+        // it is a harness fact, not a product one.
+        let nav = client.goto(&open_quiet).await;
+        if nav.is_err() {
+            return Err(format!(
+                "manifest-republish: could not load the SPA with the origin down ({nav:?}). \
+                 The shell must be service-worker cached for this step to say anything — \
+                 this is a harness precondition, not the property under test"
+            )
+            .into());
+        }
+        wait_for_boot(&client, 30_000).await?;
+        let shell = poll_rendered(&client, read_site, NEW_TITLE).await?;
+        let dead = capture_log(&client).await?;
+        if !shell.contains(NEW_TITLE) {
+            print_log(&dead);
+        }
+        assert!(
+            shell.contains(NEW_TITLE),
+            "RED — the shell renders the manifest this profile FIRST downloaded. The \
+             publisher retitled '{OLD_TITLE}' to '{NEW_TITLE}' and republished under the same \
+             identity; the boot sweep is the only thing that can refresh a site the reader \
+             never opened, and it skipped the manifest because it already held one. \
+             Got: {shell:?}"
+        );
+        assert!(
+            !shell.contains(OLD_TITLE),
+            "manifest-republish: the OLD title is still on screen beside the new one"
+        );
+        println!("  manifest-republish: the refreshed manifest reached the shell ✓");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Rewrite a staged `entity-deployment.json`'s `home_site` in place.
+///
+/// Used to build the one profile shape this suite could not otherwise reach: a
+/// **deliberate local home**. A document may declare `home_site.peer` empty, and
+/// an empty peer is the documented sentinel for *the system peer*
+/// (`set_home_site`, `repair_for_deleted_peer`) — so a cold boot against such a
+/// document leaves exactly the durable config a user gets by choosing a local
+/// site in Settings, without driving the Settings DOM. The site id must differ
+/// from the build default (`demo`), or `never_established` fires and the profile
+/// takes the first-contact-recovery path instead.
+fn rewrite_deployment_home(
+    root: &str,
+    peer: &str,
+    site: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = format!("{root}/entity-deployment.json");
+    let raw = std::fs::read_to_string(&path)?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
+    let obj = doc.as_object_mut().ok_or("deployment config is not a JSON object")?;
+    obj.insert(
+        "home_site".into(),
+        serde_json::json!({ "peer": peer, "site": site, "loc": "" }),
+    );
+    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&doc)?))?;
+    Ok(())
+}
+
+// ── The local-home gate — map-B2 and map-B4, and the half of B1 they unblock ───
+//
+// **The shape.** A profile whose home site is LOCAL never re-read
+// `/entity-deployment.json`. The fetch sat inside the `!home_is_local` gate,
+// which conflated *may we adopt this profile's home?* with *may we read the
+// domain's document at all?* and answered both with the first. Three things
+// followed, and none of them is about the home:
+//
+//   * **origins** — the registration loop is inside `if let Some(dc) =
+//     &deployment`, so the CDN-move repair (`6256975`) reached the deployed
+//     content-site profiles and reached these never;
+//   * **supersession revalidation** (boot audit B-5) — it runs only on a boot
+//     that read a document, so these profiles never re-examined a durable
+//     retirement record against its own premise;
+//   * **reportability** — `deployment-config: applied | unreachable | not
+//     served` is emitted by `fetch()` itself, so with no fetch there was no line
+//     at any level. That is why a devops seat could see nothing and be right.
+//
+// **The trap this gate exists to keep shut.** The obvious fix — dropping the
+// `home_is_local` guard — is wrong and was rejected on the record: an empty
+// `peer_id` is the documented sentinel for *the system peer*, so adopting the
+// document's home every boot would overwrite a local-home user's deliberate
+// setting. So the N-critical assertion here is not a nicety. It is the reason
+// the guard moved onto the ADOPTION rather than being deleted, and if it ever
+// reds, the rejected fix has crept back in.
+//
+// **Constructing the profile.** A deployment document may declare
+// `home_site.peer` empty; a cold boot applies it verbatim, leaving the same
+// durable config a user gets by choosing a local site in Settings. The site id
+// must not be the build default, or `never_established` fires and the profile
+// takes the first-contact-recovery path — which already re-reads, and would make
+// every assertion below vacuous.
+#[tokio::test(flavor = "current_thread")]
+async fn a_local_home_profile_reads_the_deployment_document_and_keeps_its_home(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-local-home".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    /// The profile's own home: local (empty peer) and NOT the build default.
+    const LOCAL_HOME: &str = "demo-notes";
+    /// What the document will start declaring instead, once it moves.
+    const DECLARED_HOME: &str = "demo";
+    const APPLIED: &str = "deployment-config: applied";
+    const RESOLVED: &str = "boot_load: session config resolved";
+    const NO_DOCUMENT: &str = "peer-supersession: no live deployment document this boot";
+
+    let r = async {
+        // ── 1. A cold boot that settles on a LOCAL home ────────────────────
+        run_rekey_fixture("emit_app_republish_v1", &root);
+        let publisher = deployment_home_peer(&root);
+        rewrite_deployment_home(&root, "", LOCAL_HOME)?;
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+        let cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        let cold = capture_log(&client).await?;
+        let settled_local =
+            cold.iter().any(|l| l.contains(RESOLVED) && l.contains(LOCAL_HOME));
+        if !settled_local {
+            print_log(&cold);
+        }
+        assert!(
+            settled_local,
+            "local-home: the cold boot did not settle on the local home '{LOCAL_HOME}'. \
+             Every assertion below is about a profile in that state, so this run would \
+             prove nothing"
+        );
+        assert!(
+            cards.contains("Marker App"),
+            "local-home: the publisher's app never reached the launcher on the cold boot, \
+             so the origin was never registered. Cards: {cards:?}"
+        );
+        // **N1 — one fetch per boot, not two.** The cold path already fetched;
+        // the warm-boot re-read must not fire on the same boot. That regression
+        // took the black-hole gate from 3244 ms to 6195 ms with the suite still
+        // green, and only a budget printing on success caught it.
+        let applied_cold = cold.iter().filter(|l| l.contains(APPLIED)).count();
+        assert_eq!(
+            applied_cold, 1,
+            "local-home: the cold boot read /entity-deployment.json {applied_cold} time(s). \
+             Two reads on one boot is the double-fetch regression, and it costs a full D23 \
+             deadline when the origin is black-holed"
+        );
+        println!("  local-home: settled on local '{LOCAL_HOME}', publisher app resolving ✓");
+
+        // ── 2. The domain moves, and declares a different home ─────────────
+        // Both at once, deliberately: the profile must follow the ROUTING and
+        // must not follow the HOME. A change that got either half alone would
+        // pass a weaker version of this test.
+        let moved = format!("{root}/moved");
+        std::fs::create_dir_all(&moved)?;
+        run_rekey_fixture("emit_app_republish_v2", &moved);
+        assert_eq!(deployment_home_peer(&moved), publisher, "local-home: the publisher moved");
+        std::fs::remove_dir_all(format!("{root}/{publisher}"))
+            .map_err(|e| format!("local-home: could not retire the old origin's tree: {e}"))?;
+        rewrite_deployment_origin(&root, &publisher, Some("/moved"))?;
+        rewrite_deployment_home(&root, &publisher, DECLARED_HOME)?;
+
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+        let warm_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        let warm = capture_log(&client).await?;
+        let read_it = warm.iter().any(|l| l.contains(APPLIED));
+        let kept_home = warm.iter().any(|l| l.contains(RESOLVED) && l.contains(LOCAL_HOME));
+        let moved_origin =
+            log_has(&warm, &["registered deployment-config origin", "Updated"]);
+        if !read_it || !kept_home || !moved_origin {
+            print_log(&warm);
+        }
+
+        // **P (B2)** — the document is read on a warm boot with a local home.
+        assert!(
+            read_it,
+            "RED — a profile whose home is local booted warm and never read \
+             /entity-deployment.json. It cannot adopt a moved origin, cannot revalidate a \
+             supersession record, and cannot report `applied | unreachable | not served` at \
+             any level — which is exactly the state a devops seat found themselves in"
+        );
+        // **N-CRITICAL (B2)** — and it is the reason the guard moved rather than
+        // being deleted.
+        assert!(
+            kept_home,
+            "RED — the document declared home '{DECLARED_HOME}' and the profile's deliberate \
+             local home '{LOCAL_HOME}' was overwritten. An empty `peer_id` is the sentinel \
+             for the system peer, so this is the rejected fix (dropping the `home_is_local` \
+             guard) creeping back in: routing may be adopted, preferences may not"
+        );
+        // **Gap 4 (B1 reaches here at last)** — the CDN-move repair on a profile
+        // it previously could not reach.
+        assert!(
+            moved_origin,
+            "local-home: the moved origin was not adopted. The document was read but the \
+             registration loop did not run, so B1's repair still stops at the remote-home \
+             profiles"
+        );
+        // **B4** — revalidation now has its input. The absence line is the one
+        // the code prints when there is no document to revalidate against.
+        assert!(
+            !warm.iter().any(|l| l.contains(NO_DOCUMENT)),
+            "RED — supersession revalidation still reports no document on a local-home boot, \
+             so a durable retirement record here is never re-examined against its premise \
+             (boot audit B-5)"
+        );
+        // And the routing repair is real, not just logged: the old tree is gone,
+        // so these bytes exist at exactly one place on the network.
+        assert!(
+            warm_cards.contains("Marker App"),
+            "local-home: the publisher's app stopped resolving after the move — the origin \
+             was reported adopted but content does not follow it. Cards: {warm_cards:?}"
+        );
+        println!("  local-home: document read, origin followed, home kept ✓");
+
+        // ── 3. N2 — a document we cannot read changes nothing ──────────────
+        // A truncated or half-written file must never be a way to lose good
+        // state, and D23's deadline makes the "we could not read it" case MORE
+        // common, not less.
+        std::fs::write(format!("{root}/entity-deployment.json"), "{ this is not json")?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+        let after_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        let broken = capture_log(&client).await?;
+        let said_so = broken.iter().any(|l| l.contains("deployment-config: served but"));
+        let still_home =
+            broken.iter().any(|l| l.contains(RESOLVED) && l.contains(LOCAL_HOME));
+        if !said_so || !still_home {
+            print_log(&broken);
+        }
+        assert!(
+            said_so,
+            "local-home: an unreadable deployment document produced no line about itself. \
+             That line is what the next incident is debugged from"
+        );
+        assert!(
+            still_home,
+            "local-home: an unreadable document changed the home. Absence of evidence is \
+             never evidence (AP30 corollary (a))"
+        );
+        assert!(
+            after_cards.contains("Marker App"),
+            "local-home: an unreadable document cost the profile its registered origin — a \
+             broken file must not be able to un-route a working browser. Cards: \
+             {after_cards:?}"
+        );
+        println!("  local-home: an unreadable document changed nothing, and said so ✓");
+
+        let panics = count_panics(&broken);
+        assert!(panics.is_empty(), "panics across the local-home boots:\n{panics:#?}");
         Ok::<(), Box<dyn std::error::Error>>(())
     }
     .await;

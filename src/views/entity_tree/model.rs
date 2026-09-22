@@ -65,8 +65,23 @@ pub struct EntityTreeState {
     pub selection_source: String,
 }
 
+/// Entity type of this window's persisted state.
+///
+/// **Window state is keyed by an id that is reused.** `WindowManager::new`
+/// restarts `next_id` at 1 every session and a reload is not a close (only
+/// `Action::CloseWindow` removes window state), so the entity sitting at this
+/// window's state path may have been written by a **different window type**
+/// last session. Decoding by field name alone adopts it silently: the Entity
+/// Tree and the Knowledge Base both persist `expanded_paths` and mean
+/// different things by it. The entity carries its own type — check it, and
+/// treat a foreign one as absent.
+pub const STATE_TYPE: &str = "app/state/entity_tree";
+
 impl EntityTreeState {
     pub fn from_entity(entity: &Entity) -> Self {
+        if entity.entity_type != STATE_TYPE {
+            return Self::default();
+        }
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
             Err(_) => return Self::default(),
@@ -142,7 +157,7 @@ impl EntityTreeState {
             ));
         }
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs));
-        Entity::new("app/state/entity_tree", data).unwrap()
+        Entity::new(STATE_TYPE, data).unwrap()
     }
 }
 
@@ -1182,6 +1197,50 @@ mod tests {
             b.render_output(&pm).current_path.as_deref(),
             Some(p1.as_str()),
             "older selection must be suppressed by the updated_at guard"
+        );
+    }
+
+    /// A window id is REUSED across a reload, and the state it keys is not
+    /// cleaned up. `WindowManager::new` restarts `next_id` at 1 and a reload
+    /// is not a close, so window 1's state from the previous session is still
+    /// in the tree when this session's window 1 reads it — and nothing
+    /// constrains that window to be the same type.
+    ///
+    /// The Knowledge Base and the Entity Tree both persist `expanded_paths`
+    /// and mean different things by it: doc-tree folders on one side, entity
+    /// paths on the other. Decoding by field name alone, the Entity Tree
+    /// adopts the KB's folders as tree paths. The entity carries its own
+    /// type; the decoder has to look at it.
+    #[test]
+    fn a_foreign_window_states_expanded_paths_are_not_adopted() {
+        let pm = pm();
+        let pid = pm.primary_peer_id().to_string();
+        let path = crate::app_paths::window_state_path(crate::app_paths::APP_ID, &pid, 1);
+
+        // Last session's window 1 was a Knowledge Base, open at the reload.
+        let kb = crate::views::knowledge_base::model::KnowledgeBaseState {
+            expanded_paths: vec!["guides".into(), "guides/testing".into()],
+            ..Default::default()
+        };
+        pm.put_entity(&pid, &path, kb.to_entity());
+
+        // This session's window 1 is an Entity Tree.
+        let mut model = EntityTreeModel::new(1, pid.clone());
+        model.initialize(&pm);
+
+        // Assert at the ADOPTION site, not `state_snapshot` — that reports what
+        // is expanded in the loaded tree, which is empty here whatever we read.
+        let restored = model
+            .inner
+            .lock()
+            .unwrap()
+            .pending_expand_restore
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            restored.is_empty(),
+            "the Entity Tree adopted another window type's expanded paths: {:?}",
+            restored
         );
     }
 }
