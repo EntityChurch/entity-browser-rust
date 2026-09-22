@@ -101,6 +101,17 @@ impl WindowView for ExecuteConsoleWindow {
         &self.watch
     }
 
+    /// AP41 — correct `initialize`'s cold synchronous read with an
+    /// authoritative one. Called by `WindowManager::spawn` for every window;
+    /// do not add a call to this window's factory.
+    ///
+    /// Assign — `ExecuteState` is fully persisted, and the handler cache
+    /// lives in sibling `Arc`s outside `inner`.
+    fn hydrate_durable(&self, _peers: &Peers) {
+        #[cfg(target_arch = "wasm32")]
+        self.model.spawn_hydrate_durable(_peers);
+    }
+
     fn handle_action(&mut self, action: &Action, peers: &Peers) {
         let state_changed = match action {
             Action::WindowEvent { window_id, event, value } if *window_id == self.window_id => {

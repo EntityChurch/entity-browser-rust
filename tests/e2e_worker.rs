@@ -8506,9 +8506,27 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     sleep(Duration::from_millis(1200)).await;
 
-    // The persistence assertion: the article saved in Phase 6 must
-    // appear in the KB list view rendered from the freshly-hydrated
-    // OPFS tree.
+    // The persistence assertion: the article saved in Phase 6 must survive the
+    // reload in the freshly-hydrated OPFS tree.
+    //
+    // # Two acceptable pieces of evidence, and why this changed (2026-08-31)
+    //
+    // This used to check **only** the list view's tree rows, and that quietly
+    // depended on the KB coming back in list view — which it did only because
+    // window state was being LOST. Phase 6 ends in reader view (it clicks the
+    // saved article and asserts the reader populated), so the KB's persisted
+    // `view_mode`/`current_slug` say "reader, on e2e-test-article". Before the
+    // window index, a re-opened KB drew a fresh ordinal, found a foreign or
+    // absent slot, and fell back to the default list view; with it, the window
+    // claims its own slot and correctly restores the reader — and the list rows
+    // this looked for are legitimately not rendered.
+    //
+    // So the old check was asserting a **symptom of state loss** as a
+    // precondition. The subject was never the view mode: it is *did the article
+    // survive to durable storage*. The reader showing the article's body is
+    // strictly stronger evidence of that than a row in a list. Accept either,
+    // and report which — a run that silently changed which arm satisfied it is
+    // worth seeing in the log.
     let kb_article_persisted_v = client
         .execute(
             r#"
@@ -8517,7 +8535,12 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             const sections = root.querySelectorAll('section.window');
             for (const sec of sections) {
                 if (!sec.querySelector('.knowledge-base')) continue;
-                // List view is the collapsible docs tree; article
+                // (a) Reader view, restored onto the saved article: its body is
+                // on screen. Same string Phase 6's own reader assertion uses.
+                if ((sec.textContent || '').includes('Some test content body.')) {
+                    return { found: true, via: 'reader' };
+                }
+                // (b) List view is the collapsible docs tree; article
                 // leaves are `.kb-tree-row.has-entry` labelled by slug.
                 // "E2E Test Article" → "e2e-test-article".
                 const items = sec.querySelectorAll('.kb-tree-row.has-entry');
@@ -8525,10 +8548,11 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 for (const row of items) {
                     titles.push(row.textContent.trim().slice(0, 80));
                     if (row.textContent.includes('e2e-test-article')) {
-                        return { found: true, count: items.length };
+                        return { found: true, via: 'list', count: items.length };
                     }
                 }
-                return { found: false, count: items.length, titles };
+                return { found: false, count: items.length, titles,
+                         text: (sec.textContent || '').trim().slice(0, 200) };
             }
             return { found: false, reason: 'no-kb-section' };
             "#,
@@ -8539,13 +8563,20 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         .get("found")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    println!("  kb article persisted:  {kb_article_persisted}");
+    println!(
+        "  kb article persisted:  {kb_article_persisted} (via {})",
+        kb_article_persisted_v
+            .get("via")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
     assert!(
         kb_article_persisted,
-        "Phase 6 saved 'E2E Test Article' but it's gone after page reload. \
-         OPFS persistence is not end-to-end: either enable_opfs didn't \
-         take effect, the host built against MemoryStore anyway, or \
-         OpfsStore failed to rehydrate on reattach. Detail: {kb_article_persisted_v}"
+        "Phase 6 saved 'E2E Test Article' but it's gone after page reload — neither \
+         the restored reader nor the list view has it. OPFS persistence is not \
+         end-to-end: either enable_opfs didn't take effect, the host built against \
+         MemoryStore anyway, or OpfsStore failed to rehydrate on reattach. \
+         Detail: {kb_article_persisted_v}"
     );
 
     phase_gate!(client, "15");
@@ -15298,33 +15329,341 @@ async fn a_returning_reader_is_still_on_the_page_they_left_on_the_direct_arm(
     location_survives_reload_scenario("direct", "").await
 }
 
+/// **The same statement on the Site Browser WINDOW — the surface production
+/// actually ships, and the half of AP41's repair that was reasoned, not gated.**
+///
+/// The audit's own process review left this open: *"the Site Browser **window**
+/// on the Worker arm has no gate at all — the window half of this fix is
+/// therefore reasoned, not gated."* This is that gate.
+///
+/// # Why the re-key window gate did NOT already cover it — measured, not argued
+///
+/// `rekeyed_domain_heals_on_next_boot_window_surface_on_the_worker_arm` runs the
+/// window surface on the Worker arm and asserts the deployment's home renders
+/// after a warm boot. With `ContentSiteWindow::hydrate_durable` neutered it
+/// **stays green on both arms** (measured 2026-08-31). That is not the repair
+/// being unnecessary — it is the assertion being unable to see it.
+///
+/// The reason is boot ordering. `boot_load` spawns the startup window
+/// (`app.rs`, `BootSurface::Window`) *after* the session config is final, so
+/// when the window's construction-time sync read misses on the Worker arm its
+/// fallback is built from a **settled** config — the deployment's home. In a
+/// re-key scenario the reader never navigates away, so "restored your location"
+/// and "reset you to the configured home" are the same page and no assertion can
+/// separate them. The overlay's version was red pre-fix only because the overlay
+/// is constructed *before* the config settles, so its fallback degraded further,
+/// to the peerless **build** default, and rendered an error.
+///
+/// So the discriminating question is the one this gate asks and that one cannot:
+/// **navigate somewhere that is not home, come back, and still be there.**
+///
+/// # FALSIFIED 2026-08-31 — observed red, with the production symptom
+///
+/// With `ContentSiteWindow::hydrate_durable` neutered (the `WindowView`
+/// override emptied, so `WindowManager::spawn`'s call reaches nothing):
+///
+/// ```text
+/// [window[worker]] THE DEFECT: a plain reload put the reader back on the
+/// deployment's home page. left on: "Guide: Intro"; got: "Welcome to the
+/// Entity Demo Site"
+/// ```
+///
+/// The other three gates in this family stayed green under the same neuter —
+/// which is the point, and is why the neuter was scoped to the window override
+/// rather than to the model: the overlay hydrates through `boot_load`, and on
+/// Direct the construction read normally answers. **This gate is the only one
+/// that discriminates the window half of the repair.**
+#[tokio::test(flavor = "current_thread")]
+async fn a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    location_survives_reload_on(&SURFACE_WINDOW, "window[worker]", "&worker=1").await
+}
+
+/// The Direct-arm twin of
+/// [`a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_worker_arm`].
+///
+/// **Say plainly what this one does NOT do.** Under the same neuter that reds
+/// the Worker gate, this stays **green** — on Direct the construction-time sync
+/// read normally answers, so the hydration hook is not on the path. It is a
+/// control (the repair costs the shipped arm nothing) and not a second gate for
+/// the hydration defect. Reading it as one would be exactly the
+/// green-by-inheritance mistake this file keeps finding.
+///
+/// It is not idle, though: it is the only gate here that exercises the
+/// **write-behind flush**. Before `durable_state_hash` existed it failed **1 run
+/// in 6**, with the same message the hydration defect produces — a navigation
+/// logged as a `tree put` is not yet in IndexedDB, and a reload inside the
+/// 250 ms debounce reads the previous value. 8/8 after. That flake is the
+/// reason this gate is worth its runtime.
+#[tokio::test(flavor = "current_thread")]
+async fn a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_direct_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    location_survives_reload_on(&SURFACE_WINDOW, "window[direct]", "").await
+}
+
+/// The two deployment shapes that render a content site, as the four things
+/// this scenario has to say differently about each.
+///
+/// **Parameterised rather than copied, for the same reason `rekey_scenario` is:**
+/// the overlay and the Site Browser window share a *model* and share nothing
+/// else. They persist to different paths, are constructed by different code, and
+/// are hydrated from different call sites — `boot_load` awaits the overlay's,
+/// `WindowManager::spawn` fires the window's. So a repair proven on one is an
+/// argument about the other, not a measurement of it, and the way to stop that
+/// asymmetry recurring is to make adding the second caller cost four strings.
+struct LocationSurface {
+    /// A JS *expression* evaluating to the surface's root element, or null.
+    /// Everything else in the scenario queries inside it.
+    root_expr: &'static str,
+    /// The fixture that publishes this deployment shape into the served copy.
+    fixture: &'static str,
+    /// A fragment of the durable path a navigation on this surface writes.
+    /// Used to COUNT writes, never to check one exists — see the call site.
+    put_path: &'static str,
+    /// The log line that reports this surface resolved its location against the
+    /// durable tree. Not the same line on both: the overlay is awaited by
+    /// `boot_load`, which labels all four outcomes; a window reports only from
+    /// inside the model, and only when it actually adopts.
+    resolved_log: &'static str,
+}
+
+/// The locked-kiosk overlay — the whole screen, the least room to report.
+const SURFACE_OVERLAY: LocationSurface = LocationSurface {
+    root_expr: "document.getElementById('site-layer')",
+    fixture: "emit_rekey_fixture_before",
+    put_path: "workspace/site-overlay/location",
+    resolved_log: "overlay location resolved against the durable tree",
+};
+
+/// The maximized Site Browser **window** — what `entitychurchfoundation.org` and
+/// `entitychurchregistry.org` actually serve. Lives inside `#dom-layer`'s shadow
+/// root, so the root expression has to cross it.
+const SURFACE_WINDOW: LocationSurface = LocationSurface {
+    root_expr: r#"(() => {
+        const l = document.getElementById('dom-layer');
+        if (!l) return null;
+        const r = l.shadowRoot || l;
+        return r.querySelector('section.window.maximized') || r.querySelector('section.window');
+    })()"#,
+    fixture: "emit_rekey_fixture_before_window",
+    // `workspace/windows/{id}/state` — the id is ephemeral (it restarts at 1
+    // every session, AP42), so match the two halves rather than a whole path.
+    put_path: "workspace/windows/",
+    // The per-surface D13 line, which fires on BOTH arms and for all five
+    // outcomes. It did not exist until this gate went looking for it: on the
+    // Direct arm the construction read answers, the round-trip is skipped, and
+    // nothing whatsoever was logged — so this assertion failed on the arm the
+    // product ships, while the behavioural assertions above it passed. That is
+    // the assertion earning its keep.
+    resolved_log: "window state resolved against the durable tree",
+};
+
 /// **Which PAGE is on screen**, as a short identifying string.
 ///
-/// Deliberately not [`SITE_LAYER_TEXT`]: that returns the whole layer's
-/// `textContent`, which begins with the renderer's injected stylesheet — over a
-/// kilobyte of CSS that is **byte-identical on every page**. A "did the page
-/// change" assertion built on a prefix of it compares two copies of the same
-/// CSS and passes for any pair of pages, which is a gate that cannot fail. So
-/// read the rendered document's own heading, and fall back to a slice of its
-/// body when a page has no heading.
-const SITE_PAGE_PROBE: &str = r#"
-    const sl = document.getElementById('site-layer');
-    if (!sl) return '';
-    const doc = sl.querySelector('.cs-doc');
-    if (!doc) return '';
-    const h = doc.querySelector('h1, h2');
-    const t = h ? (h.textContent || '') : (doc.textContent || '');
-    return t.trim().slice(0, 80);
+/// Deliberately not the surface's whole `textContent`: that begins with the
+/// renderer's injected stylesheet — over a kilobyte of CSS that is
+/// **byte-identical on every page**. A "did the page change" assertion built on
+/// a prefix of it compares two copies of the same CSS and passes for any pair of
+/// pages, which is a gate that cannot fail. So read the rendered document's own
+/// heading, and fall back to a slice of its body when a page has no heading.
+fn page_probe(surface: &LocationSurface) -> String {
+    format!(
+        r#"
+        const root = {root};
+        if (!root) return '';
+        const doc = root.querySelector('.cs-doc');
+        if (!doc) return '';
+        const h = doc.querySelector('h1, h2');
+        const t = h ? (h.textContent || '') : (doc.textContent || '');
+        return t.trim().slice(0, 80);
+        "#,
+        root = surface.root_expr
+    )
+}
+
+/// The surface's whole rendered text — the fallback diagnostic when the page
+/// probe reads nothing, so a failure can say what IS on screen.
+fn layer_text_probe(surface: &LocationSurface) -> String {
+    format!(
+        "const root = {root}; return root ? (root.textContent || '').trim() : '';",
+        root = surface.root_expr
+    )
+}
+
+/// Click the first in-site link that actually LEAVES the current page.
+///
+/// `__ROOT__` is substituted with the surface's root expression before this is
+/// evaluated (a plain `replace`, not a formatter — the snippet is dense with JS
+/// braces and escaping every one of them for `format!` makes it unreadable).
+const NAV_CLICK_JS: &str = r#"
+    const sl = __ROOT__;
+    if (!sl) return { clicked: false, links: [] };
+    // ONLY the site's own navigation — the sidebar's page list and the top nav.
+    // A bare `querySelectorAll('a')` over the layer also returns the BRAND link
+    // ("⌂ <site title>"), which points at the home page: the first version of
+    // this gate clicked it, never left home, and was caught by the anti-vacuity
+    // assertion below rather than by passing. That is the assertion earning its
+    // keep, and the reason this selector is narrow.
+    const links = Array.from(
+        sl.querySelectorAll('.cs-sidebar-list a, .cs-nav-desktop a')
+    );
+    const current = (() => {
+        const doc = sl.querySelector('.cs-doc');
+        const h = doc ? doc.querySelector('h1, h2') : null;
+        return h ? (h.textContent || '').trim() : '';
+    })();
+    const link = links.find(a => {
+        const t = (a.textContent || '').trim();
+        if (!t) return false;
+        // Already here — clicking it proves nothing. Two spellings of "here":
+        // the rendered heading, and the nav's own label for the root page. The
+        // heading test alone is not enough — the sidebar says "Home" while the
+        // index page's `<h1>` says "Welcome to the Entity Demo Site", so a
+        // heading-only comparison walked us straight back to the page we were
+        // on (measured; caught by the anti-vacuity assertion again).
+        if (t === current) return false;
+        if (/^home$/i.test(t)) return false;
+        // The pre-rendered document page renders into a SANDBOXED iframe, whose
+        // text this probe cannot read from the parent document — landing there
+        // would make the comparison below empty-vs-empty. Excluded by name.
+        if (/pre-rendered document/i.test(t)) return false;
+        return true;
+    });
+    if (!link) return { clicked: false, current,
+        links: links.map(a => (a.textContent||'').trim()) };
+    const label = (link.textContent || '').trim();
+    link.click();
+    return { clicked: true, label, current,
+        links: links.map(a => (a.textContent||'').trim()) };
+"#;
+/// The IndexedDB `locations` probe, shared by [`durable_state_hash`] and
+/// [`durable_hash_for`]. One copy on purpose — see `durable_hash_for`.
+const DURABLE_HASH_PROBE: &str = r#"
+        const cb = arguments[arguments.length - 1];
+        const frag = arguments[0];
+        const frag2 = arguments[1];
+        const openDb = (name) => new Promise((res, rej) => {
+            const r = indexedDB.open(name);
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => rej(r.error);
+            r.onblocked = () => rej('blocked');
+        });
+        const req = (r) => new Promise((res, rej) => {
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => rej(r.error);
+        });
+        (async () => {
+            try {
+                if (!indexedDB.databases) { cb(''); return; }
+                for (const d of await indexedDB.databases()) {
+                    if (!d.name) continue;
+                    let db;
+                    try { db = await openDb(d.name); } catch (e) { continue; }
+                    if (!db.objectStoreNames.contains('locations')) { db.close(); continue; }
+                    const st = db.transaction('locations', 'readonly').objectStore('locations');
+                    const keys = await req(st.getAllKeys());
+                    const vals = await req(st.getAll());
+                    for (let i = 0; i < keys.length; i++) {
+                        const k = String(keys[i]);
+                        if (!k.includes(frag)) continue;
+                        if (frag2 && !k.includes(frag2)) continue;
+                        const v = vals[i];
+                        let bytes = null;
+                        if (v instanceof ArrayBuffer) bytes = new Uint8Array(v);
+                        else if (ArrayBuffer.isView(v)) bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+                        const hex = bytes
+                            ? Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+                            : String(v);
+                        db.close();
+                        cb(k + '=' + hex);
+                        return;
+                    }
+                    db.close();
+                }
+                cb('');
+            } catch (e) { cb('ERR:' + e); }
+        })();
 "#;
 
-/// How many durable writes of the site-overlay's navigation state this session
-/// has made so far. Counted, not existence-checked — see the call site.
-async fn count_nav_state_puts(client: &Client) -> Result<usize, Box<dyn std::error::Error>> {
+
+/// The **durable** content hash IndexedDB holds for this surface's state path,
+/// or `""` when nothing is there (or when this arm keeps no IDB at all).
+///
+/// # Why a gate needs this, and why the tree-put count is not enough
+///
+/// `tree put: stored` is an **in-memory** event. On the Direct-IDB arm the
+/// store is *write-behind*: puts are queued and drained on a 250 ms debounce
+/// (`core/store/src/idb.rs` `DEBOUNCE_MS`), and only identity/destructive ops
+/// await `IdbCheckpoint::checkpoint()`. An ordinary navigation does not. So a
+/// reload issued the instant the put is logged lands inside the unflushed
+/// window and reads the *previous* durable value — measured here as **1 failure
+/// in 6 runs**, and the failure looks exactly like the hydration defect this
+/// gate guards: the reader comes back on the deployment's home page.
+///
+/// The Worker arm does not have this exposure — OPFS is flush-on-write, which
+/// is why `app.rs` treats a `None` checkpoint as already flushed — and it is
+/// why the window gate was green on Worker and flaky on Direct, the reverse of
+/// every other split in this file.
+///
+/// Enumerating `indexedDB.databases()` rather than hardcoding a name: the
+/// database is named per peer, and a gate that hardcoded it would go quietly
+/// blind (returning `""` forever, i.e. never waiting) the day the name changed.
+/// A key fragment is matched instead, and the caller asserts the probe actually
+/// found something.
+async fn durable_state_hash(
+    client: &Client,
+    surface: &LocationSurface,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let script = DURABLE_HASH_PROBE;
+    let frag2 = if surface.put_path == SURFACE_WINDOW.put_path { "/state" } else { "" };
+    let out = client
+        .execute_async(
+            script,
+            vec![surface.put_path.into(), frag2.into()],
+        )
+        .await?;
+    Ok(out.as_str().unwrap_or("").to_string())
+}
+
+/// [`durable_state_hash`] for an arbitrary path fragment rather than a
+/// [`LocationSurface`].
+///
+/// Same probe, same reason it exists (the Direct arm is write-behind on a 250 ms
+/// debounce, so `tree put: stored` is not durability) — the window-index gate
+/// needs to wait on a path that is not a surface's location. Sharing the script
+/// with `durable_state_hash` rather than copying it: a probe that drifted from
+/// its twin would go quietly blind exactly the way a hardcoded database name
+/// would, which is the failure that function's own docs warn about.
+async fn durable_hash_for(
+    client: &Client,
+    frag: &str,
+    frag2: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let out = client
+        .execute_async(DURABLE_HASH_PROBE, vec![frag.into(), frag2.into()])
+        .await?;
+    Ok(out.as_str().unwrap_or("").to_string())
+}
+
+/// How many durable writes of this surface's navigation state the session has
+/// made so far. Counted, not existence-checked — see the call site.
+async fn count_nav_state_puts(
+    client: &Client,
+    surface: &LocationSurface,
+) -> Result<usize, Box<dyn std::error::Error>> {
     let log = capture_log(client).await?;
     Ok(log
         .iter()
         .filter(|l| {
-            l.contains("tree put: stored") && l.contains("workspace/site-overlay/location")
+            l.contains("tree put: stored")
+                && l.contains(surface.put_path)
+                // The window's path is matched in two halves because its id is
+                // ephemeral; without the second half this would also count
+                // `workspace/windows/{id}/results` and every other per-window
+                // entity, and the "did THIS navigation persist" wait would be
+                // satisfied by an unrelated write (AP31's family — the exact bug
+                // the count replaced an existence check to fix).
+                && (surface.put_path != SURFACE_WINDOW.put_path || l.contains("/state"))
         })
         .count())
 }
@@ -15333,6 +15672,16 @@ async fn location_survives_reload_scenario(
     label: &str,
     extra_query: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    location_survives_reload_on(&SURFACE_OVERLAY, label, extra_query).await
+}
+
+async fn location_survives_reload_on(
+    surface: &LocationSurface,
+    label: &str,
+    extra_query: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let page_probe = page_probe(surface);
+    let site_page_probe: &str = &page_probe;
     let (client, _server) = setup().await?;
 
     // Same isolation rule as `rekey_scenario`: publish into a COPY of the SPA on
@@ -15358,9 +15707,11 @@ async fn location_survives_reload_scenario(
     let url = format!("http://localhost:{port}/?log=trace{extra_query}");
 
     let r = async {
-        // A locked overlay deployment, the surface with the least room to
-        // report — the same reason `rekey_scenario` uses it.
-        run_rekey_fixture("emit_rekey_fixture_before", &root);
+        // The deployment shape this surface ships as. For the overlay that is
+        // the locked kiosk — the surface with the least room to report, the same
+        // reason `rekey_scenario` uses it; for the window it is the shape
+        // production actually serves.
+        run_rekey_fixture(surface.fixture, &root);
 
         // ── 1. Cold boot: land on the deployment's home ──────────────────────
         client.goto(&url).await?;
@@ -15369,7 +15720,7 @@ async fn location_survives_reload_scenario(
         wait_for_boot(&client, 30_000).await?;
 
         let home =
-            poll_rendered(&client, SITE_PAGE_PROBE, "Welcome to the Entity Demo Site").await?;
+            poll_rendered(&client, site_page_probe, "Welcome to the Entity Demo Site").await?;
         let cold = capture_log(&client).await?;
         if !home.contains("Welcome to the Entity Demo Site") {
             print_log(&cold);
@@ -15399,7 +15750,10 @@ async fn location_survives_reload_scenario(
         // returned instantly, and let the reload race the click's write. Direct
         // failed 1 run in 3 that way — an assertion satisfied by the wrong
         // evidence, which is AP31's family.
-        let nav_puts_before = count_nav_state_puts(&client).await?;
+        let nav_puts_before = count_nav_state_puts(&client, surface).await?;
+        // And the DURABLE value as it stands now, so step 2b can wait for it to
+        // change rather than for a write to be logged. See `durable_state_hash`.
+        let durable_before = durable_state_hash(&client, surface).await?;
 
         // ── 2. The reader navigates somewhere else ──────────────────────────
         //
@@ -15407,50 +15761,10 @@ async fn location_survives_reload_scenario(
         // (`go_to` → `dispatch_write`), not a tree write the test performed.
         let nav = client
             .execute(
-                r#"
-                const sl = document.getElementById('site-layer');
-                if (!sl) return { clicked: false, links: [] };
-                // ONLY the site's own navigation — the sidebar's page list and
-                // the top nav. A bare `querySelectorAll('a')` over the layer
-                // also returns the BRAND link ("⌂ <site title>"), which points
-                // at the home page: the first version of this gate clicked it,
-                // never left home, and was caught by the anti-vacuity assertion
-                // below rather than by passing. That is the assertion earning
-                // its keep, and the reason this selector is narrow.
-                const links = Array.from(
-                    sl.querySelectorAll('.cs-sidebar-list a, .cs-nav-desktop a')
-                );
-                const current = (() => {
-                    const doc = sl.querySelector('.cs-doc');
-                    const h = doc ? doc.querySelector('h1, h2') : null;
-                    return h ? (h.textContent || '').trim() : '';
-                })();
-                const link = links.find(a => {
-                    const t = (a.textContent || '').trim();
-                    if (!t) return false;
-                    // Already here — clicking it proves nothing. Two spellings
-                    // of "here": the rendered heading, and the nav's own label
-                    // for the root page. The heading test alone is not enough —
-                    // the sidebar says "Home" while the index page's `<h1>` says
-                    // "Welcome to the Entity Demo Site", so a heading-only
-                    // comparison walked us straight back to the page we were on
-                    // (measured; caught by the anti-vacuity assertion again).
-                    if (t === current) return false;
-                    if (/^home$/i.test(t)) return false;
-                    // The pre-rendered document page renders into a SANDBOXED
-                    // iframe, whose text this probe cannot read from the parent
-                    // document — landing there would make the comparison below
-                    // empty-vs-empty. Excluded by name, deliberately.
-                    if (/pre-rendered document/i.test(t)) return false;
-                    return true;
-                });
-                if (!link) return { clicked: false, current,
-                    links: links.map(a => (a.textContent||'').trim()) };
-                const label = (link.textContent || '').trim();
-                link.click();
-                return { clicked: true, label, current,
-                    links: links.map(a => (a.textContent||'').trim()) };
-                "#,
+                // `__ROOT__` rather than `format!`: this snippet is dense with
+                // JS braces, and escaping every one of them for a formatter is
+                // how a working probe becomes an unreadable one.
+                &NAV_CLICK_JS.replace("__ROOT__", surface.root_expr),
                 vec![],
             )
             .await?;
@@ -15468,7 +15782,7 @@ async fn location_survives_reload_scenario(
         let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
         while std::time::Instant::now() < deadline {
             moved = client
-                .execute(SITE_PAGE_PROBE, vec![])
+                .execute(site_page_probe, vec![])
                 .await?
                 .as_str()
                 .unwrap_or("")
@@ -15519,7 +15833,7 @@ async fn location_survives_reload_scenario(
         let mut persisted = false;
         let persist_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
         while std::time::Instant::now() < persist_deadline {
-            if count_nav_state_puts(&client).await? > nav_puts_before {
+            if count_nav_state_puts(&client, surface).await? > nav_puts_before {
                 persisted = true;
                 break;
             }
@@ -15532,13 +15846,78 @@ async fn location_survives_reload_scenario(
              one: nothing could restore a location that was never written"
         );
 
+        // ── 2c. And wait for it to be durable in the STORE, not just the tree ──
+        //
+        // The put above is an in-memory event; on the Direct-IDB arm the flush
+        // is write-behind on a 250 ms debounce. Reloading between the two reads
+        // the PREVIOUS durable value and fails with the exact message this gate
+        // uses for the hydration defect — measured 1-in-6 before this wait
+        // existed. See `durable_state_hash` for why the Worker arm does not
+        // show it.
+        let mut durable_after = durable_before.clone();
+        let durable_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < durable_deadline {
+            durable_after = durable_state_hash(&client, surface).await?;
+            if !durable_after.is_empty() && durable_after != durable_before {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        // ANTI-VACUITY: a probe that can never find anything would "wait" for
+        // zero time and silently reinstate the race it was written to remove.
+        // On the Worker arm there is no IndexedDB to read, and that is a stated
+        // limit rather than a silent one — so require a hash on the arm that
+        // HAS one, and say so on the arm that does not.
+        if extra_query.contains("worker=1") {
+            println!(
+                "  [{label}] durable-state probe: {} (Worker/OPFS is flush-on-write; \
+                 this arm has no write-behind window to wait out)",
+                if durable_after.is_empty() { "no IndexedDB, as expected" } else { "present" }
+            );
+        } else {
+            assert!(
+                !durable_after.is_empty() && durable_after != durable_before,
+                "[{label}] the navigation never reached the DURABLE store within the budget \
+                 (before: {durable_before:?}, after: {durable_after:?}). Either the write-behind \
+                 flush is broken, or this probe stopped finding the location index — and a probe \
+                 that finds nothing would silently stop guarding the flush race"
+            );
+        }
+
+        // **The write trail, captured BEFORE the reload wipes it.**
+        //
+        // `capture_log` reads `window.__entity_browser_log`, which a page load
+        // clears — so on a failure every write the *pre-reload* session made is
+        // already gone, and the failure message can only describe the boot that
+        // came after. That is the wrong half: the question a red run raises is
+        // *which* writes landed to this surface's state path before we reloaded,
+        // and whether the one we waited for was actually the reader's.
+        let pre_reload_writes: Vec<String> = capture_log(&client)
+            .await?
+            .into_iter()
+            .filter(|l| l.contains("tree put: stored") && l.contains(surface.put_path))
+            .map(|l| l.chars().take(160).collect())
+            .collect();
+        // Printed on every run, not only on failure. The baseline count and the
+        // final count are what say whether the write we waited for was the
+        // reader's or somebody else's — and a gate that only shows its evidence
+        // when it is red cannot be checked while it is green.
+        println!(
+            "  [{label}] writes to the state path: {} at baseline, {} before the reload",
+            nav_puts_before,
+            pre_reload_writes.len()
+        );
+        for w in &pre_reload_writes {
+            println!("    {w}");
+        }
+
         // ── 3. A plain reload. Nothing else changed. ────────────────────────
         //
         // No storage wipe, no republish, no re-key — the single most ordinary
         // thing a reader does, and the thing that lost their place.
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
-        let after = poll_rendered(&client, SITE_PAGE_PROBE, &left_on).await?;
+        let after = poll_rendered(&client, site_page_probe, &left_on).await?;
         let warm = capture_log(&client).await?;
         if after != left_on {
             print_log(&warm);
@@ -15551,7 +15930,7 @@ async fn location_survives_reload_scenario(
         // first tier said "you were put back on the home page" would have
         // reported the wrong symptom for the real defect (AP38, and AP33's rule
         // that a report must not state a cause it cannot tell apart).
-        let site_text = client.execute(SITE_LAYER_TEXT, vec![]).await?;
+        let site_text = client.execute(&layer_text_probe(surface), vec![]).await?;
         let site_text = site_text.as_str().unwrap_or("");
         assert!(
             !after.is_empty(),
@@ -15564,7 +15943,12 @@ async fn location_survives_reload_scenario(
             !after.contains("Welcome to the Entity Demo Site"),
             "[{label}] THE DEFECT: a plain reload put the reader back on the deployment's \
              home page. Their location WAS persisted (asserted above); the warm boot did \
-             not read it. left on: {left_on:?}; got: {after:?}"
+             not read it. left on: {left_on:?}; got: {after:?}\n\
+             writes to this surface's state path before the reload ({} baseline, \
+             {} at reload):\n{}",
+            nav_puts_before,
+            pre_reload_writes.len(),
+            pre_reload_writes.join("\n")
         );
         assert_eq!(
             after, left_on,
@@ -15574,8 +15958,9 @@ async fn location_survives_reload_scenario(
         // And the boot said so, in the field an incident is debugged from —
         // `adopted` here, distinct from `none-persisted` and from `unheard`.
         assert!(
-            warm.iter().any(|l| l.contains("overlay location resolved against the durable tree")),
-            "[{label}] boot did not report how it resolved the overlay's location"
+            warm.iter().any(|l| l.contains(surface.resolved_log)),
+            "[{label}] boot did not report how this surface resolved its location \n             (looked for {:?})",
+            surface.resolved_log
         );
         Ok::<(), Box<dyn std::error::Error>>(())
     }
@@ -15635,52 +16020,56 @@ async fn location_survives_reload_scenario(
 /// is why a user experiences "my shell remembered where I was" — and why they
 /// notice when it stops.)
 ///
-/// Left `#[ignore]`d rather than landed red: a permanently red suite stops being
-/// read, and an assertion relaxed to accommodate a defect is how the defect
-/// becomes the specification. `make e2e-worker T=returns_to_its_working_directory
-/// E2E_EXTRA=--ignored`. Audit:
-/// `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+/// # GREEN 2026-08-31 — fixed, and this gate is the one that proves it
+///
+/// It was `#[ignore]`d while red rather than landed red (a permanently red
+/// suite stops being read, and an assertion relaxed to accommodate a defect is
+/// how the defect becomes the specification). The fix landed as
+/// `ShellModel::hydrate_durable` plus the class-level `WindowView` hook that
+/// `WindowManager::spawn` calls for every window.
+///
+/// **This gate carries the whole fix, and the reason matters.** The Shell's
+/// instance of AP41 was **destructive**, not merely lossy: `initialize`'s
+/// else-branch was an unconditional `dispatch_write` of the default state, and
+/// on this arm the sync read *always* misses — so opening a Shell wrote the
+/// default over the persisted `wd`/`history`/`draft`. Every other model in the
+/// class seeds through `put_if_absent` and loses nothing on a missed read.
+///
+/// The destructive half **cannot be gated natively**: the sync and async reads
+/// hit the same in-process store there, so the repaired and unrepaired forms
+/// behave identically. This is its only gate. Do not delete it, and do not
+/// assume the native decision-table tests in `views::shell::model` cover it.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "MEASURED RED — AP41's class on a second surface (the Shell). Unfixed: the fix is \
-            the same `hydrate_durable` shape, deliberately not applied blind. See the doc comment."]
 async fn a_shell_window_returns_to_its_working_directory_on_the_worker_arm(
 ) -> Result<(), Box<dyn std::error::Error>> {
     shell_wd_survives_reload_scenario("worker", "?log=trace&worker=1").await
 }
 
 /// The Direct-arm control for
-/// [`a_shell_window_returns_to_its_working_directory_on_the_worker_arm`] — and
-/// it does **not** currently function as one, which is its own finding.
+/// [`a_shell_window_returns_to_its_working_directory_on_the_worker_arm`]: it
+/// says the read was always fine on the shipped default arm, so a red on the
+/// Worker twin is an arm-split rather than a shell defect.
 ///
-/// # MEASURED, 2026-08-30 — a SECOND and separate defect, on the DEFAULT arm
+/// # It spent 2026-08-30 `#[ignore]`d for a DIFFERENT defect, now fixed
 ///
-/// A Shell window opened **after a reload** accepts commands and renders
-/// nothing. The input clears (so the submit fires) and the app writes
-/// `app/state/shell` to `workspace/windows/1/state` on **every** submission —
-/// caught at the wire, ~24 puts across the polling budget — while the rendered
-/// `<pre>` stays on the `shell.scrollback_cleared` placeholder:
+/// Measured that day, this control did not function as one: a Shell opened
+/// after a reload accepted commands and rendered nothing, so it reported
+/// "Direct lost the working directory too" — the opposite of the truth. The
+/// hypothesis recorded here was that a re-read of state on the window's own
+/// write dropped the in-memory scrollback rows.
 ///
-/// ```text
-/// DIAG: { window_count: 1, shells: [ { input_value: "", input_disabled: false,
-///         scrollback: "(scrollback cleared)" } ] }
-/// ```
+/// **That hypothesis was wrong, and the recorded symptom named the wrong
+/// axis.** Nothing wiped anything: the rows were in the model the whole time,
+/// and the section simply never rebuilt. `ShellWindow::handle_action` inferred
+/// its re-render from the watch on its *own* `window_state_path`, and
+/// `record_submit` skips a consecutive duplicate — so re-running the last
+/// command produced a byte-identical entity, and a content-addressed put of
+/// identical bytes is not an event. Warm-vs-cold was never the axis; *did the
+/// persisted entity change* is. Fixed by `mark_dirty` beside the persist (AP43,
+/// `61ef0de`); green here since 2026-08-31.
 ///
-/// So the model is executing and persisting; the scrollback is not reaching the
-/// screen. It works on the FIRST spawn in a session (this gate's own staging
-/// `cd`/`pwd` pass) and fails on a spawn **after a reload** — the difference
-/// being that the second one restores persisted state. `ShellState.scrollback`
-/// is documented as *not persisted*; a plausible and **unconfirmed** reading is
-/// that a re-read of state on the window's own write drops the in-memory rows.
-/// Stated as the hypothesis it is: it has not been traced, and this repo grades
-/// by measured consequence, not asserted cause.
-///
-/// **This is on the Direct-IDB arm — the shipped browser default** — so it is
-/// not a Worker-arm curiosity. It is recorded here rather than fixed because it
-/// surfaced while measuring something else and diagnosing it properly is its own
-/// pass.
+/// Kept as the arm control it was written to be.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "MEASURED — a shell opened after a reload writes state on every command and renders \
-            an empty scrollback, on the DEFAULT arm. Undiagnosed; see the doc comment."]
 async fn a_shell_window_returns_to_its_working_directory_on_the_direct_arm(
 ) -> Result<(), Box<dyn std::error::Error>> {
     shell_wd_survives_reload_scenario("direct", "?log=trace").await
@@ -15746,22 +16135,43 @@ async fn shell_type_and_submit(
 /// the frame loop, so it exists a frame or two after `Frame loop started` and a
 /// single read right after boot races it.
 async fn spawn_shell_window(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    spawn_window_labeled(client, "+ Shell").await
+}
+
+/// Click a palette spawn button by its exact label.
+///
+/// The body of what `spawn_shell_window` used to be, parameterised — the
+/// window-index gate needs a *second* window type and two copies of this loop
+/// would be two places for the palette's markup to drift away from.
+///
+/// The label is the **localized display name** (`window_display_name` →
+/// `i18n::window_title`), not the registry identity key. They coincide in
+/// English, which is what the suite runs in; a locale-switching caller would
+/// need the key.
+async fn spawn_window_labeled(
+    client: &Client,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut last = String::new();
     let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     while std::time::Instant::now() < deadline {
         last = client
             .execute(
                 r#"
+                const [want] = arguments;
                 const layer = document.getElementById('dom-layer');
                 if (!layer) return 'no-dom-layer';
                 const root = layer.shadowRoot || layer;
                 const btns = root.querySelectorAll('button.spawn-btn');
+                const seen = [];
                 for (const b of btns) {
-                    if (b.textContent.trim() === '+ Shell') { b.click(); return 'clicked'; }
+                    const t = b.textContent.trim();
+                    seen.push(t);
+                    if (t === want) { b.click(); return 'clicked'; }
                 }
-                return `no-shell-btn-of-${btns.length}`;
+                return `no-btn; saw: ${seen.join(' | ')}`;
                 "#,
-                vec![],
+                vec![label.into()],
             )
             .await?
             .as_str()
@@ -15773,7 +16183,7 @@ async fn spawn_shell_window(client: &Client) -> Result<(), Box<dyn std::error::E
         }
         sleep(Duration::from_millis(200)).await;
     }
-    panic!("spawn_shell_window: never found the `+ Shell` spawn button ({last})");
+    panic!("spawn_window_labeled: never found the `{label}` spawn button ({last})");
 }
 
 async fn shell_wd_survives_reload_scenario(
@@ -15925,6 +16335,191 @@ async fn shell_wd_survives_reload_scenario(
     r
 }
 
+/// **The window-index gate: your state comes back regardless of the order you
+/// re-open windows in.**
+///
+/// # What this measures that nothing else could
+///
+/// `a_shell_window_returns_to_its_working_directory_*` opens exactly one window
+/// per session, so the Shell always draws ordinal 1 and always lands on the slot
+/// it wrote last time. It passes *because of* the coincidence this gate exists
+/// to remove. Open a second window type and the coincidence goes:
+/// `{window_id}` is a per-session counter (`WindowManager::new` restarts it at
+/// 1) and `workspace/windows/{id}/state` is keyed by it, so which persisted
+/// state a window reads is decided by **re-open order** and nothing else.
+///
+/// The scenario is the smallest one that shows it:
+///
+/// 1. Open a Shell (draws 1), `cd` somewhere that is not the default.
+/// 2. Open an Entity Tree (draws 2).
+/// 3. Reload — windows are not restored, so the reader re-opens them.
+/// 4. Re-open the **Entity Tree first**, then the Shell.
+/// 5. The Shell must still be in the directory it was left in.
+///
+/// Without the index, step 4 hands the Entity Tree ordinal 1 — the Shell's slot
+/// — and the Shell ordinal 2. AP42's type discriminator then correctly refuses
+/// both (each sees a foreign `entity_type`), so nothing is *mis*-adopted and the
+/// Shell simply loses its working directory. **That is the point about AP42
+/// worth carrying: the guard converts wrong-adoption into no-adoption, and never
+/// makes the right state findable.** With the index, each window claims its own
+/// `(type, peer)` slot and order stops mattering.
+///
+/// # Why the D13 assertion is here too
+///
+/// The `Hydration` audit found a whole class reporting nothing on the arm the
+/// product ships, and found it *because a gate asserted the log line and failed
+/// while every behavioural assertion passed*. Same instrument here: the boot
+/// line must say `restored`, or a green run could be green because the feature
+/// silently did nothing.
+async fn window_index_restores_each_slot_scenario(
+    label: &str,
+    query: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/{query}", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let log = capture_log(&client).await?;
+        let want_arm = if query.contains("worker=1") { "DurableWorker" } else { "DurableDirectIdb" };
+        assert!(
+            log.iter().any(|l| l.contains(want_arm)),
+            "[{label}] this run must boot on the {want_arm} arm"
+        );
+
+        // -- Session 1: two windows, in this order --------------------------
+        spawn_shell_window(&client).await?;
+        let first = shell_type_and_submit(&client, "pwd", 400).await?;
+        let default_wd = last_shell_output(&first, "pwd").trim().to_string();
+        let pid = default_wd.trim_matches('/').to_string();
+        assert!(
+            !pid.is_empty() && !pid.contains(' '),
+            "[{label}] staging: `pwd` did not return a bare peer root; got {default_wd:?}"
+        );
+
+        let target_wd = format!("/{pid}/system");
+        shell_type_and_submit(&client, &format!("cd {target_wd}"), 400).await?;
+        let pwd = shell_type_and_submit(&client, "pwd", 400).await?;
+        let shown = last_shell_output(&pwd, "pwd").trim().to_string();
+        assert!(
+            shown.contains(&target_wd),
+            "[{label}] staging: `cd` did not move the shell — `pwd` says {shown:?}. \
+             Nothing after this would mean anything."
+        );
+
+        // The second window is what removes the one-window coincidence. Entity
+        // Tree because it persists per-window state unprompted (its
+        // `initialize` seeds the slot), so it occupies an ordinal for real.
+        spawn_window_labeled(&client, "+ Entity Tree").await?;
+
+        // -- Wait for the INDEX to be durable, not just written --------------
+        //
+        // `tree put: stored` is an in-memory event and the Direct arm is
+        // write-behind on a 250 ms debounce, so a reload issued on the log line
+        // races the flush and fails wearing this gate's own costume. Wait on
+        // IndexedDB. The index is the right thing to wait on: it is written
+        // after the window set changes, so its arrival implies both windows'
+        // slots are accounted for.
+        let mut durable = String::new();
+        let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < deadline {
+            durable = durable_hash_for(&client, "workspace/window-index", "").await?;
+            if !durable.is_empty() && !durable.starts_with("ERR:") {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        if query.contains("worker=1") {
+            // Worker/OPFS is flush-on-write and keeps no `locations` IDB store,
+            // so the probe legitimately reads empty here. Asserting it found
+            // something would fail for the wrong reason — and asserting nothing
+            // at all on Direct would let a probe that went blind reinstate the
+            // race silently, which is why only this arm is exempt.
+            sleep(Duration::from_millis(500)).await;
+        } else {
+            assert!(
+                !durable.is_empty() && !durable.starts_with("ERR:"),
+                "[{label}] the window index never reached IndexedDB (probe: {durable:?}). \
+                 Either the feature did not persist it or the probe has gone blind — \
+                 both make the reload below race the write-behind flush."
+            );
+        }
+
+        // -- Session 2: re-open in the REVERSE order ------------------------
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let boot_log = capture_log(&client).await?;
+        let index_line = boot_log
+            .iter()
+            .find(|l| l.contains("window index resolved against the durable tree"))
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !index_line.is_empty(),
+            "[{label}] D13: boot reported nothing about the window index. A gate that \
+             only checked behaviour here would pass while the feature did nothing."
+        );
+        assert!(
+            index_line.contains("restored"),
+            "[{label}] the index was not restored on this boot — line was: {index_line:?}"
+        );
+
+        // Entity Tree FIRST. Without the index it takes ordinal 1, which is the
+        // Shell's slot.
+        spawn_window_labeled(&client, "+ Entity Tree").await?;
+        spawn_shell_window(&client).await?;
+
+        let mut after_wd = String::new();
+        let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < deadline {
+            let out = shell_type_and_submit(&client, "pwd", 400).await?;
+            after_wd = last_shell_output(&out, "pwd").trim().to_string();
+            if after_wd.contains(&target_wd) || after_wd.contains(&format!("/{pid}")) {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        assert!(
+            after_wd.contains(&target_wd),
+            "[{label}] THE DEFECT: re-opening windows in a different order put the Shell \
+             back at its DEFAULT working directory. Its state is at a slot the ordinal no \
+             longer addresses. left at: {target_wd:?}; after reload `pwd` says: \
+             {after_wd:?}\nindex line: {index_line:?}"
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    client.close().await.ok();
+    r
+}
+
+/// The window index on the Worker arm.
+#[tokio::test(flavor = "current_thread")]
+async fn each_window_returns_to_its_own_slot_whatever_order_they_reopen_in_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    window_index_restores_each_slot_scenario("index[worker]", "?log=trace&worker=1").await
+}
+
+/// The window index on the **shipped** Direct-IDB arm.
+///
+/// Not a control this time — a second gate. The defect is arm-independent
+/// (ordinals restart at 1 on both arms), so unlike the AP41 hydration pair,
+/// both of these should red without the fix. If one of them ever goes green
+/// under a neuter while the other reds, that asymmetry is the finding.
+#[tokio::test(flavor = "current_thread")]
+async fn each_window_returns_to_its_own_slot_whatever_order_they_reopen_in_on_the_direct_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    window_index_restores_each_slot_scenario("index[direct]", "?log=trace").await
+}
+
+
 /// The maximized Site Browser **window** surface — `entitychurchfoundation.org`-
 /// shaped, and **the case the first version of this fix did not cover.**
 ///
@@ -15946,6 +16541,72 @@ async fn rekeyed_domain_heals_on_next_boot_window_surface(
            return w?(w.textContent||'').trim():'';"#,
         "surface=window",
         "",
+    )
+    .await
+}
+
+/// **The window surface on the WORKER arm — the cell nothing had ever run in.**
+///
+/// The four scenarios above cover three of the four cells of
+/// (surface × arm): site/Direct, site/Worker, window/Direct. This is the fourth,
+/// and it was named as an open hole in the audit's own process review
+/// (`§11.3`: *"the Site Browser **window** on the Worker arm has no gate at
+/// all — the window half of this fix is therefore reasoned, not gated"*).
+///
+/// **Why the other three do not cover it, stated rather than assumed.** The
+/// window and the overlay persist their navigation state at *different paths* —
+/// `workspace/windows/{id}/state` per window, versus the app-level
+/// `workspace/site-overlay/location` — read by different constructors
+/// (`ContentSiteWindow`'s factory vs `SiteOverlay::new`) and hydrated through
+/// different call sites: the overlay is awaited by `boot_load`, the window is
+/// hydrated by `WindowManager::spawn`. Only the *model* is shared. So the
+/// arm-dependent half — a synchronous read against a cache mirror nothing has
+/// primed — is a separate execution path on each surface, and "the overlay
+/// works on this arm" is an argument, not a measurement.
+///
+/// It is also the surface **production actually ships**: `surface=site` is off
+/// on every live domain (measured 2026-08-28), while `entitychurchfoundation.org`
+/// and `entitychurchregistry.org` both serve `surface=window` with
+/// `window-type=Site Browser`. The arm a real browser defaults to is
+/// Worker-or-IDB. This cell is therefore the closest of the four to what a
+/// returning visitor meets, and it was the only one with no gate.
+///
+/// Anti-vacuity is inherited from `rekey_scenario`, which is why this is four
+/// lines rather than a new scenario: the run must boot on `DurableWorker` (the
+/// `?worker=1` request can silently fall back to Direct — C5b), must have
+/// applied the served deployment config, must have *detected* the re-key and
+/// *recorded* a supersession. A profile that failed to load its state can do
+/// none of those.
+///
+/// # What it does NOT cover, MEASURED — and this is the finding
+///
+/// It is a **re-key** gate, not an AP41 gate. Neuter
+/// `ContentSiteWindow::hydrate_durable` and this stays **green on both arms**
+/// (measured 2026-08-31). The reason is boot ordering: `boot_load` spawns the
+/// startup window *after* the session config is final, so when the window's
+/// construction read misses on the Worker arm its fallback is built from a
+/// settled config — the deployment's home. The reader never navigates away in
+/// this scenario, so *"restored your location"* and *"reset you to the
+/// configured home"* are the **same page** and no assertion here can separate
+/// them. (The overlay's version was red pre-fix only because the overlay is
+/// built *before* the config settles, so its fallback degraded further, to the
+/// peerless build default, and rendered an error.)
+///
+/// The gate that does separate them is
+/// [`a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_worker_arm`]:
+/// navigate somewhere that is not home, come back, still be there.
+#[tokio::test(flavor = "current_thread")]
+async fn rekeyed_domain_heals_on_next_boot_window_surface_on_the_worker_arm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    rekey_scenario(
+        "emit_rekey_fixture_before_window",
+        "emit_rekey_fixture_after_window",
+        r#"const layer=document.getElementById('dom-layer');if(!layer)return '';
+           const root=layer.shadowRoot||layer;
+           const w=root.querySelector('section.window.maximized')||root.querySelector('section.window');
+           return w?(w.textContent||'').trim():'';"#,
+        "surface=window[worker]",
+        "&worker=1",
     )
     .await
 }

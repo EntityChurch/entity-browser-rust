@@ -113,6 +113,8 @@ mod tauri_ipc;
 mod boot_fast_paint;
 mod views;
 mod window;
+mod window_hydration;
+mod window_index;
 mod window_registry;
 
 // Native binary — prints a deprecation message and exits. There is no

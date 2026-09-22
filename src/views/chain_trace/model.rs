@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 
 use entity_entity::Entity;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::chain_trace_cache::ChainTraceCache;
 use crate::peers::Peers;
 use crate::render_policy::RenderPolicy;
@@ -73,6 +75,10 @@ pub struct ChainTraceModel {
     peer_id: String,
     inner: Arc<Mutex<ChainTraceState>>,
     cache: ChainTraceCache,
+    /// Did `initialize`'s synchronous read actually answer? On the Direct arm
+    /// the in-process store is authoritative, so a surface hydrated there needs
+    /// no round-trip (AP41).
+    hydrated: Arc<AtomicBool>,
 }
 
 impl ChainTraceModel {
@@ -82,6 +88,7 @@ impl ChainTraceModel {
             peer_id,
             inner: Arc::new(Mutex::new(ChainTraceState::default())),
             cache: ChainTraceCache::new(),
+            hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -93,7 +100,51 @@ impl ChainTraceModel {
 
     pub fn initialize(&mut self, peers: &Peers) {
         self.ensure_state_in_tree(peers);
-        *self.inner.lock().unwrap() = self.read_window_state(peers);
+        // Best-effort: on the Worker arm this reads nothing, and on Direct-IDB
+        // it races the store filling from IndexedDB (AP41).
+        // `hydrate_durable` is the authoritative correction.
+        let persisted = self.read_window_state_opt(peers);
+        self.hydrated.store(persisted.is_some(), Ordering::SeqCst);
+        *self.inner.lock().unwrap() = persisted.unwrap_or_default();
+    }
+
+    /// AP41's correction, through the shared machinery
+    /// (`crate::window_hydration`), which owns the three traps.
+    ///
+    /// **Assign, not merge:** every field of `ChainTraceState` appears in
+    /// `to_entity`, so a decoded state is a complete state and there is no
+    /// session-only half to preserve. Verified field-by-field 2026-08-31; if a
+    /// non-persisted field is ever added to this struct, this becomes a merge.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = crate::window::Hydration> + 'static> {
+        let inner = self.inner.clone();
+        let w = self.inner.clone();
+        crate::window_hydration::durable_hydration_job(
+            peers,
+            &self.peer_id,
+            self.state_path(),
+            STATE_TYPE,
+            self.hydrated.clone(),
+            move || w.lock().unwrap().to_entity().data,
+            move |e| *inner.lock().unwrap() = ChainTraceState::from_entity(e),
+        )
+    }
+
+    #[cfg(test)]
+    pub async fn hydrate_durable(&self, peers: &Peers) -> crate::window::Hydration {
+        match self.hydration_job(peers) {
+            Some(job) => job.await,
+            None => crate::window::Hydration::AlreadyResolved,
+        }
+    }
+
+    /// [`hydration_job`](Self::hydration_job), driven in the background — the
+    /// window factory runs inside the synchronous frame loop and cannot await.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        crate::window_hydration::spawn_hydration(self.hydration_job(peers));
     }
 
     fn state_path(&self) -> String {
@@ -110,11 +161,23 @@ impl ChainTraceModel {
         );
     }
 
-    fn read_window_state(&self, peers: &Peers) -> ChainTraceState {
+    /// The persisted state, and **whether the tree actually held ours**.
+    ///
+    /// `None` covers two cases that are one fact here: nothing at this path, or
+    /// another window type's entity in our reused slot (AP42). The type check
+    /// has to be here rather than left to `from_entity`, because that reports a
+    /// mismatch as `Default` — indistinguishable from a successful read of a
+    /// default-valued state, which would make `hydrated` claim an answer it
+    /// never got.
+    fn read_window_state_opt(&self, peers: &Peers) -> Option<ChainTraceState> {
         peers
             .get_entity(&self.peer_id, &self.state_path())
+            .filter(|e| e.entity_type == STATE_TYPE)
             .map(|e| ChainTraceState::from_entity(&e))
-            .unwrap_or_default()
+    }
+
+    fn read_window_state(&self, peers: &Peers) -> ChainTraceState {
+        self.read_window_state_opt(peers).unwrap_or_default()
     }
 
     fn persist_state(&self, peers: &Peers) {

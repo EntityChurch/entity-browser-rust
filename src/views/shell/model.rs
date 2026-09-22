@@ -43,10 +43,12 @@ where
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use entity_entity::Entity;
 
 use crate::peers::Peers;
-use crate::window::WindowId;
+use crate::window::{Hydration, WindowId};
 
 use super::output::{ScrollbackEntry, ShellOutput};
 
@@ -533,6 +535,10 @@ pub struct ShellModel {
     /// a dial marker: it is meaningless across a reload, and a tree-backed one
     /// would come back as a search nobody started.
     pub(super) meet: Arc<Mutex<Option<MeetRun>>>,
+    /// Did `initialize`'s synchronous read actually answer? On the Direct arm
+    /// the in-process store is authoritative, so a surface hydrated there is
+    /// fully hydrated and [`ShellModel::hydrate_durable`] has nothing to do.
+    pub(super) hydrated: Arc<AtomicBool>,
 }
 
 /// A running `meet` plus what this shell has already told the user about it, so
@@ -554,6 +560,7 @@ impl ShellModel {
             pending_out: Arc::new(Mutex::new(Vec::new())),
             tails: Arc::new(Mutex::new(Vec::new())),
             meet: Arc::new(Mutex::new(None)),
+            hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -568,8 +575,31 @@ impl ShellModel {
         crate::app_paths::window_state_path(crate::app_paths::APP_ID, &self.peer_id, self.window_id)
     }
 
-    /// Hydrate the in-memory mirror from the tree (or write defaults
-    /// if absent). Called once at factory time.
+    /// Hydrate the in-memory mirror from the tree, and seed a default if the
+    /// tree genuinely holds nothing. Called once at factory time.
+    ///
+    /// **Best-effort, and on the Worker arm it reads nothing** —
+    /// `Peers::get_entity` answers from the per-prefix cache mirror, which is
+    /// not primed for a path nobody has subscribed yet, and the window's own
+    /// subscription is registered after this runs. [`hydrate_durable`] is the
+    /// authoritative correction (AP41).
+    ///
+    /// # The else-branch used to be destructive, and that is the half that had
+    /// to be fixed here rather than deferred
+    ///
+    /// It was an unconditional `dispatch_write` of the default state. Every
+    /// other window in this class seeds through
+    /// [`Peers::seed_state_if_absent`], which is `put_if_absent` on wasm — a
+    /// real store-level op, so a missed *sync* read costs nothing. The Shell's
+    /// was not: on the Worker arm the sync read **always** misses, so opening a
+    /// Shell wrote the default over the persisted `wd`/`history`/`draft`. That
+    /// is data loss rather than lost session state, and no amount of repairing
+    /// the read later can undo it — by the time `hydrate_durable` runs the
+    /// bytes are already gone. AP36's rule applied to a seed: put the guard on
+    /// the decision (*is there really nothing here?*), never on the mirror read
+    /// that stands in for it.
+    ///
+    /// [`hydrate_durable`]: Self::hydrate_durable
     pub fn initialize(&mut self, peers: &Peers) {
         let path = self.state_path();
         if let Some(entity) = peers.get_entity(&self.peer_id, &path) {
@@ -578,9 +608,177 @@ impl ShellModel {
                 state.wd = format!("/{}/", self.peer_id);
             }
             *self.inner.lock().unwrap() = state;
+            self.hydrated.store(true, Ordering::SeqCst);
         } else {
-            peers.dispatch_write(&self.peer_id, path, self.inner.lock().unwrap().to_entity());
+            let default = self.inner.lock().unwrap().to_entity();
+            peers.seed_state_if_absent(&self.peer_id, path, default, "shell");
         }
+    }
+
+    /// Correct [`initialize`](Self::initialize)'s best-effort read with an
+    /// **authoritative, subscription-independent** one, and adopt the result.
+    ///
+    /// `Peers::get_entity_async` is an L1 round-trip on both arms (Direct: the
+    /// store, wrapped ready; Worker: a `Get` to the worker), so unlike the sync
+    /// read it does not depend on any prefix having been mirrored.
+    ///
+    /// # This one MERGES rather than assigns, and that is the whole difference
+    ///
+    /// `ShellState` holds persisted fields (`wd`, `history`, `history_cursor`,
+    /// `draft`, `saved_draft`) and one **session-only** field (`scrollback`,
+    /// which `to_entity` never writes) in a single struct behind a single
+    /// decode path. `*inner.lock() = ShellState::from_entity(&e)` — the shape
+    /// every other model in this class uses — would therefore adopt the
+    /// persisted half *and wipe whatever is on screen*, because `from_entity`
+    /// returns a state whose scrollback is empty by construction.
+    ///
+    /// That is AP41 pointed the other way: there we retained something we
+    /// should have re-read, here we would re-read over something we should have
+    /// retained. Both faces have the same rule underneath — **a surface's
+    /// session-only state is never reconstructed from a durable read** — and
+    /// the tactical form of it is to merge field-by-field. The structural form
+    /// is splitting `ShellState` in two, which is a larger change and is not
+    /// this fix.
+    ///
+    /// # The five outcomes
+    ///
+    /// * [`Hydration::Adopted`] — the tree held state and we merged it in.
+    /// * [`Hydration::NonePersisted`] — the tree **answered** and holds none,
+    ///   or holds another window type's state at our reused id (AP42). The
+    ///   default stands and **nothing is written**.
+    /// * [`Hydration::Unheard`] — the round-trip failed. Changed nothing. A
+    ///   read that cannot answer must never reset a surface to its default.
+    /// * [`Hydration::Superseded`] — the state changed during the await and is
+    ///   newer than this read.
+    /// * [`Hydration::AlreadyResolved`] — **not attempted**: the sync read
+    ///   already answered, which is the normal Direct-arm path. Distinct from
+    ///   `Superseded` since 2026-08-31, because the D13 line printed one word
+    ///   for both and an incident could not tell a healthy boot from a guard
+    ///   firing (AP40).
+    pub async fn hydrate_durable(&self, peers: &Peers) -> Hydration {
+        let Some(job) = self.hydration_job(peers) else {
+            return Hydration::AlreadyResolved;
+        };
+        job.await
+    }
+
+    /// [`hydrate_durable`](Self::hydrate_durable) for a caller that cannot
+    /// await — the window factory, which runs long after `boot_load` finished.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        if let Some(job) = self.hydration_job(peers) {
+            wasm_bindgen_futures::spawn_local(async move {
+                job.await;
+            });
+        }
+    }
+
+    /// Build the hydration future, or `None` if there is nothing to do.
+    ///
+    /// Everything the future needs is cloned/owned **before** it is created, so
+    /// it holds no borrow of the model or of `Peers` across the round-trip —
+    /// which is what lets the spawned form exist at all.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = Hydration> + 'static> {
+        if self.hydrated.load(Ordering::SeqCst) {
+            // The sync read already answered (Direct arm). Reported rather than
+            // returned silently — this is the happy path on the shipped arm and
+            // it was the one outcome nothing said anything about.
+            crate::window_hydration::report(
+                "shell",
+                &self.state_path(),
+                Hydration::AlreadyResolved,
+            );
+            return None;
+        }
+        // The "did the user move first" guard, and it is a WITNESS of the
+        // persisted half rather than a counter.
+        //
+        // The counter this replaced had to be bumped by every state mutator,
+        // and the first one written missed `handle_submit` — which changes
+        // `wd`/`history`/`draft` and does NOT persist (the *window* persists
+        // afterwards, in `handle_action`). So a command run during the await
+        // was still adopted over, which is precisely the failure the guard
+        // exists to stop. It was caught by the gate below rather than by
+        // review, and the lesson is the fix: a guard that every future call
+        // site has to remember is a guard that will be wrong again.
+        //
+        // `to_entity()` IS the canonical serialization of exactly the persisted
+        // fields, so this witness maintains itself — a field added to the
+        // persisted half is covered the day it is added, with no call site to
+        // update.
+        let witness = self.inner.lock().unwrap().to_entity().data;
+        let state_fut = peers.get_entity_async(&self.peer_id, &self.state_path());
+        let inner = self.inner.clone();
+        let hydrated = self.hydrated.clone();
+        let path = self.state_path();
+        let peer_id = self.peer_id.clone();
+        Some(async move {
+            let read = state_fut.await;
+            if inner.lock().unwrap().to_entity().data != witness {
+                // Something changed across the await. What is on screen is
+                // newer than this read; leave it alone. Deliberately NOT marked
+                // hydrated — the change is in memory, so there is nothing to
+                // adopt.
+                return crate::window_hydration::report(
+                    "shell",
+                    &path,
+                    Hydration::Superseded,
+                );
+            }
+            let outcome = match read {
+                // AP42: a reused window id means the entity in this slot may
+                // have been written by another window type. `from_entity`
+                // already guards on `entity_type`, but it reports the mismatch
+                // as `ShellState::initial("")` — which carries `wd == "//"` and
+                // a welcome line — so the guard is checked HERE instead, where
+                // "not ours" can be reported as what it is: no persisted state.
+                Ok(Some(entity)) if entity.entity_type == STATE_TYPE => {
+                    let persisted = ShellState::from_entity(&entity);
+                    let mut guard = inner.lock().unwrap();
+                    // Merge, never assign — `scrollback` is session-only and
+                    // stays exactly as it is. See this function's doc comment.
+                    guard.wd = if persisted.wd.is_empty() {
+                        format!("/{peer_id}/")
+                    } else {
+                        persisted.wd
+                    };
+                    guard.history = persisted.history;
+                    guard.history_cursor = persisted.history_cursor;
+                    guard.draft = persisted.draft;
+                    guard.saved_draft = persisted.saved_draft;
+                    drop(guard);
+                    hydrated.store(true, Ordering::SeqCst);
+                    tracing::info!(
+                        path = %path,
+                        "shell: adopted the persisted state from the durable tree"
+                    );
+                    Hydration::Adopted
+                }
+                Ok(_) => {
+                    // A real answer: nothing of ours here. The default stands,
+                    // and we write nothing — "you have no history" is not a
+                    // fact to record.
+                    hydrated.store(true, Ordering::SeqCst);
+                    Hydration::NonePersisted
+                }
+                Err(e) => {
+                    // NOT an answer. Change nothing, and say so — a silent
+                    // best-effort here is how a transient round-trip failure
+                    // reads as "this profile has no history" (AP30 (a)).
+                    tracing::warn!(
+                        path = %path,
+                        error = %e,
+                        "shell: durable state read failed — keeping the current state rather \
+                         than falling back to the default"
+                    );
+                    Hydration::Unheard
+                }
+            };
+            crate::window_hydration::report("shell", &path, outcome)
+        })
     }
 
     fn persist(&self, peers: &Peers) {
@@ -2337,6 +2535,194 @@ mod tests {
         assert_eq!(s2.saved_draft, s.saved_draft);
         // Scrollback NOT preserved.
         assert!(s2.scrollback.is_empty());
+    }
+
+    // ---- AP41 on the Shell — the durable hydration decision table ---------
+    //
+    // Direct-only on the native target, where the sync and async reads hit the
+    // SAME in-process store, so the arm-split that PRODUCES the defect is not
+    // reproducible here. A model built without `initialize` stands in for the
+    // un-hydrated surface, which on the Worker arm is every surface.
+    //
+    // **The destructive half is deliberately NOT gated here, and that is a
+    // statement rather than an omission.** `initialize`'s old else-branch wrote
+    // the default unconditionally; the repaired one seeds through
+    // `Peers::seed_state_if_absent`. The two differ *only* when the sync read
+    // disagrees with the store — which cannot happen natively, because there is
+    // one store and the read is authoritative. A native test here would pass
+    // identically before and after the fix (AP31: assert the consequence, and
+    // if the consequence is unreachable, say so instead of asserting something
+    // adjacent). Its gate is
+    // `a_shell_window_returns_to_its_working_directory_on_the_worker_arm`.
+
+    /// **P, and the one that is specific to this surface** — a persisted state
+    /// is adopted by a shell that has not read one, **and the scrollback
+    /// already on screen survives it.**
+    ///
+    /// The naive form of this fix (`*inner.lock() = ShellState::from_entity`,
+    /// which is what every other model in the class does) passes the first
+    /// assertions and fails the last: `from_entity` returns a state whose
+    /// scrollback is empty by construction, so adopting would blank the screen.
+    /// That is AP41 pointed the other way, and this is the assertion that pins
+    /// the difference. **Falsified 2026-08-31** by assigning instead of merging.
+    #[tokio::test]
+    async fn hydrate_adopts_persisted_state_without_wiping_the_scrollback() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let m = ShellModel::new(3, pid.clone());
+        // Deliberately NO `initialize` — the surface whose sync read answered
+        // nothing. `new` seeds the welcome line; this adds the row a user would
+        // recognise as their own output.
+        m.inner
+            .lock()
+            .unwrap()
+            .push(ScrollbackEntry::Info("output the user is looking at".into()));
+        let before = m.state_snapshot().scrollback.len();
+        assert_eq!(before, 2, "precondition: welcome line + one printed row");
+
+        let mut persisted = ShellState::initial(&pid);
+        persisted.wd = format!("/{pid}/system/");
+        persisted.record_submit("ls");
+        persisted.record_submit("pwd");
+        persisted.draft = "half-typ".into();
+        // `seed_write`, not `dispatch_write`: on Direct it is a sync L0 put, so
+        // the durable value is there before the read. `dispatch_write` spawns,
+        // and the read would race it — which would take this test through the
+        // `NonePersisted` branch and prove nothing.
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::Adopted);
+
+        let got = m.state_snapshot();
+        assert_eq!(got.wd, format!("/{pid}/system/"), "the persisted wd is adopted");
+        assert_eq!(got.history, vec!["ls", "pwd"], "so is the history");
+        assert_eq!(got.draft, "half-typ", "and the in-flight draft");
+        // The half that a whole-struct assignment gets wrong. Asserted on the
+        // ROW, not only the count: a count check alone would also pass on a
+        // shell that had happened to re-seed its welcome line.
+        assert_eq!(
+            got.scrollback.len(),
+            before,
+            "scrollback is session-only and must SURVIVE the adopt — a durable \
+             read that reconstructs it blanks what the user is reading"
+        );
+        assert!(
+            got.scrollback
+                .iter()
+                .any(|r| r.render_text().contains("output the user is looking at")),
+            "the row the user was reading is still there: {:?}",
+            got.scrollback
+        );
+    }
+
+    /// **N2 — absence of evidence changes nothing.** A shell with no persisted
+    /// state keeps its default, and does not write one down.
+    #[tokio::test]
+    async fn hydrate_with_nothing_persisted_keeps_the_default_and_writes_nothing() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let m = ShellModel::new(4, pid.clone());
+
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::NonePersisted);
+        assert_eq!(m.state_snapshot().wd, format!("/{pid}/"));
+        assert!(m.state_snapshot().history.is_empty());
+        assert!(
+            peers.get_entity(&pid, &m.state_path()).is_none(),
+            "hydration must not WRITE — it is a read that corrects an earlier read"
+        );
+    }
+
+    /// **N1 — a command run during the round-trip wins.** The durable value the
+    /// read is carrying is *older* than the screen, so adopting it would undo
+    /// what the user just did.
+    ///
+    /// **This gate caught the first version of its own guard, 2026-08-31.** That
+    /// one was a generation counter bumped in `persist`, and it stayed at zero
+    /// here: `handle_submit` changes `wd`/`history`/`draft` **without
+    /// persisting** (the window persists afterwards, from `handle_action`), so
+    /// the command was adopted over anyway and the test read `Adopted`. The
+    /// guard is now a witness of `to_entity()` — the canonical serialization of
+    /// the persisted half — which has no call site to remember and covers a new
+    /// field the day it is added.
+    #[tokio::test]
+    async fn a_command_run_during_the_read_is_not_clobbered() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let m = ShellModel::new(5, pid.clone());
+        let mut stale = ShellState::initial(&pid);
+        stale.wd = format!("/{pid}/stale-place/");
+        peers.seed_write(&pid, m.state_path(), stale.to_entity());
+
+        // The round-trip starts here...
+        let job = m.hydration_job(&peers).expect("un-hydrated shell has a job");
+        // ...and the user runs something before it lands.
+        m.handle_submit("pwd", &peers, 5, flag());
+        let moved = m.state_snapshot();
+
+        assert_eq!(job.await, Hydration::Superseded);
+        let after = m.state_snapshot();
+        assert_eq!(after.history, moved.history, "the newer command survives");
+        assert_ne!(
+            after.wd,
+            format!("/{pid}/stale-place/"),
+            "the older durable read must not drag the shell backwards"
+        );
+    }
+
+    /// **AP42, reported honestly.** Window ids restart at 1 and a reload is not
+    /// a close, so the entity in our slot may have been written by another
+    /// window type. `ShellState::from_entity` guards on `entity_type` — but it
+    /// reports the mismatch as `initial("")`, which carries `wd == "//"` and a
+    /// welcome line. Adopting *that* would be a worse answer than the default.
+    ///
+    /// So the guard is checked at the hydration boundary too, where "not ours"
+    /// can be reported as the fact it is: **no persisted state** (AP40 — the
+    /// arm that catches the unexpected input gets the weakest claim, not a
+    /// specific and wrong one).
+    #[tokio::test]
+    async fn another_window_types_state_in_our_slot_reads_as_no_persisted_state() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let m = ShellModel::new(6, pid.clone());
+        // The Knowledge Base held id 6 last session.
+        let foreign = Entity::new(
+            crate::views::knowledge_base::model::STATE_TYPE,
+            ShellState::initial(&pid).to_entity().data,
+        )
+        .expect("foreign state entity well-formed");
+        peers.seed_write(&pid, m.state_path(), foreign);
+
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::NonePersisted);
+        assert_eq!(
+            m.state_snapshot().wd,
+            format!("/{pid}/"),
+            "the shell's own default stands — NOT `initial(\"\")`'s `//`"
+        );
+    }
+
+    /// A shell whose SYNC read already answered — the Direct arm, whenever the
+    /// state is genuinely there — skips the round-trip entirely. Without this
+    /// the fix would put an L1 round-trip on every path that never needed one.
+    #[tokio::test]
+    async fn a_shell_whose_sync_read_answered_does_no_round_trip() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let mut m = ShellModel::new(7, pid.clone());
+        let mut persisted = ShellState::initial(&pid);
+        persisted.wd = format!("/{pid}/somewhere/");
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+        m.initialize(&peers);
+        assert_eq!(m.state_snapshot().wd, format!("/{pid}/somewhere/"));
+
+        assert!(
+            m.hydration_job(&peers).is_none(),
+            "an already-hydrated shell must not schedule a durable read"
+        );
+        // `AlreadyResolved`, not `Superseded`. They were one variant until
+        // 2026-08-31, and merging them meant the D13 line said "superseded" for
+        // a perfectly healthy Direct boot — the same word it uses when the
+        // user's own navigation beat the read. Two facts, two names (AP40).
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::AlreadyResolved);
     }
 
     #[test]

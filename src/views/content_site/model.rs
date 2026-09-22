@@ -217,52 +217,14 @@ fn build_sidebar(
     out
 }
 
-/// What an authoritative nav-state read actually established.
+/// What an authoritative durable read established — **moved to
+/// [`crate::window::Hydration`]** when AP41's fix became a class-level hook
+/// rather than this surface's private repair, and re-exported here so the
+/// existing call sites (and `SiteOverlay`) keep reading naturally.
 ///
-/// **Four outcomes, not a `bool`.** The first draft of this returned "did
-/// anything change", which merged *"the tree holds the user's location and we
-/// adopted it"* with *"the tree holds nothing, so we moved off the empty
-/// placeholder onto the configured default"* — two facts with the same answer,
-/// which is the conflation this repo has now spent a whole thread removing
-/// (`put_if_absent` for *did the user set this*, a presence check for *do I
-/// hold current bytes*, `home_is_local` for *may we read the document*). It
-/// mattered immediately: the boot log line would have reported an adoption on a
-/// profile that had never persisted a location.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hydration {
-    /// The tree held a location and this surface adopted it.
-    Adopted,
-    /// The tree **answered** and holds no location for this surface. The
-    /// configured default stands — and nothing is written, because "you have
-    /// no history" is not a thing to record.
-    NonePersisted,
-    /// Nothing was heard — the round-trip failed. **Changed nothing**, which is
-    /// the point: a read that cannot answer must never be able to reset a
-    /// surface to its default (AP30 corollary (a)).
-    Unheard,
-    /// Not attempted, or discarded on arrival: this surface was already
-    /// hydrated by the sync read, or a navigation landed while the read was in
-    /// flight and is newer than anything it could carry.
-    Superseded,
-}
-
-impl Hydration {
-    /// The one fact a caller may branch on: did the user's own persisted
-    /// location reach the screen?
-    pub fn adopted(self) -> bool {
-        matches!(self, Hydration::Adopted)
-    }
-
-    /// Short label for the D13 boot line.
-    pub fn label(self) -> &'static str {
-        match self {
-            Hydration::Adopted => "adopted",
-            Hydration::NonePersisted => "none-persisted",
-            Hydration::Unheard => "unheard",
-            Hydration::Superseded => "superseded",
-        }
-    }
-}
+/// The five outcomes and the reason it is not a `bool` are documented at the
+/// definition.
+pub use crate::window::Hydration;
 
 /// Persisted per-window navigation state: which location we're viewing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -534,11 +496,11 @@ impl ContentSiteModel {
     ///   would drag them backwards — the same shape as the user-themes
     ///   resurrection race in `tools/e2e/README.md`.
     ///
-    /// See [`Hydration`] for what the four outcomes mean and why this is not a
+    /// See [`Hydration`] for what the five outcomes mean and why this is not a
     /// `bool`.
     pub async fn hydrate_durable(&self, peers: &Peers) -> Hydration {
         let Some(job) = self.hydration_job(peers) else {
-            return Hydration::Superseded;
+            return Hydration::AlreadyResolved;
         };
         job.await
     }
@@ -570,7 +532,15 @@ impl ContentSiteModel {
         let generation = {
             let inner = self.inner.lock().unwrap();
             if inner.hydrated {
-                return None; // the sync read already answered (Direct arm)
+                // The sync read already answered (Direct arm). Reported rather
+                // than returned silently — this is the happy path on the shipped
+                // arm and it was the one outcome nothing said anything about.
+                crate::window_hydration::report(
+                    "content_site",
+                    &self.state_path,
+                    Hydration::AlreadyResolved,
+                );
+                return None;
             }
             inner.nav_generation
         };
@@ -602,17 +572,20 @@ impl ContentSiteModel {
                 // than this read; leave it alone. Deliberately NOT marked
                 // hydrated — the navigation is in memory and durable, so there
                 // is nothing left to adopt.
-                tracing::debug!(
-                    path = %state_path,
-                    "content_site: durable hydration discarded — navigated during the read"
+                return crate::window_hydration::report(
+                    "content_site",
+                    &state_path,
+                    Hydration::Superseded,
                 );
-                return Hydration::Superseded;
             }
             let outcome = match read {
                 Ok(Some(entity)) => {
                     let state = ContentSiteState::from_entity(&entity);
                     guard.state = state;
                     guard.hydrated = true;
+                    // The site id is worth its own line: `report` carries the
+                    // outcome, and WHICH page we came back to is a different
+                    // fact from THAT we came back to one.
                     tracing::info!(
                         path = %state_path,
                         site = %guard.state.site_id,
@@ -657,7 +630,7 @@ impl ContentSiteModel {
                     rp();
                 }
             }
-            outcome
+            crate::window_hydration::report("content_site", &state_path, outcome)
         })
     }
 
@@ -1399,7 +1372,11 @@ mod tests {
             m.hydration_job(&peers).is_none(),
             "an already-hydrated surface must not schedule a durable read"
         );
-        assert_eq!(m.hydrate_durable(&peers).await, Hydration::Superseded);
+        // `AlreadyResolved`, not `Superseded`. They were one variant until
+        // 2026-08-31, and merging them meant the D13 line said "superseded" for
+        // a perfectly healthy Direct boot — the same word it uses when the
+        // user's own navigation beat the read. Two facts, two names (AP40).
+        assert_eq!(m.hydrate_durable(&peers).await, Hydration::AlreadyResolved);
     }
 
     #[test]

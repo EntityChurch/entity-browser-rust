@@ -17,6 +17,7 @@
 //! No web-sys, no DOM imports.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use entity_entity::Entity;
@@ -241,6 +242,10 @@ pub struct EntityTreeModel {
     window_id: WindowId,
     peer_id: String,
     inner: Arc<Mutex<EntityTreeInner>>,
+    /// Did `initialize`'s synchronous read actually answer? On the Direct arm
+    /// the in-process store is authoritative, so a surface hydrated there needs
+    /// no round-trip (AP41).
+    hydrated: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for EntityTreeModel {
@@ -258,6 +263,7 @@ impl EntityTreeModel {
             window_id,
             peer_id,
             inner: Arc::new(Mutex::new(EntityTreeInner::new())),
+            hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -267,19 +273,103 @@ impl EntityTreeModel {
     /// the first delivered subscription event.
     pub fn initialize(&mut self, peers: &Peers) {
         self.ensure_state_in_tree(peers);
-        let persisted = self.read_window_state(peers);
-        let mut inner = self.inner.lock().unwrap();
+        // Best-effort: on the Worker arm this reads nothing, and on Direct-IDB
+        // it races the store filling from IndexedDB (AP41).
+        // `hydrate_durable` is the authoritative correction.
+        let persisted = self.read_window_state_opt(peers);
+        self.hydrated
+            .store(persisted.is_some(), std::sync::atomic::Ordering::SeqCst);
+        Self::apply_persisted(&self.inner, persisted.unwrap_or_default());
+    }
+
+    /// Adopt a decoded [`EntityTreeState`] into the live inner state.
+    ///
+    /// **A MERGE, and it has to be.** `EntityTreeInner` holds the persisted
+    /// fields alongside heavy session-only state — `root`, `known`,
+    /// `visible_rows`, `selected_entity` — so `*inner = ...` would destroy the
+    /// loaded tree and everything on screen. Only these four fields come from
+    /// the durable entity; the rest is rebuilt from subscription events.
+    ///
+    /// Shared by `initialize` and `hydrate_durable` so the two cannot drift
+    /// into adopting different subsets of the same state.
+    fn apply_persisted(inner: &Arc<Mutex<EntityTreeInner>>, persisted: EntityTreeState) {
+        let mut inner = inner.lock().unwrap();
         inner.current_path = persisted.current_path;
         inner.search = persisted.search;
         // Empty set means "no overrides; use defaults" — the per-event
         // `insert_or_update` path auto-expands nodes below
         // `AUTO_EXPAND_BELOW` as they arrive.
-        inner.pending_expand_restore =
-            Some(persisted.expanded_paths.into_iter().collect());
+        inner.pending_expand_restore = Some(persisted.expanded_paths.into_iter().collect());
         inner.selection_source = SelectionSource::parse(&persisted.selection_source);
         if inner.current_path.is_some() {
             inner.selected_dirty = true;
         }
+    }
+
+    /// The bytes of the persisted half **that the user can change** — the
+    /// witness `hydrate_durable` compares before and after its round-trip.
+    ///
+    /// # Why this is narrower than `persist_state` writes, which is the whole point
+    ///
+    /// The persisted form also carries `expanded_paths`, derived from the live
+    /// tree via `collect_expanded(&inner.root)`. That tree grows as
+    /// subscription events arrive — *including during the await*. A witness
+    /// over the full persisted form would therefore differ on almost every
+    /// round-trip, report `Superseded`, and this window would never hydrate at
+    /// all: a guard that always fires is the same as no guard, but silent.
+    ///
+    /// **A witness covers what the USER can change, not everything that happens
+    /// to be written down.** Losing `expanded_paths` from the comparison is
+    /// safe here because the adopt path does not overwrite the tree — it sets
+    /// `pending_expand_restore`, which `restore_expanded` applies *additively*.
+    fn hydration_witness(inner: &Arc<Mutex<EntityTreeInner>>) -> Vec<u8> {
+        let g = inner.lock().unwrap();
+        EntityTreeState {
+            current_path: g.current_path.clone(),
+            search: g.search.clone(),
+            expanded_paths: Vec::new(),
+            selection_source: g.selection_source.to_wire(),
+        }
+        .to_entity()
+        .data
+    }
+
+    /// AP41's correction, through the shared machinery
+    /// (`crate::window_hydration`), which owns the three traps.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = crate::window::Hydration> + 'static> {
+        let inner = self.inner.clone();
+        let w = self.inner.clone();
+        crate::window_hydration::durable_hydration_job(
+            peers,
+            &self.peer_id,
+            self.state_path(),
+            STATE_TYPE,
+            self.hydrated.clone(),
+            move || Self::hydration_witness(&w),
+            move |e| Self::apply_persisted(&inner, EntityTreeState::from_entity(e)),
+        )
+    }
+
+    #[cfg(test)]
+    pub async fn hydrate_durable(&self, peers: &Peers) -> crate::window::Hydration {
+        match self.hydration_job(peers) {
+            Some(job) => job.await,
+            None => crate::window::Hydration::AlreadyResolved,
+        }
+    }
+
+    /// [`hydration_job`](Self::hydration_job), driven in the background — the
+    /// window factory runs inside the synchronous frame loop and cannot await.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        crate::window_hydration::spawn_hydration(self.hydration_job(peers));
+    }
+
+    fn state_path(&self) -> String {
+        crate::app_paths::window_state_path(crate::app_paths::APP_ID, &self.peer_id, self.window_id)
     }
 
     /// Borrow the inner state behind the model's `Arc<Mutex>`. The
@@ -311,16 +401,24 @@ impl EntityTreeModel {
         );
     }
 
-    fn read_window_state(&self, peers: &Peers) -> EntityTreeState {
-        let path = crate::app_paths::window_state_path(
-            crate::app_paths::APP_ID,
-            &self.peer_id,
-            self.window_id,
-        );
+    /// The persisted state, and **whether the tree actually held ours**.
+    ///
+    /// `None` covers two cases that are one fact here: nothing at this path, or
+    /// another window type's entity in our reused slot (AP42 — and this is the
+    /// pair that was MEASURED, the Knowledge Base's `expanded_paths` landing
+    /// here). The type check has to be here rather than left to `from_entity`,
+    /// because that reports a mismatch as `Default` — indistinguishable from a
+    /// successful read of a default-valued state, which would make `hydrated`
+    /// claim an answer it never got.
+    fn read_window_state_opt(&self, peers: &Peers) -> Option<EntityTreeState> {
         peers
-            .get_entity(&self.peer_id, &path)
+            .get_entity(&self.peer_id, &self.state_path())
+            .filter(|e| e.entity_type == STATE_TYPE)
             .map(|e| EntityTreeState::from_entity(&e))
-            .unwrap_or_default()
+    }
+
+    fn read_window_state(&self, peers: &Peers) -> EntityTreeState {
+        self.read_window_state_opt(peers).unwrap_or_default()
     }
 
     fn persist_state(&self, peers: &Peers) {
@@ -840,6 +938,125 @@ mod tests {
 
     async fn flush_writes() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // ---- AP41: the two decisions that are THIS model's, not the shared ----
+    //
+    // The four-outcome decision table lives once, in `crate::window_hydration`.
+    // What is specific here is that `EntityTreeInner` mixes persisted fields
+    // with heavy session-only state, so the adopt has to merge — and that the
+    // witness has to be narrower than the persisted form. Both are tested,
+    // because both are the kind of thing a later refactor "simplifies".
+
+    /// **MERGE, not assign.** The tree, the visible rows and the selected
+    /// entity live in the same struct as the persisted fields. Adopting must
+    /// not touch them.
+    ///
+    /// Falsifier: replace `apply_persisted`'s body with a whole-inner assign
+    /// and this reds — there would be no loaded tree left.
+    #[tokio::test]
+    async fn hydrating_does_not_destroy_the_loaded_tree() {
+        let (peers, pid, path) = pm_with_entity();
+        let m = EntityTreeModel::new(1, pid.clone());
+        // Deliberately NO `initialize` — the surface whose sync read answered
+        // nothing, which on the Worker arm is every surface.
+        apply_change(&m.inner, ChangeOp::Put { path: path.clone() });
+        // `apply_change` builds `root` (via `insert_or_update`); `known` is the
+        // separate `refresh_mirror` bookkeeping and stays empty on this path.
+        // Count the tree the subscription actually delivered.
+        fn nodes(n: &TreeNode) -> usize {
+            1 + n.children.iter().map(nodes).sum::<usize>()
+        }
+        let loaded = nodes(&m.inner.lock().unwrap().root);
+        assert!(loaded > 1, "precondition: the mirror holds tree nodes");
+
+        let persisted = EntityTreeState {
+            current_path: Some(path.clone()),
+            search: "type:note".into(),
+            expanded_paths: vec![format!("/{pid}")],
+            selection_source: "app".into(),
+        };
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+
+        assert_eq!(
+            m.hydrate_durable(&peers).await,
+            crate::window::Hydration::Adopted
+        );
+
+        let inner = m.inner.lock().unwrap();
+        assert_eq!(inner.current_path.as_deref(), Some(path.as_str()));
+        assert_eq!(inner.search, "type:note");
+        assert_eq!(
+            nodes(&inner.root),
+            loaded,
+            "the loaded tree is session-only and must SURVIVE the adopt — \
+             a whole-struct assign would drop every node the subscription delivered"
+        );
+    }
+
+    /// **The witness excludes `expanded_paths`, and it has to.**
+    ///
+    /// That field is derived from the live tree (`collect_expanded(&root)`),
+    /// which grows as subscription events arrive — including *during* the
+    /// await. A witness over the full persisted form would differ on nearly
+    /// every round-trip and report `Superseded` forever, so this window would
+    /// never hydrate at all: a guard that always fires is the same as no guard,
+    /// but silent.
+    ///
+    /// Falsifier: put `expanded_paths: collect_expanded(&g.root).into_iter().collect()`
+    /// into `hydration_witness` and this reds with `Superseded`.
+    #[tokio::test]
+    async fn a_tree_event_during_the_read_does_not_count_as_the_user_moving() {
+        let (peers, pid, path) = pm_with_entity();
+        let m = EntityTreeModel::new(2, pid.clone());
+        let persisted = EntityTreeState {
+            current_path: Some(path.clone()),
+            search: String::new(),
+            expanded_paths: Vec::new(),
+            selection_source: String::new(),
+        };
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+
+        // The round-trip starts here...
+        let job = m.hydration_job(&peers).expect("un-hydrated surface has a job");
+        // ...and a subscription event lands while it is in flight. This is not
+        // the user doing anything; it is the tree filling in.
+        apply_change(&m.inner, ChangeOp::Put { path: path.clone() });
+
+        assert_eq!(
+            job.await,
+            crate::window::Hydration::Adopted,
+            "a tree event is not a user change — hydration must still land"
+        );
+        assert_eq!(
+            m.inner.lock().unwrap().current_path.as_deref(),
+            Some(path.as_str())
+        );
+    }
+
+    /// The other half of the same rule: a change the USER made still wins.
+    /// Without this, the narrowed witness above could be narrowed to nothing.
+    #[tokio::test]
+    async fn a_user_change_during_the_read_still_wins() {
+        let (peers, pid, path) = pm_with_entity();
+        let m = EntityTreeModel::new(3, pid.clone());
+        let persisted = EntityTreeState {
+            current_path: Some(path.clone()),
+            search: "stale-search".into(),
+            expanded_paths: Vec::new(),
+            selection_source: String::new(),
+        };
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+
+        let job = m.hydration_job(&peers).expect("job");
+        m.inner.lock().unwrap().search = "what-the-user-just-typed".into();
+
+        assert_eq!(job.await, crate::window::Hydration::Superseded);
+        assert_eq!(
+            m.inner.lock().unwrap().search,
+            "what-the-user-just-typed",
+            "the older durable read must not drag the user backwards"
+        );
     }
 
     #[test]

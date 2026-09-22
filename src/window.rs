@@ -28,6 +28,72 @@ pub fn new_closure_vec() -> ClosureVec {
     std::rc::Rc::new(std::cell::RefCell::new(Vec::new()))
 }
 
+/// What an authoritative durable read of a surface's persisted state actually
+/// established.
+///
+/// **Four outcomes, not a `bool`.** The first draft of this (on the content-site
+/// surface, where it was earned) returned "did anything change", which merged
+/// *"the tree holds the user's state and we adopted it"* with *"the tree holds
+/// nothing, so we moved off the empty placeholder onto the configured
+/// default"* — two facts with the same answer, which is the conflation this
+/// repo has spent a whole thread removing (`put_if_absent` for *did the user
+/// set this*, a presence check for *do I hold current bytes*, `home_is_local`
+/// for *may we read the document*). It mattered immediately: the boot log line
+/// would have reported an adoption on a profile that had never persisted one.
+///
+/// Lives here rather than in `views::content_site` because
+/// [`WindowView::hydrate_durable`] made it the class's vocabulary — every
+/// window that repairs an AP41 read reports in these terms, and a second copy
+/// of the enum is how two windows come to mean different things by
+/// `NonePersisted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hydration {
+    /// The tree held state and this surface adopted it.
+    Adopted,
+    /// The tree **answered** and holds no state for this surface. The
+    /// configured default stands — and nothing is written, because "you have
+    /// no history" is not a thing to record.
+    NonePersisted,
+    /// Nothing was heard — the round-trip failed. **Changed nothing**, which is
+    /// the point: a read that cannot answer must never be able to reset a
+    /// surface to its default (AP30 corollary (a)).
+    Unheard,
+    /// A user-driven change landed while the read was in flight and is newer
+    /// than anything it could carry, so it was discarded on arrival.
+    Superseded,
+    /// **Not attempted** — the construction-time synchronous read already
+    /// answered, so there was nothing to correct. The normal, healthy Direct-arm
+    /// path.
+    ///
+    /// This used to be [`Superseded`](Self::Superseded) too, and that was AP40
+    /// in the reporting layer: *"the read you already had was fine"* and *"you
+    /// moved while we were reading"* are different facts about different
+    /// situations, and the D13 line printed the same word for both — so an
+    /// incident could not tell a healthy boot from one where the guard fired.
+    /// Found 2026-08-31 by writing the window-surface gate, whose log assertion
+    /// failed on the Direct arm because this case reported **nothing at all**.
+    AlreadyResolved,
+}
+
+impl Hydration {
+    /// The one fact a caller may branch on: did the user's own persisted state
+    /// reach the screen?
+    pub fn adopted(self) -> bool {
+        matches!(self, Hydration::Adopted)
+    }
+
+    /// Short label for the D13 boot line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Hydration::Adopted => "adopted",
+            Hydration::NonePersisted => "none-persisted",
+            Hydration::Unheard => "unheard",
+            Hydration::Superseded => "superseded",
+            Hydration::AlreadyResolved => "already-resolved",
+        }
+    }
+}
+
 /// A window view that renders into web-sys DOM.
 #[allow(dead_code)]
 pub trait WindowView {
@@ -70,6 +136,52 @@ pub trait WindowView {
     /// Handle an action targeted at this window.
     /// Peers provides tree access for entity-backed state.
     fn handle_action(&mut self, action: &Action, peers: &Peers);
+
+    /// Adopt this window's persisted state from the **durable tree**,
+    /// correcting the best-effort synchronous read its factory did at
+    /// construction. Default: no-op.
+    ///
+    /// # Why every window needs this offered to it — AP41
+    ///
+    /// Every window factory here calls `model.initialize(peers)` before it
+    /// subscribes, and `initialize` reads with `Peers::get_entity`, which
+    /// answers from the **per-prefix cache mirror**. On the Worker arm that
+    /// mirror is never primed for a path nobody has subscribed yet, so the read
+    /// returns `None` on a warm boot with perfectly good persisted state; on
+    /// the shipped Direct-IDB arm it *races* the store filling from IndexedDB
+    /// (measured as a 1-in-3 flake). **Reordering does not fix it** — `observe`
+    /// is async, so a subscription makes the *next* read work and a constructor
+    /// that caches has no next read. The bug is the retention, not the read.
+    ///
+    /// # Why the call site is [`WindowManager::spawn`] and not each factory
+    ///
+    /// The content-site repair originally called its own
+    /// `spawn_hydrate_durable` from inside its factory, which made *"windows
+    /// get a hydrate step"* something the next window author had to remember.
+    /// Calling it from `spawn` makes it structural, and gives AP41 the
+    /// class-level enforcement point it previously lacked (it had one only for
+    /// `content_site`).
+    ///
+    /// # What an override owes, and what it must not share
+    ///
+    /// Fire-and-forget: this is sync because a window is constructed long after
+    /// `boot_load` has finished awaiting things, so an override spawns its own
+    /// round-trip and adopts through its `Arc<Mutex<_>>`. Two traps that do
+    /// **not** generalise, which is why this is a hook and not a helper:
+    ///
+    /// * **An errored round-trip is not an answer** — keep what you have
+    ///   ([`Hydration::Unheard`]). A cache that drops what it cannot re-verify
+    ///   turns a hiccup into a lost session (AP30 corollary (a)).
+    /// * **A change that lands during the await is newer than it** — guard, or
+    ///   you drag the user backwards ([`Hydration::Superseded`]). A shared
+    ///   helper that skipped this would reintroduce the user-themes
+    ///   resurrection race in every window at once.
+    ///
+    /// And one that is specific to any surface holding session-only display
+    /// state: **merge, do not replace.** The Shell's `scrollback` is
+    /// deliberately not persisted, so assigning a decoded state over the live
+    /// one would wipe what is on screen — AP41 pointed the other way.
+    fn hydrate_durable(&self, _peers: &Peers) {}
 
     /// Per-frame tick, called on every rAF frame (not gated by the dirty
     /// flag, unlike [`render_dom`](Self::render_dom)). Default: no-op. Windows
@@ -239,6 +351,31 @@ pub struct WindowManager {
     pub windows: Vec<WindowInstance>,
     next_id: WindowId,
     pub types: Vec<WindowType>,
+    /// `(type_name, peer_id)` → the id that pair held last session, from the
+    /// durable window index. A pair present here re-opens onto **its own** id
+    /// instead of the next ordinal, which is what makes
+    /// `window_state_path` land on this window's own state regardless of the
+    /// order the user re-opens things in. Consumed as claims are taken — an
+    /// entry is good for one window.
+    ///
+    /// Empty is the correct cold state and the correct *failed-read* state:
+    /// no claims means "allocate fresh", which is exactly the pre-index
+    /// behaviour. See [`crate::window_index`].
+    claims: std::collections::HashMap<(String, String), WindowId>,
+    /// Previous-session entries whose window has **not** been re-opened yet.
+    ///
+    /// These are re-emitted into the durable index alongside the live windows,
+    /// and that is not bookkeeping — it is the difference between the feature
+    /// working and it deleting people's state. The index is rewritten from the
+    /// live set, and a boot where the user opens nothing has an empty live set;
+    /// without this, that boot would persist an empty index and the *next*
+    /// boot's sweep would find every slot unreachable and delete it. A window
+    /// nobody re-opened is not a window that was closed.
+    ///
+    /// An entry leaves here exactly when its window re-opens (it becomes live)
+    /// or when that window is explicitly closed (which already deletes its
+    /// state). So the set shrinks on use and never on absence.
+    retained: Vec<crate::window_index::WindowIndexEntry>,
 }
 
 impl WindowManager {
@@ -247,7 +384,76 @@ impl WindowManager {
             windows: Vec::new(),
             next_id: 1,
             types: Vec::new(),
+            claims: std::collections::HashMap::new(),
+            retained: Vec::new(),
         }
+    }
+
+    /// Install the previous session's window index: its claims, and the floor
+    /// its ids put under fresh allocation.
+    ///
+    /// **The floor is raised, never lowered.** `adopt_index` can be reached
+    /// after windows already exist (a second peer's index, a late read), and
+    /// dropping `next_id` back would hand out an id a live window is holding.
+    pub fn adopt_index(&mut self, index: &crate::window_index::WindowIndex) {
+        self.claims.extend(index.claims());
+        self.retained.extend(index.entries.iter().cloned());
+        self.next_id = self.next_id.max(index.next_id_floor());
+    }
+
+    /// The id the next unclaimed window will take. Reported on the boot line,
+    /// and the thing the index's whole floor argument is about.
+    pub fn peek_next_id(&self) -> WindowId {
+        self.next_id
+    }
+
+    /// Raise the fresh-id floor without installing any claims — the
+    /// `NoIndex` / `Malformed` / `Unheard` path.
+    ///
+    /// A boot that could not read an index still knows which slots are
+    /// *occupied* (it can list them), and allocating above them is strictly
+    /// safer than starting at 1: it is what keeps a first-boot-after-upgrade
+    /// profile from opening a window straight onto pre-index state that no
+    /// claim can vouch for.
+    pub fn raise_id_floor(&mut self, floor: WindowId) {
+        self.next_id = self.next_id.max(floor);
+    }
+
+    /// The set of window slots that hold state worth keeping: the open windows,
+    /// plus every previous-session slot nobody has re-opened yet.
+    ///
+    /// This is the **witness** the persist path compares against, per AP44:
+    /// nothing has to remember to announce a spawn or a close, because the
+    /// answer is derived from `self.windows` every time it is asked. A future
+    /// code path that creates or destroys a window is covered the day it is
+    /// added, which a notification-based trigger would not be — the Shell's
+    /// generation counter read zero in the very test written to exercise it.
+    pub fn durable_index(&self) -> crate::window_index::WindowIndex {
+        let mut entries: Vec<crate::window_index::WindowIndexEntry> = self
+            .windows
+            .iter()
+            .filter(|w| w.open)
+            .map(|w| crate::window_index::WindowIndexEntry {
+                id: w.id,
+                type_name: w.view.type_name().to_string(),
+                peer_id: w.view.peer_id().to_string(),
+            })
+            .collect();
+        entries.extend(self.retained.iter().cloned());
+        // Stable order so a byte-comparison witness does not see a change that
+        // is only a reordering — the whole persist path is "did these bytes
+        // move", and `windows` is a Vec whose order is spawn order.
+        entries.sort_by_key(|e| e.id);
+        crate::window_index::WindowIndex { entries }
+    }
+
+    /// Drop any retained (not-yet-re-opened) index entry for this id.
+    ///
+    /// Called when a window is explicitly closed, which is also when its
+    /// per-window state is deleted — the two have to move together or the index
+    /// would keep advertising a slot whose state is gone.
+    pub fn forget_retained(&mut self, id: WindowId) {
+        self.retained.retain(|e| e.id != id);
     }
 
     /// Register a window type that can be spawned from the command palette.
@@ -260,9 +466,37 @@ impl WindowManager {
         // Resolve legacy keys (e.g. a boot-surface saved before a type rename).
         let type_name = canonical_window_type(type_name);
         let factory = self.types.iter().find(|t| t.name == type_name)?;
-        let id = self.next_id;
-        self.next_id += 1;
+        // Claim this `(type, peer)` pair's id from the previous session if it
+        // has one, so the factory's `window_state_path` addresses this window's
+        // OWN state. Without it the id is a bare ordinal and which state a
+        // window lands on is decided by re-open order (see `window_index`).
+        let id = match self.claims.remove(&(type_name.to_string(), peer_id.to_string())) {
+            Some(claimed) => {
+                tracing::info!(
+                    window_type = %type_name,
+                    peer_id = %peer_id,
+                    window_id = claimed,
+                    "window claimed its previous session's slot"
+                );
+                // It is live now, so it is no longer a retained slot — leaving
+                // it would double-list the id in the durable index.
+                self.retained.retain(|e| e.id != claimed);
+                claimed
+            }
+            None => {
+                let fresh = self.next_id;
+                self.next_id += 1;
+                fresh
+            }
+        };
         let view = (factory.create)(id, peer_id, peers);
+        // Correct the factory's synchronous `initialize` read with an
+        // authoritative one (AP41). Structural rather than per-factory on
+        // purpose: this is the class's enforcement point, so a new window type
+        // that retains a sync read is covered by overriding one trait method
+        // instead of by remembering to add a call here. Default is a no-op, so
+        // this costs nothing for the windows that persist nothing.
+        view.hydrate_durable(peers);
         self.windows.push(WindowInstance {
             id,
             open: true,
@@ -351,6 +585,298 @@ mod tests {
         Peers::new_direct()
     }
 
+    // -- Window-index fixtures ------------------------------------------------
+    //
+    // Two *distinct* window types that both persist state and both report a
+    // bound peer — the configuration the index exists for. `DummyView` above
+    // cannot serve: its `type_name` is a fixed literal and it never overrides
+    // `peer_id`, so every window it makes is the same `(type, peer)` pair and
+    // claiming would be untestable against it.
+
+    struct TypedDummy {
+        type_name: &'static str,
+        peer_id: String,
+        watch: crate::window_watch::WindowWatch,
+    }
+
+    impl WindowView for TypedDummy {
+        fn title(&self) -> String {
+            self.type_name.to_string()
+        }
+        fn type_name(&self) -> &'static str {
+            self.type_name
+        }
+        fn peer_id(&self) -> &str {
+            &self.peer_id
+        }
+        fn watch(&self) -> &crate::window_watch::WindowWatch {
+            &self.watch
+        }
+        fn handle_action(&mut self, _action: &Action, _peers: &Peers) {}
+    }
+
+    fn make_alpha(_id: WindowId, peer_id: &str, _p: &Peers) -> Box<dyn WindowView> {
+        Box::new(TypedDummy {
+            type_name: "Alpha",
+            peer_id: peer_id.to_string(),
+            watch: crate::window_watch::WindowWatch::new(),
+        })
+    }
+
+    fn make_beta(_id: WindowId, peer_id: &str, _p: &Peers) -> Box<dyn WindowView> {
+        Box::new(TypedDummy {
+            type_name: "Beta",
+            peer_id: peer_id.to_string(),
+            watch: crate::window_watch::WindowWatch::new(),
+        })
+    }
+
+    fn indexed_manager() -> WindowManager {
+        let mut mgr = WindowManager::new();
+        mgr.register_type(WindowType {
+            name: "Alpha",
+            description: "Test window A",
+            scope: WindowScope::System,
+            create: make_alpha,
+        });
+        mgr.register_type(WindowType {
+            name: "Beta",
+            description: "Test window B",
+            scope: WindowScope::System,
+            create: make_beta,
+        });
+        mgr
+    }
+
+    /// **The defect, and the falsifier for the claim the whole feature rests
+    /// on.** Without an index, which persisted state a re-opened window lands
+    /// on is decided by the order the user re-opens windows in — nothing about
+    /// the window itself.
+    ///
+    /// Last session: Alpha=1, Beta=2. This session the user opens **Beta
+    /// first**. It draws ordinal 1 and addresses Alpha's slot; Beta's own state,
+    /// at 2, is unreachable for the rest of the session.
+    ///
+    /// This is the control. It asserts today-without-the-index behaviour on
+    /// purpose, so the test below is measuring a repair rather than restating
+    /// an implementation.
+    #[test]
+    fn without_an_index_a_reopened_window_lands_on_whichever_slot_its_ordinal_draws() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let mut mgr = indexed_manager();
+
+        let beta = mgr.spawn("Beta", &pid, &peers).expect("spawn");
+        assert_eq!(
+            beta, 1,
+            "a fresh manager hands out ordinal 1 regardless of which type asks"
+        );
+        assert_eq!(
+            crate::app_paths::window_state_path(crate::app_paths::APP_ID, &pid, beta),
+            crate::app_paths::window_state_path(crate::app_paths::APP_ID, &pid, 1),
+            "Beta is addressing the slot Alpha wrote last session"
+        );
+    }
+
+    /// **The repair.** With the previous session's index adopted, Beta re-opens
+    /// onto Beta's slot no matter what order it is opened in — and Alpha, opened
+    /// second, still gets its own.
+    ///
+    /// Both orders are asserted in one test on purpose: the property is
+    /// *order-independence*, and checking one order would pass for a fix that
+    /// merely permuted the bug.
+    #[test]
+    fn an_adopted_index_gives_each_window_its_own_slot_in_either_reopen_order() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let prior = crate::window_index::WindowIndex {
+            entries: vec![
+                crate::window_index::WindowIndexEntry {
+                    id: 1,
+                    type_name: "Alpha".into(),
+                    peer_id: pid.clone(),
+                },
+                crate::window_index::WindowIndexEntry {
+                    id: 2,
+                    type_name: "Beta".into(),
+                    peer_id: pid.clone(),
+                },
+            ],
+        };
+
+        // Beta first — the order that breaks without the index.
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&prior);
+        assert_eq!(mgr.spawn("Beta", &pid, &peers), Some(2));
+        assert_eq!(mgr.spawn("Alpha", &pid, &peers), Some(1));
+
+        // Alpha first — the order that happened to work anyway.
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&prior);
+        assert_eq!(mgr.spawn("Alpha", &pid, &peers), Some(1));
+        assert_eq!(mgr.spawn("Beta", &pid, &peers), Some(2));
+    }
+
+    /// A claim is good for **one** window. A second window of the same
+    /// `(type, peer)` pair gets a fresh id above every id the index knew — it
+    /// must not be handed the first one's state, and it must not be handed a
+    /// slot some other retained entry is sitting on.
+    #[test]
+    fn a_second_window_of_a_claimed_pair_gets_a_fresh_id_above_the_index() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&crate::window_index::WindowIndex {
+            entries: vec![
+                crate::window_index::WindowIndexEntry {
+                    id: 1,
+                    type_name: "Alpha".into(),
+                    peer_id: pid.clone(),
+                },
+                crate::window_index::WindowIndexEntry {
+                    id: 6,
+                    type_name: "Beta".into(),
+                    peer_id: pid.clone(),
+                },
+            ],
+        });
+        assert_eq!(mgr.spawn("Alpha", &pid, &peers), Some(1), "claims its slot");
+        assert_eq!(
+            mgr.spawn("Alpha", &pid, &peers),
+            Some(7),
+            "the second Alpha allocates above id 6, not onto it"
+        );
+    }
+
+    /// Same type, **different peer**, is a different window. The claim key is
+    /// the pair, and a peer-scoped window opened for peer B must not take the
+    /// slot peer A's window of the same type left behind — their state lives in
+    /// different trees, so adopting it would be a cross-peer read.
+    ///
+    /// **Both halves are asserted in one manager on purpose.** The refusal
+    /// alone is satisfied by the id floor, so on its own it passes with claiming
+    /// deleted entirely — measured, and exactly the "green by fallback" shape
+    /// this repo has already shipped once. Claiming the *matching* pair right
+    /// after is what makes the refusal mean something.
+    #[test]
+    fn a_claim_does_not_cross_peers() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&crate::window_index::WindowIndex {
+            entries: vec![
+                crate::window_index::WindowIndexEntry {
+                    id: 3,
+                    type_name: "Alpha".into(),
+                    peer_id: "SOME-OTHER-PEER".into(),
+                },
+                crate::window_index::WindowIndexEntry {
+                    id: 5,
+                    type_name: "Beta".into(),
+                    peer_id: pid.clone(),
+                },
+            ],
+        });
+        assert_eq!(
+            mgr.spawn("Alpha", &pid, &peers),
+            Some(6),
+            "another peer's Alpha slot is not ours to claim; allocate above the index"
+        );
+        assert_eq!(
+            mgr.spawn("Beta", &pid, &peers),
+            Some(5),
+            "and a pair that DOES match still claims — without this the assertion \
+             above passes with claiming removed altogether"
+        );
+    }
+
+    /// **The data-loss guard.** A boot where the user re-opens nothing must not
+    /// persist an empty index — the next boot's sweep would read that as "every
+    /// slot is unreachable" and delete state nobody closed.
+    ///
+    /// A window nobody re-opened is not a window that was closed.
+    #[test]
+    fn an_unopened_prior_window_stays_in_the_index() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let mut mgr = indexed_manager();
+        let prior = crate::window_index::WindowIndex {
+            entries: vec![crate::window_index::WindowIndexEntry {
+                id: 1,
+                type_name: "Alpha".into(),
+                peer_id: pid.clone(),
+            }],
+        };
+        mgr.adopt_index(&prior);
+
+        assert_eq!(
+            mgr.durable_index(),
+            prior,
+            "with no window re-opened, the index must still name the slot"
+        );
+
+        // Re-opening it moves it from retained to live — the same entry, not a
+        // second one.
+        mgr.spawn("Alpha", &pid, &peers).expect("spawn");
+        assert_eq!(
+            mgr.durable_index(),
+            prior,
+            "a claimed slot is listed once, as a live window"
+        );
+    }
+
+    /// Closing a window that was never re-opened this session drops its slot.
+    /// The `CloseWindow` path deletes the state; the index has to stop
+    /// advertising it in the same breath or it points at nothing.
+    #[test]
+    fn forgetting_a_retained_slot_removes_it_from_the_index() {
+        let pid = "PEER1".to_string();
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&crate::window_index::WindowIndex {
+            entries: vec![
+                crate::window_index::WindowIndexEntry {
+                    id: 1,
+                    type_name: "Alpha".into(),
+                    peer_id: pid.clone(),
+                },
+                crate::window_index::WindowIndexEntry {
+                    id: 2,
+                    type_name: "Beta".into(),
+                    peer_id: pid.clone(),
+                },
+            ],
+        });
+        mgr.forget_retained(1);
+        let ids: Vec<WindowId> = mgr.durable_index().entries.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![2]);
+    }
+
+    /// The index is a byte-comparison witness, so its ordering has to be
+    /// stable — `windows` is in spawn order and `retained` in index order, and
+    /// a set that merely reordered would look like a change and rewrite every
+    /// frame.
+    #[test]
+    fn the_durable_index_is_ordered_by_id_whatever_order_windows_arrived_in() {
+        let peers = test_peers();
+        let pid = peers.primary_peer_id().to_string();
+        let mut mgr = indexed_manager();
+        mgr.adopt_index(&crate::window_index::WindowIndex {
+            entries: vec![crate::window_index::WindowIndexEntry {
+                id: 9,
+                type_name: "Beta".into(),
+                peer_id: pid.clone(),
+            }],
+        });
+        mgr.spawn("Alpha", &pid, &peers).expect("spawn");
+        let ids: Vec<WindowId> = mgr.durable_index().entries.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![9, 10]);
+        assert_eq!(
+            mgr.durable_index().to_entity().data,
+            mgr.durable_index().to_entity().data,
+            "the witness must be stable across calls"
+        );
+    }
+
     #[test]
     fn spawn_creates_instance() {
         let peers = test_peers();
@@ -359,6 +885,129 @@ mod tests {
         let id = mgr.spawn("Dummy", peers.primary_peer_id(), &peers).unwrap();
         assert_eq!(mgr.open_count(), 1);
         assert!(mgr.get(id).is_some());
+    }
+
+    /// **AP41's class-level enforcement point.** Every window `spawn` creates is
+    /// offered the durable-hydration step, so a window type that retains a
+    /// synchronous `initialize` read is repaired by overriding one trait method
+    /// — not by remembering to add a call to its own factory, which is what the
+    /// content-site fix originally required and what would have left the next
+    /// window author to rediscover the defect.
+    ///
+    /// **Falsified 2026-08-31:** commenting out `view.hydrate_durable(peers)` in
+    /// `spawn` reds this. That is the whole point of the test — the default
+    /// implementation is a no-op, so nothing else in the suite can notice
+    /// whether the call site exists.
+    /// **Five outcomes, five words** — the guard against re-merging any two of
+    /// them at the reporting layer.
+    ///
+    /// `AlreadyResolved` and `Superseded` *were* one variant, and the D13 line
+    /// printed `superseded` for a healthy Direct-arm boot where the
+    /// construction read simply answered — the same word it prints when the
+    /// user's own navigation beat the read. An incident reading that log could
+    /// not tell the normal path from the guard firing. This is AP40's rule in
+    /// its cheapest enforceable form: a collapsed value is only split once, and
+    /// the split has to stay split.
+    ///
+    /// It is a label test rather than a semantic one because the semantics are
+    /// pinned where they happen — `a_shell_whose_sync_read_answered_does_no_round_trip`
+    /// and `a_surface_the_sync_read_hydrated_does_no_round_trip` assert
+    /// `AlreadyResolved`; `a_navigation_during_the_read_is_not_clobbered` and
+    /// `state_changed_during_the_read_is_not_clobbered` assert `Superseded`.
+    /// What no test covered was the two of them collapsing back into one
+    /// *report*, which is where the defect actually lived.
+    #[test]
+    fn every_hydration_outcome_has_its_own_word() {
+        let all = [
+            Hydration::Adopted,
+            Hydration::NonePersisted,
+            Hydration::Unheard,
+            Hydration::Superseded,
+            Hydration::AlreadyResolved,
+        ];
+        let mut labels: Vec<&str> = all.iter().map(|h| h.label()).collect();
+        let before = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(
+            labels.len(),
+            before,
+            "two hydration outcomes report the same word, so the D13 line cannot \
+             tell them apart: {labels:?}"
+        );
+        assert_eq!(
+            before, 5,
+            "a hydration outcome was added or removed without updating this test — \
+             which is the test's job, since a new outcome with a duplicated label \
+             would otherwise pass"
+        );
+        // The one fact a caller may branch on stays exactly one fact.
+        assert!(Hydration::Adopted.adopted());
+        for h in all.iter().filter(|h| **h != Hydration::Adopted) {
+            assert!(!h.adopted(), "{h:?} must not read as the user's state reaching the screen");
+        }
+    }
+
+    #[test]
+    fn spawn_offers_every_window_the_durable_hydration_step() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        struct HydratingView {
+            watch: crate::window_watch::WindowWatch,
+        }
+        impl WindowView for HydratingView {
+            fn title(&self) -> String {
+                "Hydrating".into()
+            }
+            fn type_name(&self) -> &'static str {
+                "Hydrating"
+            }
+            fn watch(&self) -> &crate::window_watch::WindowWatch {
+                &self.watch
+            }
+            fn hydrate_durable(&self, _peers: &Peers) {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+            }
+            fn handle_action(&mut self, _action: &Action, _peers: &Peers) {}
+            #[cfg(target_arch = "wasm32")]
+            fn render_dom(
+                &self,
+                _c: &web_sys::Element,
+                _s: &Peers,
+                _x: &crate::dom::util::DomCtx,
+            ) {
+            }
+        }
+
+        let peers = test_peers();
+        let mut mgr = WindowManager::new();
+        mgr.register_type(WindowType {
+            name: "Hydrating",
+            description: "Test window that records its hydration",
+            scope: WindowScope::System,
+            create: |_id, _peer_id, _pm| {
+                Box::new(HydratingView {
+                    watch: crate::window_watch::WindowWatch::new(),
+                })
+            },
+        });
+
+        let before = CALLS.load(Ordering::SeqCst);
+        mgr.spawn("Hydrating", peers.primary_peer_id(), &peers)
+            .unwrap();
+        assert_eq!(
+            CALLS.load(Ordering::SeqCst),
+            before + 1,
+            "spawn must offer the durable-hydration step to the window it created"
+        );
+
+        // And once per window, not once per manager: a second spawn is a second
+        // surface with its own un-hydrated read to correct.
+        mgr.spawn("Hydrating", peers.primary_peer_id(), &peers)
+            .unwrap();
+        assert_eq!(CALLS.load(Ordering::SeqCst), before + 2);
     }
 
     #[test]

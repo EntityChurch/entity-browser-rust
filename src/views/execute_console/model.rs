@@ -8,6 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use entity_entity::Entity;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::peers::Peers;
 
 use crate::views::{EventCategory, EventEntry};
@@ -144,6 +146,10 @@ pub struct ExecuteConsoleModel {
     window_id: WindowId,
     peer_id: String,
     inner: Arc<Mutex<ExecuteState>>,
+    /// Did `initialize`'s synchronous read actually answer? On the Direct arm
+    /// the in-process store is authoritative, so a surface hydrated there needs
+    /// no round-trip (AP41).
+    hydrated: Arc<AtomicBool>,
     /// Cached handler list keyed by which peer it was fetched against.
     /// Direct mode populates this synchronously via `refresh_handlers`;
     /// Worker mode populates it via an async dispatch through the
@@ -163,6 +169,7 @@ impl ExecuteConsoleModel {
             handlers: Arc::new(Mutex::new(Vec::new())),
             handlers_for_peer: Arc::new(Mutex::new(None)),
             event_log: crate::event_log_cache::EventLogCache::new(),
+            hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -174,8 +181,51 @@ impl ExecuteConsoleModel {
 
     pub fn initialize(&mut self, peers: &Peers) {
         self.ensure_state_in_tree(peers);
-        let state = self.read_window_state(peers);
-        *self.inner.lock().unwrap() = state;
+        // Best-effort: on the Worker arm this reads nothing, and on Direct-IDB
+        // it races the store filling from IndexedDB (AP41).
+        // `hydrate_durable` is the authoritative correction.
+        let persisted = self.read_window_state_opt(peers);
+        self.hydrated.store(persisted.is_some(), Ordering::SeqCst);
+        *self.inner.lock().unwrap() = persisted.unwrap_or_default();
+    }
+
+    /// AP41's correction, through the shared machinery
+    /// (`crate::window_hydration`), which owns the three traps.
+    ///
+    /// **Assign, not merge:** every field of `ExecuteState` appears in `to_entity`, so a
+    /// decoded state is a complete state and there is no session-only half to
+    /// preserve. Verified field-by-field 2026-08-31; if a non-persisted field is
+    /// ever added to this struct, this becomes a merge.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = crate::window::Hydration> + 'static> {
+        let inner = self.inner.clone();
+        let w = self.inner.clone();
+        crate::window_hydration::durable_hydration_job(
+            peers,
+            &self.peer_id,
+            self.state_path(peers),
+            STATE_TYPE,
+            self.hydrated.clone(),
+            move || w.lock().unwrap().to_entity().data,
+            move |e| *inner.lock().unwrap() = ExecuteState::from_entity(e),
+        )
+    }
+
+    #[cfg(test)]
+    pub async fn hydrate_durable(&self, peers: &Peers) -> crate::window::Hydration {
+        match self.hydration_job(peers) {
+            Some(job) => job.await,
+            None => crate::window::Hydration::AlreadyResolved,
+        }
+    }
+
+    /// [`hydration_job`](Self::hydration_job), driven in the background — the
+    /// window factory runs inside the synchronous frame loop and cannot await.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        crate::window_hydration::spawn_hydration(self.hydration_job(peers));
     }
 
     /// Refresh the cached handler list for the currently-active peer.
@@ -224,12 +274,23 @@ impl ExecuteConsoleModel {
         );
     }
 
-    fn read_window_state(&self, peers: &Peers) -> ExecuteState {
-        let path = self.state_path(peers);
+    /// The persisted state, and **whether the tree actually held ours**.
+    ///
+    /// `None` covers two cases that are one fact here: nothing at this path, or
+    /// another window type's entity in our reused slot (AP42). The type check
+    /// has to be here rather than left to `from_entity`, because that reports a
+    /// mismatch as `Default` — indistinguishable from a successful read of a
+    /// default-valued state, which would make `hydrated` claim an answer it
+    /// never got.
+    fn read_window_state_opt(&self, peers: &Peers) -> Option<ExecuteState> {
         peers
-            .get_entity(&self.peer_id, &path)
+            .get_entity(&self.peer_id, &self.state_path(peers))
+            .filter(|e| e.entity_type == STATE_TYPE)
             .map(|e| ExecuteState::from_entity(&e))
-            .unwrap_or_default()
+    }
+
+    fn read_window_state(&self, peers: &Peers) -> ExecuteState {
+        self.read_window_state_opt(peers).unwrap_or_default()
     }
 
     fn persist_state(&self, peers: &Peers) {

@@ -220,15 +220,84 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   returning reader on `?worker=1` was put back on the **build** default and shown *"No site
   manifest at 'demo'"* — and **the shipped Direct-IDB arm has the same defect intermittently**
   (the store fills from IndexedDB while `initialize` runs; measured as a 1-in-3 flake, and
-  neutering the fix reds BOTH arms). Do not file this class as Worker-only. Fixed for `content_site` (`hydrate_durable`, gated by
-  `a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm` on **both** arms); the
-  **Shell is measured red on the same shape** and five more models share it unmeasured. Note
+  neutering the fix reds BOTH arms). Do not file this class as Worker-only.
+  **The class has an enforcement point now: `WindowView::hydrate_durable`, a defaulted trait
+  method `WindowManager::spawn` calls for EVERY window.** Override it; do not add a call to
+  your factory (that was the original shape and it made the step something the next author had
+  to remember — AP44). **All eight models are fixed** as of 2026-08-31; the six that came last
+  go through `crate::window_hydration::durable_hydration_job`, which owns the three traps and
+  leaves each surface only its own adopt. **Write a new window? You do not get to forget:**
+  `tests/window_hydration_census.rs` fails if a surface touching `window_state_path` is not
+  classified as either hydrating or genuinely re-reading.
+  **The axis is RETENTION, not persistence** — eleven surfaces persist window state, only
+  eight retain a construction read. `theme_editor`, `games` and `programs` read per-call and
+  self-heal (the `SettingsModel` shape); that is today's code, not a guarantee, so the census
+  pins them too.
+  **Two things the Shell's repair proved that the content-site one did not.** (1) **Check the
+  absent-branch, not just the read** — `ShellModel::initialize` seeded its default with an
+  unconditional `dispatch_write`, and since the sync read *always* misses on the Worker arm,
+  merely opening a Shell **overwrote** the persisted `wd`/`history`/`draft`. Data loss, not lost
+  session state, and unfixable after the fact. The other seven seed via `seed_state_if_absent`
+  (→ `put_if_absent`) and are safe. This half **cannot be gated natively** — one store, one
+  authoritative read, so repaired and unrepaired behave identically; its only gate is
+  `a_shell_window_returns_to_its_working_directory_on_the_worker_arm`. (2) **Merge, do not
+  assign, on any surface holding session-only display state** — `ShellState` carries
+  `scrollback` (never persisted) in the same struct as the persisted fields, so
+  `*inner.lock() = from_entity(&e)` would adopt the state and blank the screen. Note
   what makes this reachable for windows: a reload restores **no** windows, but **window ids
   restart at 1**, so a re-opened window inherits the last session's
   `workspace/windows/{id}/state`. `make e2e-worker E2E_FEATURES=demo-apps,audit-worker-reads`
   lights the lamp — but it is a **pointer, not a census** (it records subscription *intent*, so
   subscribed-but-unmirrored stays silent). A behavioural gate is what measures the class.
-  Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
+  **Every resolution REPORTS, through `window_hydration::report` — and `Hydration` is five
+  outcomes, not four.** Before 2026-08-31 the class shipped with no D13 channel on the arm the
+  product runs: `NonePersisted` logged nothing, and the construction-read short-circuit — the
+  entire Direct happy path — logged nothing, so a window said how it resolved only on Worker
+  and only when it adopted. `AlreadyResolved` was also folded into `Superseded`, so the line
+  printed *"superseded"* for a healthy boot and for *"you moved while we were reading"* alike
+  (AP40, one layer out from the `bool` this audit already caught). One line now —
+  `"window state resolved against the durable tree"`, `surface`/`path`/`outcome` — from all
+  three job builders; `every_hydration_outcome_has_its_own_word` asserts five distinct labels
+  **and the count**, so a sixth cannot quietly reuse one. **Found by a gate asserting the D13
+  channel and failing on Direct while every behavioural assertion passed** — assert the report,
+  not only the behaviour.
+  Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md` (§11c closes it).
+- **`tree put: stored` is NOT durability on the Direct-IDB arm, and that arm is the shipped
+  default.** The IDB store is **write-behind** — puts drain on a 250 ms debounce
+  (`DEBOUNCE_MS`, `entity-core-rust/core/store/src/idb.rs`) and only identity/destructive ops
+  await `IdbCheckpoint::checkpoint()`; an ordinary navigation does not. **Worker/OPFS is
+  flush-on-write**, so this asymmetry runs *opposite* to every other split here — do not reach
+  for "it's the Worker arm" when a persistence gate flakes. A gate that reloads on the put
+  races the flush and fails wearing the costume of whatever bug it guards: measured **1 in 6**
+  on the window/Direct location gate, reporting *"a plain reload put the reader back on the
+  deployment's home page"* — the hydration defect's own words. **Wait on the store:**
+  `durable_state_hash` (`tests/e2e_worker.rs`) reads the `locations` object store and the
+  scenario waits for the hash to change from a pre-click baseline; it enumerates
+  `indexedDB.databases()` rather than hardcoding a name, because a name that stopped matching
+  would wait for nothing and silently reinstate the race — so the Direct arm asserts the probe
+  found a hash. 8/8 after. And note the diagnostic trap: **adding a log line made it 15/15**,
+  because the extra round-trip covered the debounce. A flake a diagnostic hides is not fixed.
+- **A gate can be satisfied by the FALLBACK instead of the repair — check what the boot order
+  makes the fallback.** `rekeyed_domain_heals_on_next_boot_window_surface[_on_the_worker_arm]`
+  passes with `ContentSiteWindow::hydrate_durable` neutered, on **both** arms: `boot_load`
+  spawns the startup window after the session config is final, so a missed construction read
+  falls back to the settled config — which in that scenario *is* the asserted page. **When a
+  gate's expected value equals its fallback value it measures nothing.** The discriminating
+  question is the one `a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_worker_arm`
+  asks: go somewhere that is not home, come back, still be there (falsified — red under the
+  neuter, with the production symptom). Its Direct twin stays green under the same neuter and
+  is labelled a **control**, not a second gate.
+  **The same coin's other face: a gate can DEPEND on the defect, so the repair reds it and reads
+  as a regression.** Measured 2026-08-31 when the window index landed: the phase monolith's
+  *"the KB article survived the reload"* check looked only at the **list view**, and the KB comes
+  back in list view only because window state was being *lost* — Phase 6 ends in reader view, so
+  a KB that correctly restores its own `view_mode`/`current_slug` renders no list rows and the
+  check read `count: 0`, wearing the costume of *"OPFS persistence is not end-to-end"*. The
+  article was never gone; the assertion had encoded a symptom of state loss as its precondition.
+  **Ask what your gate's expected value depends on, not just what it asserts** — the fix was to
+  accept either evidence (`via: reader` is *stronger* than a list row) because the subject was
+  always *did the bytes survive*, never *which view mode*. Both faces have one root: the gate was
+  measuring the fallback.
 - **Window state is keyed by an id that is REUSED, so the decoder must check what wrote it —
   AP42.** `next_id` restarts at 1 each session and **a reload is not a close** (only
   `Action::CloseWindow` removes window state), so the entity at `workspace/windows/{id}/state`
@@ -251,7 +320,43 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   Two honest limits: the adoption was **inert in production** (KB paths are relative, tree
   paths are `/{peer}/…`, and `restore_expanded` is additive — coincidences, not guarantees),
   and the guard does **not** stop the last holder of an id overwriting the previous one's
-  state. Type-scoping the path is the separate, larger change that also fixes resume.
+  state.
+  **A window id is a SLOT ADDRESS; the durable key is `(type, peer)` — and the indirection that
+  joins them is `window_index.rs`.** `{window_id}` was doing two incompatible jobs: the MUST'd
+  action wire shape `(window_id, event, value)` wants a small dense reusable integer, and §8's
+  persist arm wants something stable over time. Both impls made it a per-session counter, which
+  is right for the first job and unsound for the second. The consequence, and the reason AP42's
+  type guard is a **guard and not a fix**: *with ordinals and no index, whether you get your state
+  back depends on the order you re-open windows in* — the guard turns wrong-adoption into
+  no-adoption and never makes the right state findable. One entity at
+  `app/{app-id}/workspace/window-index` (type `app/entity-browser/window-index` — **app-internal
+  per guide §4.1.1, not `app/state/…`**; one impl does not name a portable type for something it
+  invented this week) lists the live windows as `(id, type_name, peer_id)` and buys claiming, an
+  `next_id` floor, and an exact sweep. `(type, peer)` is not new here — `boot_load` already calls
+  that pair *"the stable identifier"* for `BootSurface::Window`, and `find_open` uses it for
+  singletons. **Three things it costs to get right:** (1) a boot that re-opens nothing must not
+  persist an empty index, or the next boot's sweep deletes every slot — *a window nobody re-opened
+  is not a window that was closed* (`WindowManager::retained`); (2) only `Restored` authorizes the
+  sweep, and **`no-index` vs `malformed` must not merge** — *"you never had one"* and *"you have
+  one and we cannot read it"* differ in exactly the way that decides whether deleting is safe
+  (AP40); (3) a malformed row fails the **whole** index rather than yielding a short one, because
+  a partial index still authorizes a sweep. The writer is a **witness, not a notification**
+  (AP44): recomputed each frame, written on a byte difference, so no spawn/close path has to
+  announce itself. Gates:
+  `each_window_returns_to_its_own_slot_whatever_order_they_reopen_in_on_the_{worker,direct}_arm`
+  — **both are gates, not a gate and a control**, because the defect is arm-independent (unlike
+  AP41's); falsified on both arms with the production symptom.
+  **Do NOT "fix" this by type-scoping the path** (an earlier handoff recommended it; withdrawn
+  2026-08-31). `app/{app-id}/workspace/windows/{id}/state` is a cosigned cross-impl convention
+  at **MUST** tier (`GUIDE-ENTITY-WORKBENCH-APP.md` §1/§3, three-impl consensus we cosigned;
+  `entity-workbench-go/entitysdk/workspace_state.go:397` builds the identical path). The
+  guide's §8 leaves the *lifecycle* to us in two named arms — *persist if the app offers
+  session resumption; MAY be ephemeral otherwise* — and **we are in neither**: we persist
+  per-window state and offer no resumption, which is what manufactures the collision. That
+  decision is open and is the operator's:
+  `docs/plans/DESIGN-WINDOW-STATE-LIFECYCLE-AND-SESSION-RESUMPTION.md`. Our per-content-type
+  state names are the slot table's long-term shape, so AP42's guard is the convention working,
+  not a local invention.
 - **An idempotent write is not an event — a surface that shows UNPERSISTED state marks its own
   watch dirty (AP43).** The store is content-addressed, so an identical put at the same path
   fires no subscription and is indistinguishable from no write at all. The Shell signalled its
@@ -265,6 +370,27 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   other five windows that persist without marking dirty are correct, rendering either purely
   persisted state or event-log rows whose paths are always new. And note D24 wants the
   opposite on the Apps surface, where a spurious dirty restarts a running app.
+- **If the rule needs the word "every", the structure has to enforce it — AP44.** A guard or
+  hook written as *"and also do X here"* is correct the day it lands and decays on the first
+  call site added by someone who did not have the whole set in their head. Two instances in one
+  session (so: catalog entry, **not** a discipline — it has not bitten twice in different
+  circumstances). The hydrate call lived in the content-site *factory*; it now lives in
+  `WindowManager::spawn`. The Shell's "did the user move first" guard was a generation counter
+  bumped in `persist`, and it read **zero in the very test written to exercise it**, because
+  `handle_submit` mutates without persisting — one mutator out of one already missed, before
+  any future author existed to forget. **Prefer a witness over a notification:** the Shell now
+  snapshots `to_entity().data` (the canonical serialization of exactly the persisted half)
+  before the round-trip and compares after — no call site to update, and a new persisted field
+  is covered the day it is added. Where no witness exists, put the step on the one
+  construction/dispatch path all members already take, and **gate the call site itself** (a
+  no-op default means nothing else in the suite can see whether it is wired). The
+  counter-example that stops this over-generalising: AP42's type guard genuinely is per-decoder,
+  and what saves it is not memory but a matrix asserting `rows.len()`. **If you cannot make it
+  structural, make the census fail** — *and then falsify the census.* Third instance, same day:
+  `tests/window_hydration_census.rs` asked *"does this directory contain `fn hydrate_durable`"*,
+  and when an override was deleted by accident it stayed **green**, because the model carries a
+  `#[cfg(test)]` helper of the same name. It scopes to the `impl WindowView` block now and ships
+  its own two-way falsifier as a test. **A census you have not falsified reports what you hoped.**
 - **A documented invocation is a coupling no compiler maintains — run it before you write it
   down (AP37).** Two gates' doc comments instructed `E2E_EXTRA='--ignored'`; the variable did
   not exist, make ignored it silently, and the command printed `0 passed; 2 ignored` — a

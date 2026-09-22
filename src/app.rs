@@ -334,6 +334,16 @@ pub struct EntityApp {
     /// *(peer, type)* pair is the durable identifier — the ephemeral window id
     /// isn't persisted (re-spawned each boot).
     maximized_window: Option<crate::window::WindowId>,
+    /// Last bytes persisted to the window index, as the **witness** the
+    /// per-frame writer compares against (AP44: prefer a witness over a
+    /// notification — a "tell me when a window opens" hook is one call site
+    /// away from being wrong, and the first such counter in this tree read zero
+    /// in the test written to exercise it).
+    ///
+    /// `None` until the first write, so the first frame always persists once
+    /// and a profile that opens nothing still gets a correct (retained-only)
+    /// index written down.
+    window_index_witness: Option<Vec<u8>>,
     /// Set when a `?site=` deep link booted us straight into the site overlay
     /// ([F3]). Forces the overlay on for THIS session without touching the
     /// durable config (ephemeral, like the `?boot_window=` maximize override) —
@@ -1627,6 +1637,7 @@ impl EntityApp {
             last_site_state: None,
             site_overlay,
             maximized_window: None,
+            window_index_witness: None,
             site_deeplink_active: false,
             // Read the escape hatch synchronously at boot so it's honored from
             // the first frame (a locked deployment must be recoverable even if
@@ -1827,6 +1838,46 @@ impl EntityApp {
                     );
                 }
             }
+        }
+
+        // (0c) The window index (`window_index.rs`): which windows existed last
+        // session, so a re-opened window addresses its OWN persisted state
+        // rather than whatever ordinal it happens to draw.
+        //
+        // **Placed here, not beside its consumer, because it has to precede
+        // every spawn** — and the first one (`BootSurface::Window`, step 1) is
+        // several hundred lines below inside this same function. A window that
+        // spawns before the claims are installed gets a fresh ordinal and reads
+        // a stranger's slot, which is the defect this closes; putting the load
+        // next to the code that benefits would reintroduce it silently.
+        //
+        // On the PRIMARY peer, not the system peer: `SpawnWindow` binds a
+        // window to the primary by default and `window_state_path` is qualified
+        // by the bound peer, so the index and the state it indexes live in the
+        // same tree. (Session config sits on the system peer because it is
+        // global; this is not.) The two are the same id today.
+        {
+            let resolution = crate::window_index::resolve_at_boot(
+                &self.peer_manager,
+                &primary_pid,
+                crate::app_paths::APP_ID,
+            )
+            .await;
+            if resolution.outcome.authorizes_sweep() {
+                self.window_manager.adopt_index(&resolution.index);
+            } else {
+                // Claim nothing, delete nothing — but do not hand out an id a
+                // persisted slot is sitting on (AP30 corollary (a): a read that
+                // could not answer changes nothing, and "changes nothing" has
+                // to include "does not renumber the workspace").
+                self.window_manager.raise_id_floor(resolution.floor);
+            }
+            crate::window_index::report(
+                &crate::app_paths::window_index_path(crate::app_paths::APP_ID, &primary_pid),
+                resolution.outcome,
+                self.window_manager.peek_next_id(),
+                resolution.swept,
+            );
         }
 
         // (1) The session config spine (§4-A). Two distinct concerns, and
@@ -2262,7 +2313,7 @@ impl EntityApp {
             // location exactly like a remote-home one (AP36 — put the guard on
             // the decision, never on the acquisition).
             if let Some(overlay) = self.site_overlay.as_ref() {
-                // Four outcomes, one field — `adopted` alone would have said
+                // Five outcomes, one field — `adopted` alone would have said
                 // the same thing for "we restored your location" and "you have
                 // never had one", which is the conflation this whole thread has
                 // been about. `unheard` in particular is the one an incident is
@@ -2910,6 +2961,11 @@ impl EntityApp {
         // the peer drains (its local peer must exist) and after
         // `sync_peer_engines` (that peer's network handler must be bound).
         self.sync_maintained_peers();
+        // Keep the durable window index in step with the window set. Placed on
+        // the per-frame path deliberately: the trigger is a byte-comparison
+        // against what we last wrote, so no spawn or close path has to remember
+        // to announce itself, and a future one is covered the day it lands.
+        self.sync_window_index();
         // Keep a path warm toward peers we intend to talk to — the OTHER half of
         // §6.5 establishment. `establish_live` runs only when this peer consults
         // the ladder itself, so a peer that merely *serves* (a standing file
@@ -3170,6 +3226,12 @@ impl EntityApp {
                             *id,
                         );
                     }
+                    // The state above is gone, so the index must stop
+                    // advertising the slot. Live windows leave the index by
+                    // closing; this covers the other half — an id inherited
+                    // from last session and closed without ever being
+                    // re-opened is not reachable through `windows` at all.
+                    self.window_manager.forget_retained(*id);
                     // Closing the maximized window pops the surface back to
                     // the base (chrome / site).
                     if self.maximized_window == Some(*id) {
@@ -4880,6 +4942,47 @@ impl EntityApp {
     /// `releasing_a_conversation_stops_the_retries_but_leaves_the_connection_up`
     /// (peers.rs): after the release the connection still carries traffic, and a
     /// subsequent drop draws no dials at all.
+    /// Persist the window index when — and only when — the set of window slots
+    /// actually changed.
+    ///
+    /// # Why this is per-frame and witness-driven
+    ///
+    /// AP44: *if the rule needs the word "every", the structure has to enforce
+    /// it.* The alternative is a write at each spawn and each close, which is
+    /// correct the day it lands and wrong the first time somebody adds a third
+    /// way to create a window. Deriving the answer from
+    /// [`WindowManager::durable_index`] every frame and writing on a byte
+    /// difference has no call site to keep in step.
+    ///
+    /// # Why the byte comparison and not just a put
+    ///
+    /// The store is content-addressed, so an identical put fires no
+    /// subscription and is close to free — but it is still an L1 dispatch per
+    /// frame per profile, and on the Worker arm that is a `postMessage` at
+    /// 60 Hz for a value that changes a handful of times per session. The
+    /// witness is the cheap half.
+    ///
+    /// Note this is the *opposite* of AP43's hazard rather than an instance of
+    /// it: nothing renders from this entity and nothing waits on its watch, so
+    /// a suppressed duplicate write cannot fail to wake a surface.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_window_index(&mut self) {
+        let index = self.window_manager.durable_index();
+        let entity = index.to_entity();
+        if self.window_index_witness.as_deref() == Some(entity.data.as_slice()) {
+            return;
+        }
+        let pid = self.peer_manager.primary_peer_id().to_string();
+        let path = crate::app_paths::window_index_path(crate::app_paths::APP_ID, &pid);
+        tracing::debug!(
+            path = %path,
+            entries = index.entries.len(),
+            "persisting window index"
+        );
+        self.window_index_witness = Some(entity.data.clone());
+        self.peer_manager.dispatch_write(&pid, path, entity);
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn sync_maintained_peers(&mut self) {
         // A burst of ~1s-spaced tries (covers a peer that is up but momentarily

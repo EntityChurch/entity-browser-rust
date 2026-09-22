@@ -120,6 +120,17 @@ impl WindowView for KnowledgeBaseWindow {
         &self.watch
     }
 
+    /// AP41 — correct `initialize`'s cold synchronous read with an
+    /// authoritative one. Called by `WindowManager::spawn` for every window;
+    /// do not add a call to this window's factory.
+    ///
+    /// Assigns `.state` only — the article cache, the tree and
+    /// `known_slugs` sit beside it in `ModelInner` and must survive.
+    fn hydrate_durable(&self, _peers: &Peers) {
+        #[cfg(target_arch = "wasm32")]
+        self.model.spawn_hydrate_durable(_peers);
+    }
+
     /// Controller: receive user input, dispatch to the model.
     /// The model performs any I/O. After a state-changing action,
     /// the controller asks the model to persist its state.

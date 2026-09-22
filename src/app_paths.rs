@@ -295,6 +295,28 @@ pub fn window_results_path(app_id: &str, peer_id: &str, window_id: WindowId) -> 
     workspace_path(app_id, peer_id, &format!("windows/{}/results", window_id))
 }
 
+/// The prefix every per-window slot lives under — `windows/{id}/…`.
+///
+/// The listing target for the window-index sweep, and the reason it is a helper
+/// rather than an inline `format!`: the sweep parses ids back out of paths under
+/// this prefix, so the two have to move together
+/// (`window_index::ids_in_listing`).
+pub fn windows_prefix(app_id: &str, peer_id: &str) -> String {
+    workspace_path(app_id, peer_id, "windows/")
+}
+
+/// The **window index** — the durable list of which windows exist, as against
+/// the per-window state of each one.
+///
+/// A sibling of `windows/`, not a child: it describes the whole set, and a child
+/// of `windows/` would be indistinguishable from a window whose id happened to
+/// parse. See [`crate::window_index`] for why the set needs recording at all —
+/// `{window_id}` is a per-session ordinal, so per-window state alone cannot say
+/// whose state it is.
+pub fn window_index_path(app_id: &str, peer_id: &str) -> String {
+    workspace_path(app_id, peer_id, "window-index")
+}
+
 /// Per-panel selection slot — a panel's own "what is selected here"
 /// state. Panels publish here on navigate/select; other panels that
 /// want to track a specific panel's cursor subscribe to this exact

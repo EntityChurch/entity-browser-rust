@@ -287,12 +287,69 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     round-trips, subscription-independent on both arms. `tree_listing_async`'s doc comment has
     said so for listings all along; `boot_load` already applied it to the session config
     (*"the durable tree, not the cold cache mirror"*). Nav state simply never got it.
-  - **Two traps in the repair.** A round-trip that *errors* is **not** an answer — keep what
-    you have, or a hiccup reads as "you have no history" (AP30 corollary (a)). And a write
-    that lands *during* the round-trip is newer than it — guard with a generation counter or
-    you drag the user backwards (the user-themes resurrection race, other shape). Report the
-    outcome as an enum, not a bool: *restored* / *never had one* / *could not tell* /
-    *you moved first* are four facts (AP40).
+  - **Writing a NEW window that persists state? The census will stop you forgetting.**
+    `tests/window_hydration_census.rs` enumerates every `src/views/` surface that touches
+    `window_state_path` and requires each to be classified `Hydrates` (overrides the hook) or
+    `ReReads` (reads afresh per use, so it caches nothing to be wrong about). The table asserts
+    its own length, so a new surface is red until someone answers the question. **The axis is
+    retention, not persistence:** eleven surfaces persist window state and only eight retain a
+    construction read — `theme_editor`, `games` and `programs` re-read per call and self-heal,
+    which is a property of today's code and is why they are pinned too.
+  - **Use `crate::window_hydration::durable_hydration_job`, not a sixth hand-rolled copy.** It
+    owns the three traps (Unheard, the witness, the AP42 type guard) so they cannot be skipped,
+    and leaves you the one genuinely per-surface decision — merge or assign. Two callers need a
+    non-obvious argument: `entity_tree`'s witness **excludes `expanded_paths`** (derived from
+    the live tree, which grows during the await — a full witness would report `Superseded`
+    forever and the window would never hydrate), and `knowledge_base`'s adopt is scoped to
+    `.state` so the article cache survives.
+  - **Override `WindowView::hydrate_durable`; do not add a call to your factory.**
+    `WindowManager::spawn` calls it for every window it creates, which is what makes the step
+    structural. The default is a no-op, so the *call site itself* is gated
+    (`spawn_offers_every_window_the_durable_hydration_step` — delete the line and it reds;
+    nothing else in the suite can see it). The original content-site repair called
+    `spawn_hydrate_durable` from its own factory, which left the next window author to
+    remember (AP44).
+  - **Three traps in the repair.** A round-trip that *errors* is **not** an answer — keep what
+    you have, or a hiccup reads as "you have no history" (AP30 corollary (a)). A change that
+    lands *during* the round-trip is newer than it — guard, or you drag the user backwards
+    (the user-themes resurrection race, other shape). And **merge, do not assign, if the struct
+    holds session-only fields**: `ShellState` carries `scrollback` (never persisted) beside the
+    persisted ones behind one decode path, so `*inner.lock() = from_entity(&e)` adopts the state
+    *and blanks the screen*. Report the outcome as an enum, not a bool: *restored* / *never had
+    one* / *could not tell* / *you moved first* are four facts (AP40) —
+    `crate::window::Hydration`, which lives at the window tier because it is the class's
+    vocabulary now, not content-site's private one.
+  - **`Hydration` is FIVE outcomes, and the fifth was the shipped arm's whole happy path.**
+    `AlreadyResolved` (*the construction read answered; no round-trip*) was folded into
+    `Superseded` (*you moved while we were reading*) until 2026-08-31, so the D13 line printed
+    `superseded` for an ordinary healthy Direct boot — the same word it prints when the guard
+    fires. AP40 again, in the layer that reports rather than the layer that decides, and it is
+    what a re-split has to keep apart: `every_hydration_outcome_has_its_own_word` (`window.rs`)
+    asserts five distinct labels *and* the count, so a sixth outcome with a duplicated label
+    fails instead of passing.
+  - **Every resolution reports, through `window_hydration::report` — because five scattered
+    `tracing!` calls did not.** Before that function existed, `NonePersisted` logged **nothing**
+    and the construction-read short-circuit logged **nothing**, so a Site Browser window said
+    how it resolved on the Worker arm and was completely silent on the default one. One line,
+    `"window state resolved against the durable tree"`, with `surface` / `path` / `outcome`
+    fields, emitted from all three job builders (`window_hydration`, `content_site`, `shell`).
+    **This was found by a gate's log assertion failing on the arm the product ships**, not by
+    review — which is the argument for asserting the D13 channel and not just the behaviour.
+    The overlay keeps its own `boot_load` line on top; windows have no boot step to hang one on.
+  - **For the "did they move first" guard, prefer a WITNESS to a counter.** The Shell's first
+    version was a generation counter bumped in `persist`, and it read zero in the very test
+    written to exercise it: `handle_submit` mutates and does *not* persist (the window persists
+    afterwards, from `handle_action`). It now snapshots `to_entity().data` — the canonical
+    serialization of exactly the persisted half — before the round-trip and compares after. No
+    call site to remember, and a new persisted field is covered the day it is added (AP44).
+  - **Repair the ABSENT branch too, and check it first — it can be the destructive half.**
+    `ShellModel::initialize` seeded its default with an unconditional `dispatch_write`; since
+    the sync read *always* misses on the Worker arm, opening a Shell **overwrote** the persisted
+    `wd`/`history`/`draft`. The other seven models seed through `seed_state_if_absent`
+    (→ `put_if_absent`) and lose nothing on a missed read. **This half cannot be gated
+    natively** — one store, authoritative read, so repaired and unrepaired behave identically —
+    so a native decision-table test for it would be vacuous (AP31). Its only gate is
+    `a_shell_window_returns_to_its_working_directory_on_the_worker_arm`.
   - **It is NOT Worker-only, and the reasoning that says it is has already been refuted here.**
     On Direct-IDB the store fills from IndexedDB *while* `EntityApp::new` runs the constructor,
     so the same read is **racy**: 1 failure in 3 runs, and neutering the fix reds **both** arms.
@@ -300,9 +357,10 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   - **Measured, 2026-08-30:** every returning reader on `?worker=1` was put back on the
     **build** default and shown *"No site manifest at 'demo' (peer: …)"*, because both the
     nav-state read and the `home_site` config read missed. Fixed for `content_site`
-    (`hydrate_durable`); the **Shell** is measured red on the same shape (a re-opened window
-    starts at the default working directory); five more share it unmeasured — `entity_tree`,
-    `knowledge_base`, `query_console`, `execute_console`, `peer_connections`, `chain_trace`.
+    (`hydrate_durable`). The **Shell** was measured red on the same shape and is **fixed
+    2026-08-31** — its gate is off `#[ignore]` and green on both arms. The remaining six
+    (`entity_tree`, `knowledge_base`, `query_console`, `execute_console`, `peer_connections`,
+    `chain_trace`) landed the same day through the shared job, so **the class is closed**.
     Audit: `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.
   - **Per-window state outlives a session even though WINDOWS DO NOT.** A reload restores no
     windows at all (`app.rs`: *"No default window spawn. A Chrome/Full boot opens ZERO
@@ -4069,6 +4127,40 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Testing & the gates
 
+- **`tree put: stored` IS NOT DURABILITY on the Direct-IDB arm — a gate that reloads on the
+  put races the flush.** The IDB store is **write-behind**: puts queue and drain on a 250 ms
+  debounce (`DEBOUNCE_MS`, `entity-core-rust/core/store/src/idb.rs`), and only
+  identity/destructive ops await `IdbCheckpoint::checkpoint()` — an ordinary navigation does
+  not. So a reload issued the instant the put is logged reads the **previous** durable value.
+  Measured on `a_returning_reader_is_still_on_the_page_they_left_in_a_window_on_the_direct_arm`:
+  **1 failure in 6 runs**, and the failure message was the *hydration* defect's — "a plain
+  reload put the reader back on the deployment's home page" — because that is exactly what a
+  lost write looks like from the DOM. **The flake wore the costume of the bug the gate guards.**
+  Adding one extra WebDriver round-trip before the reload made it 15/15 green, which is how the
+  flush was identified and is also why "it passed when I added a log line" is not evidence of
+  anything here.
+  **Wait on the store, not on the log.** `durable_state_hash` (`tests/e2e_worker.rs`) enumerates
+  `indexedDB.databases()`, reads the `locations` object store, and returns the content hash for
+  the state path; the gate waits for it to *change* from a pre-click baseline. It enumerates
+  rather than hardcoding the database name **because a hardcoded name that stopped matching
+  would return `""` forever — i.e. wait for nothing — and silently reinstate the race**, so the
+  Direct arm asserts the probe found a hash. 8/8 after.
+  **This is arm-asymmetric in the direction nothing else here is.** Worker/OPFS is
+  **flush-on-write** (`app.rs` treats a `None` checkpoint as already flushed), so the Worker arm
+  has no unflushed window and the Direct arm — **the shipped default** — is the exposed one.
+  Every other split in this file runs the other way, so do not reach for "it's the Worker arm"
+  when a persistence gate flakes.
+- **A gate can be satisfied by the FALLBACK instead of the repair, and the boot order decides
+  which.** `rekeyed_domain_heals_on_next_boot_window_surface[_on_the_worker_arm]` asserts the
+  deployment's home renders after a warm boot — and stays **green on both arms with
+  `ContentSiteWindow::hydrate_durable` neutered** (measured 2026-08-31). `boot_load` spawns the
+  startup window *after* the session config is final, so a missed construction read falls back
+  to the settled config, which in that scenario **is** the asserted page. "Restored your
+  location" and "reset you to the configured home" are indistinguishable unless the reader
+  went somewhere that is not home. The overlay's twin was red pre-fix only because the overlay
+  is built *before* the config settles, so its fallback degraded further (peerless build
+  default → an error page). **When a gate's expected value equals its fallback value, it is
+  measuring nothing** — move the fixture off the fallback.
 - **A unit test that asserts on a DERIVED view can be green while the defect is fully present
   — assert at the adoption site (AP42's process lesson).** The first gate for the reused-id
   cross-type read asserted `EntityTreeModel::state_snapshot().expanded_paths` and **passed on
@@ -4491,6 +4583,22 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   that owned it**. Two consequences: never run a WebDriver probe beside the suite, and treat a
   failure whose text is `InvalidSessionId` / `Reached error page` / `Unable to find session` as
   **infrastructure, not a defect** — no assertion ran.
+  - **So run a PRIVATE grid when other seats are on the box, and know the two things that make
+    one fail to start.** `E2E_WEBDRIVER_URL` points the suite anywhere (it exists for the
+    federation gate); the Makefile forwards it via `EXTRA_RUN_ENV`:
+    `make e2e-worker EXTRA_RUN_ENV='-e E2E_WEBDRIVER_URL=http://localhost:4455'`.
+    Standing the grid up on a non-default port needs **three** ports moved, not one — the
+    standalone image also binds a ZeroMQ event bus on 4442/4443, so with `--network=host` beside
+    an existing grid it dies at startup with `ZMQException: Errno 48 : Address already in use`
+    and `-d --rm` **removes the container before you can read that**, leaving only "no such
+    container". Working invocation (measured 2026-08-31):
+    `podman run -d --rm --name e2e-widx --network=host -e SE_OPTS="--port 4455"
+    -e SE_EVENT_BUS_PUBLISH_PORT=4452 -e SE_EVENT_BUS_SUBSCRIBE_PORT=4453 --shm-size=2g
+    docker.io/selenium/standalone-firefox:<tag>`. Drop `-d --rm` to see why a start failed.
+  - **A grid reports `ready: false` after a run that left a session, and the next run then
+    stalls in `setup` for the full watchdog (240 s) — which reads as a wedged renderer.**
+    Measured twice on 2026-08-31. `curl -s localhost:<port>/status` before blaming the app; the
+    cheap fix is to recreate the grid container between full runs rather than diagnose it.
 - **THE UNFILTERED SUITE IS FLAKY ON A LOADED BOX, AND THE FAILING SET IS DIFFERENT EVERY RUN —
   measured, and it supersedes the "unfiltered run is GREEN 14/14" note above.** Four consecutive
   full runs on 2026-08-21, same commit: **13/19 · build-failed · 16/19 · 15/19**, in 322s–651s

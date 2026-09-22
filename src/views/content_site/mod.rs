@@ -66,22 +66,20 @@ impl ContentSiteWindow {
             create: |id, peer_id, pm| {
                 let mut window = ContentSiteWindow::new(id, peer_id.to_string());
                 window.model.initialize(pm);
-                // ...and then CORRECT that read, because on the Worker arm it
-                // read nothing. `initialize`'s `get_entity` answers from the
-                // per-prefix cache mirror, and the only subscription that would
-                // cover this window's state path is the one registered three
-                // lines below — after the read, and asynchronously even then.
-                // So a Site Browser window restored on the Worker arm opened at
-                // the configured home instead of where it was left, on every
-                // boot. Same defect as the overlay's, same fix, its own call
-                // site because a window is created long after `boot_load` has
-                // finished awaiting things. Fire-and-forget: `hydrate_durable`
-                // adopts through the model's `Arc<Mutex<_>>` and refuses to
-                // clobber a navigation that lands first, and the state watch
-                // registered below repaints when it does.
+                // That read is best-effort and on the Worker arm reads NOTHING:
+                // `initialize`'s `get_entity` answers from the per-prefix cache
+                // mirror, and the only subscription that would cover this
+                // window's state path is the one registered below — after the
+                // read, and asynchronously even then. So a Site Browser window
+                // restored on the Worker arm opened at the configured home
+                // instead of where it was left, on every boot.
+                //
+                // The correction is `WindowView::hydrate_durable`, and it is
+                // NOT called here: `WindowManager::spawn` calls it for every
+                // window it creates, which is what makes the step structural
+                // rather than something the next window author has to remember.
                 // (`docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`.)
-                #[cfg(target_arch = "wasm32")]
-                window.model.spawn_hydrate_durable(pm);
+                //
                 // Re-render when our navigation state changes (navigate
                 // persists the location) ...
                 pm.watch_prefix(
@@ -183,6 +181,16 @@ impl WindowView for ContentSiteWindow {
 
     fn watch(&self) -> &WindowWatch {
         &self.watch
+    }
+
+    /// AP41's original repair, now reached through the class hook. The model
+    /// owns the three properties (`Unheard` keeps what we have, the
+    /// `nav_generation` guard refuses to clobber a navigation that landed
+    /// during the await, and a sync read that already answered short-circuits
+    /// the round-trip entirely).
+    fn hydrate_durable(&self, _peers: &Peers) {
+        #[cfg(target_arch = "wasm32")]
+        self.model.spawn_hydrate_durable(_peers);
     }
 
     fn handle_action(&mut self, action: &Action, peers: &Peers) {

@@ -134,6 +134,19 @@ impl WindowView for ShellWindow {
         &self.watch
     }
 
+    /// AP41 on the Shell — and this is the instance of the class that was
+    /// **destructive** rather than merely lossy, so read
+    /// [`ShellModel::initialize`] before treating this as the whole fix: the
+    /// clobbering seed is repaired there, and this only restores the read.
+    ///
+    /// The adopt merges field-by-field because `scrollback` is session-only;
+    /// assigning a decoded state over the live one would wipe what is on
+    /// screen. See [`ShellModel::hydrate_durable`].
+    fn hydrate_durable(&self, _peers: &Peers) {
+        #[cfg(target_arch = "wasm32")]
+        self.model.spawn_hydrate_durable(_peers);
+    }
+
     fn handle_action(&mut self, action: &Action, peers: &Peers) {
         let dirty = match action {
             Action::ShellSubmit { window_id, line } if *window_id == self.window_id => {

@@ -33,6 +33,7 @@
 //! build env (default 0 embedded docs).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use entity_entity::Entity;
@@ -288,6 +289,10 @@ pub struct KnowledgeBaseModel {
     window_id: WindowId,
     peer_id: String,
     inner: Arc<Mutex<ModelInner>>,
+    /// Did `initialize`'s synchronous read actually answer? On the Direct arm
+    /// the in-process store is authoritative, so a surface hydrated there needs
+    /// no round-trip (AP41).
+    hydrated: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for KnowledgeBaseModel {
@@ -308,6 +313,7 @@ impl KnowledgeBaseModel {
             window_id,
             peer_id,
             inner: Arc::new(Mutex::new(ModelInner::default())),
+            hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -320,8 +326,60 @@ impl KnowledgeBaseModel {
     /// cached.
     pub fn initialize(&mut self, peers: &Peers) {
         self.ensure_state_in_tree(peers);
-        let state = self.read_window_state(peers);
-        self.inner.lock().unwrap().state = state;
+        // Best-effort: on the Worker arm this reads nothing, and on Direct-IDB
+        // it races the store filling from IndexedDB (AP41).
+        // `hydrate_durable` is the authoritative correction.
+        let persisted = self.read_window_state_opt(peers);
+        self.hydrated
+            .store(persisted.is_some(), std::sync::atomic::Ordering::SeqCst);
+        self.inner.lock().unwrap().state = persisted.unwrap_or_default();
+    }
+
+    /// AP41's correction, through the shared machinery
+    /// (`crate::window_hydration`), which owns the three traps.
+    ///
+    /// **Assign, but only to `.state` — which IS the merge boundary here.**
+    /// `ModelInner` holds heavy session-only state beside the persisted half
+    /// (`cached`, `root`, `known_slugs`, `needs_resync`), so a whole-inner
+    /// assign would destroy the loaded article cache and the tree. `.state`
+    /// itself is fully persisted (`view_mode`, `current_slug`,
+    /// `expanded_paths`), so assigning *it* is complete. The existing
+    /// `initialize` already drew the line in the same place; this mirrors it
+    /// rather than inventing a second one.
+    fn hydration_job(
+        &self,
+        peers: &Peers,
+    ) -> Option<impl std::future::Future<Output = crate::window::Hydration> + 'static> {
+        let inner = self.inner.clone();
+        let w = self.inner.clone();
+        crate::window_hydration::durable_hydration_job(
+            peers,
+            &self.peer_id,
+            self.state_path(),
+            STATE_TYPE,
+            self.hydrated.clone(),
+            move || w.lock().unwrap().state.to_entity().data,
+            move |e| inner.lock().unwrap().state = KnowledgeBaseState::from_entity(e),
+        )
+    }
+
+    #[cfg(test)]
+    pub async fn hydrate_durable(&self, peers: &Peers) -> crate::window::Hydration {
+        match self.hydration_job(peers) {
+            Some(job) => job.await,
+            None => crate::window::Hydration::AlreadyResolved,
+        }
+    }
+
+    /// [`hydration_job`](Self::hydration_job), driven in the background — the
+    /// window factory runs inside the synchronous frame loop and cannot await.
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn_hydrate_durable(&self, peers: &Peers) {
+        crate::window_hydration::spawn_hydration(self.hydration_job(peers));
+    }
+
+    fn state_path(&self) -> String {
+        crate::app_paths::window_state_path(crate::app_paths::APP_ID, &self.peer_id, self.window_id)
     }
 
     /// Borrow the inner state behind the model's `Arc<Mutex>`. The
@@ -341,12 +399,23 @@ impl KnowledgeBaseModel {
         );
     }
 
-    fn read_window_state(&self, peers: &Peers) -> KnowledgeBaseState {
-        let path = crate::app_paths::window_state_path(crate::app_paths::APP_ID, &self.peer_id, self.window_id);
+    /// The persisted state, and **whether the tree actually held ours**.
+    ///
+    /// `None` covers two cases that are one fact here: nothing at this path, or
+    /// another window type's entity in our reused slot (AP42). The type check
+    /// has to be here rather than left to `from_entity`, because that reports a
+    /// mismatch as `Default` — indistinguishable from a successful read of a
+    /// default-valued state, which would make `hydrated` claim an answer it
+    /// never got.
+    fn read_window_state_opt(&self, peers: &Peers) -> Option<KnowledgeBaseState> {
         peers
-            .get_entity(&self.peer_id, &path)
+            .get_entity(&self.peer_id, &self.state_path())
+            .filter(|e| e.entity_type == STATE_TYPE)
             .map(|e| KnowledgeBaseState::from_entity(&e))
-            .unwrap_or_default()
+    }
+
+    fn read_window_state(&self, peers: &Peers) -> KnowledgeBaseState {
+        self.read_window_state_opt(peers).unwrap_or_default()
     }
 
     /// Refill any cache entries that are missing for known slugs.
@@ -789,6 +858,59 @@ mod tests {
 
     fn pm() -> Peers {
         Peers::new_direct()
+    }
+
+    // ---- AP41: the decision that is THIS model's -------------------------
+    //
+    // The four-outcome decision table lives once, in `crate::window_hydration`.
+    // What is specific here is that `ModelInner` holds the article cache, the
+    // docs tree and `known_slugs` beside the persisted `.state`, so the adopt
+    // is scoped to `.state` — the same line `initialize` already drew.
+
+    /// **The adopt touches `.state` and nothing else.** A whole-inner assign
+    /// would drop every cached article and the whole docs tree, which are
+    /// session-only and rebuilt from subscription events.
+    ///
+    /// Falsifier: widen the adopt closure to assign `*inner.lock().unwrap()`
+    /// and this reds — the cache would be empty.
+    #[tokio::test]
+    async fn hydrating_does_not_destroy_the_article_cache() {
+        let peers = pm();
+        let pid = peers.primary_peer_id().to_string();
+        let m = KnowledgeBaseModel::new(1, pid.clone());
+        // Deliberately NO `initialize` — the surface whose sync read answered
+        // nothing, which on the Worker arm is every surface.
+        {
+            let mut inner = m.inner.lock().unwrap();
+            inner.cached.insert(
+                "an-article".into(),
+                Entity::new(ARTICLE_TYPE, entity_ecf::to_ecf(&entity_ecf::text("body")))
+                    .expect("article entity"),
+            );
+            inner.known_slugs.insert("an-article".into());
+        }
+
+        let persisted = KnowledgeBaseState {
+            view_mode: ViewMode::Reader,
+            current_slug: Some("an-article".into()),
+            expanded_paths: vec!["/docs".into()],
+        };
+        peers.seed_write(&pid, m.state_path(), persisted.to_entity());
+
+        assert_eq!(
+            m.hydrate_durable(&peers).await,
+            crate::window::Hydration::Adopted
+        );
+
+        let inner = m.inner.lock().unwrap();
+        assert_eq!(inner.state.view_mode, ViewMode::Reader, "the persisted mode is adopted");
+        assert_eq!(inner.state.current_slug.as_deref(), Some("an-article"));
+        assert!(
+            inner.cached.contains_key("an-article"),
+            "the article cache is session-only and must SURVIVE the adopt — \
+             a whole-inner assign would drop every loaded article"
+        );
+        assert!(inner.known_slugs.contains("an-article"));
     }
 
     fn fresh_model(peers: &Peers) -> KnowledgeBaseModel {

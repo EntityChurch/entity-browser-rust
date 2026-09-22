@@ -1663,16 +1663,53 @@ these shipped in this repo.
   why "it works in Settings" was never evidence about anything else.
   **Eight window models share the retaining shape** (`content_site`, `shell`, `entity_tree`,
   `knowledge_base`, `query_console`, `execute_console`, `peer_connections`, `chain_trace`).
-  `content_site` is fixed; the **Shell is measured red on the same shape** — a re-opened window
-  starts at the default working directory — which is what promotes the inventory from a code
-  reading to a second confirmed instance. The remaining six are named, unmeasured open work.
+  **All eight are fixed as of 2026-08-31**, the last six through
+  `crate::window_hydration::durable_hydration_job` — which owns the three traps so six call
+  sites cannot get them subtly different, and leaves each surface only its own adopt.
+  **The axis is RETENTION, not persistence, and the difference is measurable rather than a
+  matter of taste.** *Eleven* surfaces persist per-window state; the three that are not in this
+  class (`theme_editor`, `games`, `programs`) each read through a per-call accessor
+  (`read_state`, `view_state`, an inline read in `render_dom`) instead of caching into a field
+  at construction, so a cold read that answers nothing is corrected by the next frame — the
+  `SettingsModel` shape. **That is a property of today's code and not a guarantee:** turning
+  one of those accessors into a cached field for a frame budget would move it into the class
+  silently, which is why `tests/window_hydration_census.rs` pins the `ReReads` rows too.
+  **The class now has an enforcement point, which it lacked while it had only one repair:**
+  `WindowView::hydrate_durable` is a defaulted trait method that `WindowManager::spawn` calls
+  for **every** window it creates (`spawn_offers_every_window_the_durable_hydration_step`,
+  falsified by deleting the call). The content-site repair originally called its own
+  `spawn_hydrate_durable` from inside its factory, which made *"windows get a hydrate step"*
+  something the next window author had to remember — put a class's repair on the class's
+  construction path, not in each member.
+  **The Shell's instance was DESTRUCTIVE, and the axis is the SEED, not the read.** Repairing
+  the read is only half of this pattern. Where the other seven models seed a missing default
+  through `Peers::seed_state_if_absent` (→ `put_if_absent`, a real store-level op, so a missed
+  *mirror* read costs nothing), `ShellModel::initialize`'s else-branch was an unconditional
+  `dispatch_write` of the default — and on the Worker arm the sync read **always** misses, so
+  merely *opening* a Shell overwrote the persisted `wd`/`history`/`draft`. That is data loss,
+  not lost session state, and no later hydration can undo it: by the time the authoritative
+  read lands the bytes are gone. **Check the absent-branch before the present-branch** — AP36's
+  rule applied to a seed: put the guard on the decision (*is there really nothing here?*),
+  never on the mirror read standing in for it. Note this half **cannot be gated natively** (one
+  store, authoritative read — repaired and unrepaired behave identically), so its only gate is
+  the Worker-arm e2e; a native decision-table test here would be vacuous (AP31).
+  **A surface holding SESSION-ONLY display state must merge, not assign.** `ShellState` carries
+  the persisted fields and `scrollback` (never written by `to_entity`) in one struct behind one
+  decode path, so `*inner.lock() = from_entity(&e)` — the shape the other models use — would
+  adopt the persisted half *and blank the screen*. AP41 pointed the other way: there we retained
+  what we should have re-read, here we would re-read over what we should have retained. Same
+  rule underneath: **session-only state is never reconstructed from a durable read.**
   **What makes this reachable for window models is not obvious and took a wrong turn to find:**
   a reload restores **no** windows at all (`app.rs`: *"No default window spawn. A Chrome/Full
   boot opens ZERO windows"*), but **window ids restart at 1**, so a re-opened window inherits
   the previous session's `workspace/windows/{id}/state` — and the `surface=window` deployment
   shape re-spawns window 1 on every boot and reads it every time.
-  [D13, D15, D16, AP4, AP30, AP40, `views/content_site/model.rs` `hydrate_durable`,
+  [D13, D15, D16, AP4, AP30, AP31, AP36, AP40, AP44, `window.rs` `WindowView::hydrate_durable`
+  + `WindowManager::spawn`, `views/content_site/model.rs` `hydrate_durable`,
+  `views/shell/model.rs` `hydrate_durable`,
   `a_returning_reader_is_still_on_the_page_they_left_on_the_worker_arm`,
+  `a_shell_window_returns_to_its_working_directory_on_the_worker_arm`,
+  `spawn_offers_every_window_the_durable_hydration_step`,
   `docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md`]
 
 - **AP42 — A durable slot keyed by a REUSED id, decoded without asking what wrote it.** Two
@@ -1800,6 +1837,62 @@ these shipped in this repo.
   [D9, AP31, AP41, D24, `views/shell/mod.rs` `handle_action`,
   `a_submission_that_changes_no_persisted_state_still_rebuilds`,
   `a_shell_spawned_after_a_reload_still_shows_what_it_prints`]
+
+- **AP44 — Correctness that every future call site has to REMEMBER.** A guard, a hook or a
+  bookkeeping step is written as *"and also do X here"* rather than as something the structure
+  performs. It is correct the day it lands, because the author had the whole set in their head;
+  it decays on the first call site added by someone who did not. The tell is a rule whose
+  statement contains the word *every* — *"every mutator bumps the counter"*, *"every factory
+  calls hydrate"*, *"every decoder checks the type"* — with nothing that fails when one does
+  not.
+  **Two instances, one session (2026-08-31), and the honesty about that matters: both came out
+  of the same piece of work, so this is a catalog entry and NOT a candidate discipline.** It has
+  not yet bitten twice in genuinely different circumstances.
+  (a) *Caught by review.* AP41's repair called `spawn_hydrate_durable` from the content-site
+  **factory**, so every future window author had to know to add the same line. Moved to
+  `WindowView::hydrate_durable`, called once from `WindowManager::spawn` — the class's
+  construction path performs it, and `spawn_offers_every_window_the_durable_hydration_step`
+  reds if the call is deleted.
+  (b) *Caught by a gate, not by review, which is the instructive half.* The Shell's
+  "did the user move first" guard was first written as a generation counter bumped in
+  `persist`. It read zero in the very test built to exercise it: `handle_submit` changes
+  `wd`/`history`/`draft` and does **not** persist (the *window* persists afterwards, from
+  `handle_action`), so the command was adopted over anyway. One mutator out of one was already
+  missed — before any future author existed to forget.
+  **Rule: prefer a witness over a notification.** Where a counter needs every writer to announce
+  itself, derive the same fact from the data: the Shell now snapshots
+  `ShellState::to_entity().data` — the canonical serialization of exactly the persisted half —
+  before the round-trip and compares after. It has no call site to update and covers a field
+  added to the persisted half the day it is added. Where a witness is not available, put the
+  step on the single construction/dispatch path the members already go through, and gate the
+  call site itself (its default being a no-op means nothing else in the suite can see it).
+  **The counter-example that keeps this from over-generalising:** AP42's type guard genuinely is
+  a per-decoder line, because each decoder owns a different `STATE_TYPE`. What makes that
+  survivable is not that authors remember — it is
+  `no_window_state_decoder_adopts_another_window_types_entity`, a **matrix that asserts
+  `rows.len()`**, so an omitted decoder fails instead of passing quietly. If you cannot make
+  it structural, make the census fail.
+  **Third instance, 2026-08-31 — and it is the CENSUS that was wrong, which is the failure mode
+  to fear most.** `hydrate_durable`'s default is a no-op, so a new window that retains a
+  construction read is protected by nothing but its author's knowledge. The answer was
+  `tests/window_hydration_census.rs`: every surface that touches `window_state_path` must be
+  classified `Hydrates` or `ReReads`, and the table asserts its own length. But its first
+  version asked *"does this directory contain `fn hydrate_durable`"* — and when
+  `query_console`'s override was deleted **by accident**, the census stayed **green**, because
+  `model.rs` carries a `#[cfg(test)] pub async fn hydrate_durable` helper of the same name. A
+  gate that was answering *"does this directory mention the function"* in place of *"does this
+  window type override the trait method"*. **A census you have not falsified is a census that
+  reports what you hoped.** It now scopes the search to the `impl WindowView` block and carries
+  its own falsifier as a landed test
+  (`the_override_check_does_not_match_a_helper_of_the_same_name`), both directions — because a
+  narrowing that matched nothing at all would be vacuous the other way and read as *every*
+  surface being broken.
+  [AP31, AP39, AP41, AP42, `window.rs` `WindowManager::spawn`,
+  `views/shell/model.rs` `hydration_job` (the witness),
+  `window_hydration.rs` (the invariants factored, the decision left),
+  `spawn_offers_every_window_the_durable_hydration_step`,
+  `a_command_run_during_the_read_is_not_clobbered`,
+  `tests/window_hydration_census.rs`]
 
 ---
 
