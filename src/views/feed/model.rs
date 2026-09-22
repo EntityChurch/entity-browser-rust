@@ -150,12 +150,55 @@ impl FeedModel {
     /// notice says what happened and the pane is one click away; a surface that
     /// relocates you mid-task is worse than one that makes you ask.
     pub fn follow(&mut self, peers: &Peers, our_peer_id: &str, typed: &str, now: u64) {
+        self.follow_via(peers, our_peer_id, typed, None, now);
+    }
+
+    /// [`Self::follow`], **carrying the identifier the person got here by** —
+    /// §2.4's `via`.
+    ///
+    /// The one caller that has one is a registry resolve, where `billslab.com`
+    /// is on screen and the peer id is not. Everything else passes `None`: a
+    /// peer id typed into the box **is** the subject, and recording it as the
+    /// route would be the field restating the key it sits beside.
+    pub fn follow_via(
+        &mut self,
+        peers: &Peers,
+        our_peer_id: &str,
+        typed: &str,
+        via: Option<&str>,
+        now: u64,
+    ) {
         let subject = typed.trim();
-        let outcome = feed_follows::follow(peers, our_peer_id, subject, now);
+        let outcome = feed_follows::follow_via(peers, our_peer_id, subject, now, via);
         self.notice = Some(notice_for(outcome));
         if matches!(outcome, FollowOutcome::Followed | FollowOutcome::AlreadyFollowing) {
             self.selected = Some(subject.to_string());
         }
+    }
+
+    /// **Name somebody, or clear the name.** §2.4's petname — see
+    /// [`feed_follows::set_label`].
+    ///
+    /// ⛔ **No notice, deliberately.** The feedback is the name itself: the row
+    /// and the panel head redraw with it on the next frame, which is a stronger
+    /// answer than a sentence saying it was saved. The refusal arm
+    /// ([`feed_follows::LabelOutcome::NotFollowing`]) is not silent either — it
+    /// is **unreachable from the surface**, which draws the box only for
+    /// publishers you follow — and it is kept as a real outcome so the model
+    /// says what it did rather than guessing that the renderer got it right.
+    ///
+    /// `value` is `{peer}\x1f{name}`. Split on a unit separator rather than
+    /// whitespace so an empty name survives as an empty second field — **that is
+    /// the clear**, and a split that dropped it would make the alias
+    /// un-removable.
+    pub fn set_label(&mut self, peers: &Peers, our_peer_id: &str, value: &str) {
+        let (subject, name) = value.split_once('\u{1f}').unwrap_or((value, ""));
+        let outcome = feed_follows::set_label(peers, our_peer_id, subject.trim(), name);
+        tracing::info!(
+            subject = %subject,
+            outcome = ?outcome,
+            "feed: the reader's own name for a publisher"
+        );
     }
 
     /// Stop following, and stop showing them if they were on screen.
@@ -351,11 +394,44 @@ impl FeedModel {
     pub fn render_output(&self, peers: &Peers, our_peer_id: &str, now: f64) -> FeedOutput {
         let selected = self.effective_selection();
 
-        let follows: Vec<FollowRow> = feed_follows::list(peers, our_peer_id)
-            .into_iter()
+        // **The routed set, read once and shared.** Both the browse list and the
+        // labels below want `peer → origin`, and `list_origins` is a tree
+        // listing plus one read per row — asking twice per frame would be the
+        // same answer at twice the cost, and two call sites that could drift
+        // about which peers are routed.
+        let origins: std::collections::BTreeMap<String, String> =
+            crate::content_site::origins::list_origins(peers, our_peer_id)
+                .into_iter()
+                .collect();
+
+        // **Who you follow, and what you call them.** The follow row is where
+        // both words live (§2.4's `label` and `via`), so this is the only place
+        // a petname can be read — which is why the map below is keyed by peer
+        // and consulted by the browse list and the panel head rather than each
+        // re-reading the registry.
+        let rows = feed_follows::list(peers, our_peer_id);
+        let named: std::collections::BTreeMap<&str, (Option<&str>, Option<&str>)> = rows
+            .iter()
+            .map(|f| (f.subject.as_str(), (f.label.as_deref(), f.via.as_deref())))
+            .collect();
+        // One expression of *what do I call this peer*, so a row in one list and
+        // the head of the panel can never disagree about the same publisher.
+        let label_for = |peer: &str| {
+            let (petname, via) = named.get(peer).copied().unwrap_or((None, None));
+            crate::views::feed::output::peer_label(
+                petname,
+                via,
+                origins.get(peer).map(String::as_str),
+            )
+        };
+
+        let follows: Vec<FollowRow> = rows
+            .iter()
             .map(|f| FollowRow {
                 selected: selected.as_deref() == Some(f.subject.as_str()),
-                peer_id: f.subject,
+                label: label_for(&f.subject),
+                petname: f.label.clone(),
+                peer_id: f.subject.clone(),
             })
             .collect();
 
@@ -365,16 +441,16 @@ impl FeedModel {
         // a retired publisher is resolved rather than offered.
         let followed: std::collections::BTreeSet<&str> =
             follows.iter().map(|f| f.peer_id.as_str()).collect();
-        let mut known: Vec<crate::views::feed::output::KnownRow> =
-            crate::content_site::origins::list_origins(peers, our_peer_id)
-                .into_iter()
-                .map(|(peer_id, _origin)| crate::views::feed::output::KnownRow {
-                    followed: followed.contains(peer_id.as_str()),
-                    selected: selected.as_deref() == Some(peer_id.as_str()),
-                    own: peer_id == our_peer_id,
-                    peer_id,
-                })
-                .collect();
+        let mut known: Vec<crate::views::feed::output::KnownRow> = origins
+            .keys()
+            .map(|peer_id| crate::views::feed::output::KnownRow {
+                followed: followed.contains(peer_id.as_str()),
+                selected: selected.as_deref() == Some(peer_id.as_str()),
+                own: *peer_id == our_peer_id,
+                label: label_for(peer_id),
+                peer_id: peer_id.clone(),
+            })
+            .collect();
         // **By peer id, and by nothing else.** A stable total order so the list
         // does not reshuffle between frames — `own_posts`' rule below. It used
         // to sort the deployment's own publisher to the top; see
@@ -390,9 +466,29 @@ impl FeedModel {
         // literal moves `follows` before it reaches this field. The two facts
         // come from the same sources the browse rows above read, so a row and
         // the head can never disagree about the same peer.
+        // ⚠ **The panel's origin, resolved ONCE and shared with the head.**
+        // `get_origin` resolves the *subject* through supersession before it
+        // looks up, which the `origins` map above cannot do — so a retired peer
+        // that is still selected gets its successor's origin here and `None`
+        // from the map. Two answers to *"where are they hosted"* on one screen
+        // is C15's drift with a routing symptom, so the route below and the line
+        // the head draws read the same call.
+        let selected_origin = selected
+            .as_ref()
+            .and_then(|a| crate::content_site::origins::get_origin(peers, our_peer_id, a));
+
         let selection = selected.as_ref().map(|peer_id| crate::views::feed::output::Selection {
             followed: followed.contains(peer_id.as_str()),
             own: peer_id == our_peer_id,
+            // The label reads the resolved origin too, so a superseded
+            // publisher is labelled by where their successor is served rather
+            // than falling back to *"we have no word for them"*.
+            label: crate::views::feed::output::peer_label(
+                named.get(peer_id.as_str()).and_then(|(l, _)| *l),
+                named.get(peer_id.as_str()).and_then(|(_, v)| *v),
+                selected_origin.as_deref(),
+            ),
+            origin: selected_origin.clone(),
             peer_id: peer_id.clone(),
         });
 
@@ -408,11 +504,12 @@ impl FeedModel {
                 //
                 // `get_origin` is the accessor that resolves supersession, never
                 // a registry read of our own: AP54 is a surface that skipped
-                // this chokepoint and kept serving a retired publisher.
+                // this chokepoint and kept serving a retired publisher. It is
+                // called once, above, and shared with the head — see
+                // `selected_origin`.
                 let connected =
                     crate::peer_liveness::liveness_of(peers, author).is_connected();
-                let origin =
-                    crate::content_site::origins::get_origin(peers, our_peer_id, author);
+                let origin = selected_origin.clone();
                 // **The mirror legs, from a list somebody typed.** This was
                 // an empty slice with a note saying §6 gives a reader no way to
                 // LEARN that a gatherer exists. That is still true and is why
@@ -1562,5 +1659,150 @@ mod tests {
         );
         assert_eq!(out.selected_peer(), Some(them.as_str()), "…and still selected them");
         assert_eq!(out.follows.len(), 1);
+    }
+
+    // -- what a publisher is called ----------------------------------------
+
+    /// ⭐⭐ **The name reaches the screen** — the whole of what the operator
+    /// asked for, end to end: resolve a name, and the surface that shows the
+    /// publisher shows the word rather than the key.
+    ///
+    /// It is one assertion about the model and three places it lands (the panel
+    /// head, the browse row, the follow row), because all three read one
+    /// `PeerLabel` — a publisher that read differently in two lists would be the
+    /// drift this was built to avoid.
+    #[test]
+    fn a_publisher_followed_by_a_resolved_name_is_shown_by_that_name_everywhere() {
+        let (mut m, peers, me) = model();
+        let them = peer_id(60);
+        route(&peers, &me, &them);
+        // The registry's press: follow, carrying the identifier it resolved.
+        m.follow_via(&peers, &me, &them, Some("billslab.com"), NOW_MS);
+
+        let out = m.render_output(&peers, &me, CLOCK);
+        let want = crate::views::feed::output::PeerLabel::Via("billslab.com".into());
+        assert_eq!(out.selected.as_ref().unwrap().label, want, "the panel head");
+        assert_eq!(out.follows[0].label, want, "the follow row");
+        assert_eq!(
+            out.known.iter().find(|k| k.peer_id == them).unwrap().label,
+            want,
+            "the browse row"
+        );
+        // …and the id is still carried, in full, beside it. A word is a handle,
+        // never an identity.
+        assert_eq!(out.selected.as_ref().unwrap().peer_id, them);
+    }
+
+    /// ⭐ **Your own name wins, and clearing it falls back rather than blanking.**
+    ///
+    /// D25's axis at the surface: the reader chose the petname, so nothing may
+    /// override it — and an alias somebody deletes must return them to whatever
+    /// was there before, not to an empty heading.
+    #[test]
+    fn a_petname_outranks_the_resolved_name_and_clearing_it_returns_the_resolved_one() {
+        let (mut m, peers, me) = model();
+        let them = peer_id(61);
+        route(&peers, &me, &them);
+        m.follow_via(&peers, &me, &them, Some("billslab.com"), NOW_MS);
+
+        m.set_label(&peers, &me, &format!("{them}\u{1f}Bill"));
+        assert_eq!(
+            m.render_output(&peers, &me, CLOCK).follows[0].label,
+            crate::views::feed::output::PeerLabel::Petname("Bill".into())
+        );
+
+        m.set_label(&peers, &me, &format!("{them}\u{1f}"));
+        assert_eq!(
+            m.render_output(&peers, &me, CLOCK).follows[0].label,
+            crate::views::feed::output::PeerLabel::Via("billslab.com".into()),
+            "clearing an alias falls back; it does not blank the row"
+        );
+    }
+
+    /// ⛔ **The alias box opens on the PETNAME, never on the rendered label.**
+    ///
+    /// The row's label may have fallen through to a resolved name or a host, and
+    /// a box pre-filled with one of those turns it into a petname on the first
+    /// Save — a value the reader never typed, written into their own tree and
+    /// from then on outranking the thing it was copied from.
+    #[test]
+    fn the_alias_box_is_empty_when_the_name_on_screen_is_not_one_you_chose() {
+        let (mut m, peers, me) = model();
+        let them = peer_id(62);
+        route(&peers, &me, &them);
+        m.follow_via(&peers, &me, &them, Some("billslab.com"), NOW_MS);
+
+        let row = &m.render_output(&peers, &me, CLOCK).follows[0];
+        assert_eq!(row.label.name(), Some("billslab.com"), "a word is on screen");
+        assert_eq!(row.petname, None, "…and it is not one to edit");
+    }
+
+    /// **A publisher with no word at all falls back to where they are hosted**,
+    /// which is the ordinary case on the browse list: these are the peers this
+    /// deployment routes to, so the origin is the one thing it knows about all
+    /// of them.
+    #[test]
+    fn an_unnamed_publisher_is_labelled_by_where_this_deployment_says_they_are_hosted() {
+        let (m, peers, me) = model();
+        let them = peer_id(63);
+        route(&peers, &me, &them);
+        let out = m.render_output(&peers, &me, CLOCK);
+        assert_eq!(
+            out.known.iter().find(|k| k.peer_id == them).unwrap().label,
+            crate::views::feed::output::PeerLabel::Origin("publisher.example".into())
+        );
+    }
+
+    /// ⛔⭐ **A SAME-ORIGIN DEPLOYMENT IS THE COMMON CASE AND IT HAS NO WORD —
+    /// stated as a gate so nobody reads the feature as covering it.**
+    ///
+    /// Every binding in a single-domain deployment is `@/`, so every origin is
+    /// the recorded empty string: there is no host to fall back to and a
+    /// publisher nobody has named renders as their id. That is honest — we have
+    /// no name — and it is why the petname box exists rather than being a
+    /// nicety. A version of `peer_label` that invented something here (the
+    /// deployment's own hostname, a site title) would be naming a publisher on
+    /// evidence nobody supplied.
+    #[test]
+    fn a_publisher_hosted_at_this_very_origin_has_no_word_until_somebody_names_them() {
+        let (mut m, peers, me) = model();
+        let them = peer_id(64);
+        // `""` — same-origin, recorded, which is what `--bind=NAME=PEER@/` writes.
+        crate::content_site::origins::set_origin(&peers, &me, &them, "");
+        let out = m.render_output(&peers, &me, CLOCK);
+        assert_eq!(
+            out.known.iter().find(|k| k.peer_id == them).unwrap().label,
+            crate::views::feed::output::PeerLabel::Unnamed
+        );
+
+        // …and naming them is the remedy that is actually available.
+        m.follow(&peers, &me, &them, NOW_MS);
+        m.set_label(&peers, &me, &format!("{them}\u{1f}The church"));
+        assert_eq!(
+            m.render_output(&peers, &me, CLOCK).follows[0].label,
+            crate::views::feed::output::PeerLabel::Petname("The church".into())
+        );
+    }
+
+    /// The panel head's origin line and the route the panel walks read **one**
+    /// `get_origin` call. Two answers to *"where are they hosted"* on one screen
+    /// is C15's drift with a routing symptom.
+    #[test]
+    fn the_head_says_the_same_origin_the_panel_reads_from() {
+        let (mut m, peers, me) = model();
+        let them = peer_id(65);
+        route(&peers, &me, &them);
+        m.select(&them);
+        let out = m.render_output(&peers, &me, CLOCK);
+        assert_eq!(
+            out.selected.as_ref().unwrap().origin.as_deref(),
+            Some("http://publisher.example")
+        );
+        // A publisher with no registration says so rather than claiming one.
+        let stranger = peer_id(66);
+        m.select(&stranger);
+        let out = m.render_output(&peers, &me, CLOCK);
+        assert_eq!(out.selected.as_ref().unwrap().origin, None);
+        assert_eq!(out.panel, FeedPanel::NoRoute, "…which is the panel's fact too");
     }
 }

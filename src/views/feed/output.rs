@@ -232,6 +232,13 @@ pub struct Selection {
     pub followed: bool,
     /// This profile's own peer.
     pub own: bool,
+    /// What to call them — see [`PeerLabel`]. The id is still rendered in full
+    /// beneath it; a word is a handle, not an identity.
+    pub label: PeerLabel,
+    /// Where this deployment says they are hosted, verbatim. `None` when no
+    /// origin is registered, `Some("")` when it is **same-origin**, which is a
+    /// recorded value and not an absence.
+    pub origin: Option<String>,
 }
 
 impl Selection {
@@ -272,6 +279,131 @@ impl Selection {
             "feed.known.col.publisher"
         }
     }
+}
+
+/// ⭐⭐ **WHAT TO CALL A PUBLISHER WHEN THE ONLY THING WE HAVE IS A KEY — four
+/// facts, each from a different place, and none of them a claim about anyone.**
+///
+/// # The gap this closes
+///
+/// Every row on this surface rendered a 45-character peer id and nothing else,
+/// including the row a person reached by resolving `billslab.com` through a
+/// registry thirty seconds earlier. The name was in hand at the moment of the
+/// act and thrown away, so the surface downstream had a key and no way back to
+/// the word.
+///
+/// # ⛔ There is still no naming authority, and this does not invent one
+///
+/// [`Petname`](Self::Petname) and [`Via`](Self::Via) are both
+/// `APP-CONVENTION-FEED` §2.4's own fields on the reader's **private** follow
+/// record: the label is *"local, chosen by the reader, and never
+/// authoritative"* and `via` is *"the identifier as typed or scanned, for
+/// provenance display only."* Neither is transmitted, neither is a statement
+/// about the publisher, and neither can be wrong in a way that matters — a
+/// petname is yours, and a `via` records **what you did**, which does not go
+/// stale the way a resolved binding does (AP30: this is not a remote assertion
+/// written down as current truth).
+///
+/// [`Origin`](Self::Origin) is not a name at all — it is where this deployment
+/// says the publisher is hosted, a routing fact already in the registry — and it
+/// is a separate arm precisely so a surface can render it as one. The honest
+/// sentence for it is *hosted at X*, never *called X*.
+///
+/// # Precedence, and why
+///
+/// Petname → `via` → origin → nothing. **The reader's own choice outranks
+/// everything** (D25's axis: a value the user set is not a value we may
+/// override); what they typed to get here outranks where the bytes happen to
+/// live, because it is more specific to *this publisher* than a host that may
+/// serve several.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerLabel {
+    /// You named them. Yours, editable, and never sent anywhere.
+    Petname(String),
+    /// The identifier you got here by — a registry name you resolved. §2.4's
+    /// `via`, provenance display only.
+    Via(String),
+    /// Where this deployment says they are hosted, host and port only. A
+    /// routing fact; render it as one.
+    Origin(String),
+    /// Nothing but the id. **Its own arm rather than an empty string**, so a
+    /// renderer cannot draw a blank heading and a gate can tell *"we have no
+    /// word for them"* from *"their word is empty"*.
+    Unnamed,
+}
+
+impl PeerLabel {
+    /// The word to draw, or `None` when there is none.
+    ///
+    /// [`Origin`](Self::Origin) is deliberately **not** returned here: it is not
+    /// a name, and a caller reaching for *"what do I call them"* must not get a
+    /// hostname back under that question. The renderer asks for it by name.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            PeerLabel::Petname(s) | PeerLabel::Via(s) => Some(s.as_str()),
+            PeerLabel::Origin(_) | PeerLabel::Unnamed => None,
+        }
+    }
+
+    /// Where this came from. **A stable token for a gate, never rendered** —
+    /// the lesson this window paid for once already, when three gates anchored
+    /// on a translated sentence and went red the day it was reworded.
+    pub fn source(&self) -> &'static str {
+        match self {
+            // i18n-ignore — wire tokens read by gates, never rendered
+            PeerLabel::Petname(_) => "petname",
+            PeerLabel::Via(_) => "via",
+            PeerLabel::Origin(_) => "origin",
+            PeerLabel::Unnamed => "none",
+        }
+    }
+}
+
+/// Resolve the label for one publisher from the three places a word can come
+/// from.
+///
+/// **Pure and takes strings**, so every combination is gated by `make test`
+/// rather than through a browser — and so no caller has to build a `Follow`
+/// entity to ask the question.
+///
+/// Blank is absence at every level: a petname of `"   "` is not a name, and
+/// falling through to the next source is what a person who cleared their alias
+/// meant. An **empty origin is same-origin**, which is a legitimate recorded
+/// value (the 2026-09-17 production defect is about exactly that) and is not a
+/// host — so it contributes no label rather than an empty one.
+pub fn peer_label(
+    petname: Option<&str>,
+    via: Option<&str>,
+    origin: Option<&str>,
+) -> PeerLabel {
+    fn word(s: Option<&str>) -> Option<&str> {
+        s.map(str::trim).filter(|s| !s.is_empty())
+    }
+    if let Some(p) = word(petname) {
+        return PeerLabel::Petname(p.to_string());
+    }
+    if let Some(v) = word(via) {
+        return PeerLabel::Via(v.to_string());
+    }
+    if let Some(host) = word(origin).and_then(origin_host) {
+        return PeerLabel::Origin(host);
+    }
+    PeerLabel::Unnamed
+}
+
+/// The host (and port) out of an origin URL — `https://billslab.com/x` →
+/// `billslab.com`.
+///
+/// Hand-written rather than through a URL parser because this crate's origins
+/// are `{scheme}://{host}[:{port}]` by construction (`deploy_origin` builds
+/// them) and a dependency for a `split_once` would be the larger cost. Anything
+/// that does not look like that answers `None` — **a string we could not read is
+/// not a host**, and showing a mangled one beside a publisher's name is worse
+/// than showing nothing.
+fn origin_host(origin: &str) -> Option<String> {
+    let rest = origin.split_once("://").map(|(_, r)| r).unwrap_or(origin);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    (!host.is_empty()).then(|| host.to_string())
 }
 
 /// ⭐ **Which follow control a surface may offer for one publisher — three
@@ -318,6 +450,13 @@ pub fn relation(own: bool, followed: bool) -> Relation {
 pub struct FollowRow {
     pub peer_id: String,
     pub selected: bool,
+    /// What to call them — see [`PeerLabel`].
+    pub label: PeerLabel,
+    /// The petname exactly as stored, for the alias box to open on. **Not
+    /// [`Self::label`]'s word**, which may have fallen through to a `via` or a
+    /// host — an edit box pre-filled with something the person did not type is
+    /// an edit box that turns a resolved name into a petname on the first Save.
+    pub petname: Option<String>,
 }
 
 /// One publisher **this profile already knows how to reach** — the browse list.
@@ -347,6 +486,11 @@ pub struct KnownRow {
     /// the two are different facts about the same peer and hiding one of them
     /// makes a publisher's own view of themselves unreachable.
     pub own: bool,
+    /// What to call them — see [`PeerLabel`]. On this list the
+    /// [`PeerLabel::Origin`] arm is the one that usually answers: these are the
+    /// peers this deployment routes to, so where they are hosted is the one
+    /// thing it knows about all of them.
+    pub label: PeerLabel,
 }
 
 /// One gatherer this profile reads through.
@@ -589,6 +733,8 @@ mod tests {
             peer_id: "2KSOMEBODY".to_string(),
             followed: false,
             own,
+            label: PeerLabel::Unnamed,
+            origin: None,
         };
         // The generic arm reuses the table's column key — see `heading_key`.
         assert_eq!(sel(false).heading_key(), "feed.known.col.publisher");
@@ -614,6 +760,8 @@ mod tests {
                 peer_id: peer.to_string(),
                 followed: false,
                 own,
+                label: PeerLabel::Unnamed,
+                origin: None,
             }
             .heading_key();
             assert!(key.starts_with("feed."), "a catalog key, never a value");
@@ -871,6 +1019,108 @@ mod tests {
         );
     }
 
+    /// ⭐ **The precedence, every step of it, and the count.**
+    ///
+    /// Four sources, four arms, and each one must be reachable — a fallthrough
+    /// that skipped a level would be invisible except to whoever had set the
+    /// thing that got ignored.
+    #[test]
+    fn your_own_name_outranks_the_one_you_resolved_and_both_outrank_a_hostname() {
+        assert_eq!(
+            peer_label(Some("Bill"), Some("billslab.com"), Some("https://bl.example")),
+            PeerLabel::Petname("Bill".into()),
+            "the reader's own choice wins — D25's axis"
+        );
+        assert_eq!(
+            peer_label(None, Some("billslab.com"), Some("https://bl.example")),
+            PeerLabel::Via("billslab.com".into()),
+            "what you typed to get here is more specific than where the bytes live"
+        );
+        assert_eq!(
+            peer_label(None, None, Some("https://bl.example")),
+            PeerLabel::Origin("bl.example".into())
+        );
+        assert_eq!(peer_label(None, None, None), PeerLabel::Unnamed);
+
+        let all = [
+            peer_label(Some("Bill"), None, None),
+            peer_label(None, Some("billslab.com"), None),
+            peer_label(None, None, Some("https://bl.example")),
+            peer_label(None, None, None),
+        ];
+        let sources: std::collections::BTreeSet<&str> =
+            all.iter().map(|l| l.source()).collect();
+        assert_eq!(sources.len(), 4, "each source needs its own token: {sources:?}");
+    }
+
+    /// ⛔ **A hostname is not a name, and `name()` must not hand one back.**
+    ///
+    /// The whole reason `Origin` is a separate arm is that the honest sentence
+    /// for it is *hosted at X*, never *called X*. A caller asking *"what do I
+    /// call them"* that got a host back would render a routing fact as a
+    /// publisher's name — a claim nobody made.
+    #[test]
+    fn a_hostname_is_not_returned_as_a_name() {
+        assert_eq!(peer_label(Some("Bill"), None, None).name(), Some("Bill"));
+        assert_eq!(peer_label(None, Some("b.com"), None).name(), Some("b.com"));
+        assert_eq!(peer_label(None, None, Some("https://b.example")).name(), None);
+        assert_eq!(peer_label(None, None, None).name(), None);
+    }
+
+    /// **Blank is absence at every level**, which is what makes clearing an
+    /// alias work: a petname of `"  "` falls through to the next source rather
+    /// than drawing an empty heading.
+    #[test]
+    fn a_blank_name_falls_through_instead_of_rendering_as_one() {
+        assert_eq!(
+            peer_label(Some("   "), Some("billslab.com"), None),
+            PeerLabel::Via("billslab.com".into())
+        );
+        assert_eq!(peer_label(Some(""), Some("  "), None), PeerLabel::Unnamed);
+    }
+
+    /// ⭐ **An EMPTY origin is same-origin — a recorded value, not an absence —
+    /// and it is still not a host.**
+    ///
+    /// This is the shape every single-domain deployment publishes (`--bind` with
+    /// `@/`), and reading `""` as absence is the 2026-09-17 production defect
+    /// one module over. Here the right answer happens to be the same as
+    /// absence's — there is no hostname in it — but it must arrive by *"that is
+    /// not a host"* rather than by *"there is no origin"*, because an empty
+    /// string reaching a formatter renders as `Hosted at `.
+    #[test]
+    fn same_origin_contributes_no_hostname_rather_than_an_empty_one() {
+        assert_eq!(peer_label(None, None, Some("")), PeerLabel::Unnamed);
+        assert_eq!(
+            peer_label(None, Some("billslab.com"), Some("")),
+            PeerLabel::Via("billslab.com".into()),
+            "…and it does not shadow a name we do have"
+        );
+    }
+
+    /// The host, and nothing but the host. Port kept — on a review estate it is
+    /// the only thing telling six publishers apart.
+    #[test]
+    fn a_hostname_is_the_authority_with_the_scheme_and_path_removed() {
+        for (origin, want) in [
+            ("https://billslab.com", "billslab.com"),
+            ("https://billslab.com/", "billslab.com"),
+            ("http://localhost:8531", "localhost:8531"),
+            ("https://example.org/prefix/x?y#z", "example.org"),
+            // No scheme at all: the whole string is the authority.
+            ("billslab.com", "billslab.com"),
+        ] {
+            assert_eq!(
+                peer_label(None, None, Some(origin)),
+                PeerLabel::Origin(want.into()),
+                "{origin}"
+            );
+        }
+        // Nothing that could be a host → no label, rather than a mangled one.
+        assert_eq!(peer_label(None, None, Some("https://")), PeerLabel::Unnamed);
+        assert_eq!(peer_label(None, None, Some("/relative")), PeerLabel::Unnamed);
+    }
+
     /// `selected_peer` is the whole of what a caller that does not care about
     /// the relation should see — and `None` stays `None` rather than becoming a
     /// `Selection` with an empty peer id.
@@ -896,6 +1146,8 @@ mod tests {
             peer_id: "2KSOMEBODY".to_string(),
             followed: true,
             own: false,
+            label: PeerLabel::Unnamed,
+            origin: None,
         });
         assert_eq!(out.selected_peer(), Some("2KSOMEBODY"));
     }

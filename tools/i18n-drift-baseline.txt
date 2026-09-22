@@ -244,6 +244,7 @@ execute.raw 93e5e23178330bdd translated
 execute.resource 9ef02dd07329b975 translated
 executeconsole.local 3e602aab8e50e316 translated
 feed.add_gatherer 8d265217cdf8d21e translated
+feed.alias_placeholder 0e782e48ec593378 translated
 feed.attr.bad_signature 660a74a4cfe712d1 translated
 feed.attr.cannot_check 4b2fde83a576ac06 translated
 feed.attr.no_signature 574e52f09dea19a7 translated
@@ -273,6 +274,7 @@ feed.gatherer_placeholder ff995bb7e2877cbe translated
 feed.gatherers 82a0fad46cdf6121 translated
 feed.gatherers_hint 70b204cb8c232ac1 translated
 feed.hint 9e58b215bb1b8f94 translated
+feed.hosted_at 2de38725c3a8e674 translated
 feed.known fb30aff6a420e992 translated
 feed.known.col.actions ecbd355c9425e6e0 translated
 feed.known.col.publisher ffe3436e90dc3714 translated
@@ -280,6 +282,7 @@ feed.known.col.relation 87d0181434bd427d translated
 feed.known.own 6affcf0fdab21668 translated
 feed.loading 1ee3c8986792bdc3 translated
 feed.manage 911eca19fc0ea3b9 translated
+feed.newest_only 1f87832775978bec translated
 feed.no_follows 4dc19741d6ce1adb translated
 feed.no_gatherers 0f823b0e406e7a41 translated
 feed.no_known aa72c4a06a4f73f0 translated
@@ -295,6 +298,7 @@ feed.notice.not_a_peer_id 0e3e8da24fcaeb84 translated
 feed.notice.thats_you 8795481caba57174 translated
 feed.panel.you 91626644bf91ec42 translated
 feed.peer_placeholder 74d2028bdf60049f translated
+feed.post_count 725107257b25640a translated
 feed.read 71094f0cdcaaa8c0 translated
 feed.remove_gatherer b7f62a2a1419dcf5 translated
 feed.unfollow a7e9e0528fcd7511 translated
@@ -601,6 +605,7 @@ queryconsole.type_filter 8c7bff2dadb17659 translated
 queryconsole.type_filter_hint 1db6ca4f98b11bfc translated
 readiness.insecure_origin 8fc6b18a4736f5f1 translated
 readiness.no_webrtc_api 80a4441ea3cd5dc4 translated
+registry.add_to_feed 951d81df6e99cd4c translated
 registry.association 35a395f06ea6c3d0 translated
 registry.browse 5d8fd9f45a7dc48c translated
 registry.checked 552186922400462a translated

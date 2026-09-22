@@ -579,7 +579,7 @@ fn render_known(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         util::append(
             &body,
             &components::tr(vec![
-                components::td(&components::copy_code(ctx, &row.peer_id, None)),
+                components::td(&publisher_cell(ctx, &row.peer_id, &row.label)),
                 components::td_text(&relation),
                 components::td(&{
                     // Open and Follow in one cell: the column header says
@@ -594,6 +594,50 @@ fn render_known(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         );
     }
     util::append(parent, &table);
+}
+
+/// ⭐ **One publisher in a list: what we call them, over the id that is
+/// actually them.**
+///
+/// The word and the identifier are two different things a person needs and
+/// neither replaces the other — which is the lesson `copy_code`'s own doc
+/// records from the file-transfer table, where showing *only* a friendly name
+/// left *"which peer is this"* unanswerable. So the id stays, in full and
+/// copyable, and the name goes above it when there is one.
+///
+/// **[`PeerLabel::Origin`] draws here and not as a heading.** On this list it is
+/// usually the only word available — these are the peers this deployment routes
+/// to — and it is honest as a caption beside an id in a way it would not be as a
+/// title claiming to name somebody.
+///
+/// One function, three call sites (browse row, follow row, and the panel's own
+/// head reads the same `PeerLabel`), so two lists cannot render the same
+/// publisher differently.
+fn publisher_cell(
+    ctx: &DomCtx,
+    peer_id: &str,
+    label: &crate::views::feed::output::PeerLabel,
+) -> Element {
+    use crate::views::feed::output::PeerLabel;
+    let cell = util::create_element("div");
+    let _ = cell.set_attribute("data-field", "feed-publisher");
+    // The source as an attribute so a gate can assert *which* word won without
+    // reading a translated one.
+    let _ = cell.set_attribute("data-label-source", label.source());
+    let word = match label {
+        PeerLabel::Petname(s) | PeerLabel::Via(s) => Some(s.clone()),
+        // Said as a routing fact, because that is what it is.
+        PeerLabel::Origin(host) => Some(crate::i18n::t("feed.hosted_at", &[("origin", host)])),
+        PeerLabel::Unnamed => None,
+    };
+    if let Some(word) = word {
+        let name = util::create_element("div");
+        let _ = name.set_attribute("data-field", "feed-publisher-name");
+        util::set_text(&name, &word); // i18n-ignore — a petname, a resolved name, or an already-translated line
+        util::append(&cell, &name);
+    }
+    util::append(&cell, &components::copy_code(ctx, peer_id, None));
+    cell
 }
 
 fn render_follow_form(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
@@ -657,7 +701,9 @@ fn render_follow_list(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         // a 45-character identifier as a label cannot be read, and cannot be
         // selected to copy either, because clicking it selects the publisher.
         // `copy_code` carries it in full; the button says what pressing it does.
-        util::append(&line, &components::copy_code(ctx, &row.peer_id, None));
+        // The name above it comes from the same `PeerLabel` the browse row and
+        // the panel head read, so one publisher reads the same in all three.
+        util::append(&line, &publisher_cell(ctx, &row.peer_id, &row.label));
 
         let open = components::button_el(
             &crate::i18n::t("feed.read", &[]),
@@ -682,6 +728,72 @@ fn render_follow_list(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         let _ = drop.set_attribute("data-field", "feed-unfollow");
         ctx.on_window_event(&drop, "click", "feed_unfollow", &row.peer_id);
         util::append(&line, &drop);
+
+        // ⭐⭐ **The petname box — §2.4's `label`, and it is only here.**
+        //
+        // *"A petname: local, chosen by the reader, and never authoritative …
+        // the answer to 'I cannot read a public key' that requires no naming
+        // authority at all."* The convention shipped the field, this crate
+        // shipped the codec, and nothing ever wrote one — so a surface whose
+        // whole complaint was *"all you show me is the key"* had the remedy in
+        // its own data model, unwired.
+        //
+        // ⛔ **Drawn only in this list, and that is what makes
+        // `LabelOutcome::NotFollowing` unreachable rather than merely
+        // handled**: the name hangs off the follow record, so a box over a
+        // publisher you do not follow would be a control whose only outcome is
+        // a refusal — the same defect the browse table's Follow-on-your-own-row
+        // was.
+        //
+        // **Per-row draft key**, or every row in the list would share one box's
+        // contents (`text_input` tracks drafts by key, which is what makes
+        // typing survive a rebuild) and naming one publisher would pre-fill the
+        // name of the next.
+        let draft_key = format!("feed_alias_{}", row.peer_id);
+        let alias = components::text_input(
+            ctx,
+            &draft_key,
+            // **The stored petname, never the rendered label** — which may have
+            // fallen through to a resolved name or a host. A box pre-filled with
+            // something the person did not type turns a `via` into a petname on
+            // the first Save.
+            row.petname.as_deref().unwrap_or_default(),
+            &crate::i18n::t("feed.alias_placeholder", &[]),
+        );
+        let _ = alias.set_attribute("data-field", "feed-alias");
+        let _ = alias.set_attribute("data-peer", &row.peer_id);
+        util::append(&line, &alias);
+
+        let save = components::button_el(
+            &crate::i18n::t("btn.save", &[]),
+            components::ButtonKind::Secondary,
+        );
+        let _ = save.set_attribute("data-field", "feed-alias-save");
+        // `{peer}\x1f{name}` — a unit separator, so an EMPTY name survives as an
+        // empty second field. That is the **clear**, and a whitespace split
+        // would make an alias impossible to remove.
+        //
+        // The draft is read at press time from the same key the box writes,
+        // rather than travelling on the event: `on_window_event` takes a static
+        // value and the box's contents change under it.
+        {
+            let actions = ctx.actions.clone();
+            let rp = ctx.repaint.clone();
+            let drafts = ctx.drafts.clone();
+            let peer = row.peer_id.clone();
+            let wid = output.window_id;
+            let key = draft_key.clone();
+            ctx.listen(&save, "click", move |_| {
+                let typed = drafts.borrow().get(&key).cloned().unwrap_or_default();
+                actions.borrow_mut().push(Action::WindowEvent {
+                    window_id: wid,
+                    event: "feed_set_label".to_string(),
+                    value: format!("{peer}\u{1f}{typed}"),
+                });
+                rp();
+            });
+        }
+        util::append(&line, &save);
 
         util::append(&list, &line);
     }
@@ -806,10 +918,27 @@ fn render_panel(parent: &Element, output: &FeedOutput, selected: &Selection, ctx
     // `copy_code`, complete and copyable. See
     // [`crate::views::feed::output::Selection::heading_key`] for why there is no
     // name to put there and why that is a held decision rather than a gap here.
-    util::append(
-        &head,
-        &components::subheading(&crate::i18n::t(selected.heading_key(), &[])),
-    );
+    //
+    // ⭐⭐ **…and it is the publisher's NAME when we have one.** Everything
+    // above was written when this surface had nothing but a key; §2.4's
+    // petname and `via` are the two words a reader can legitimately have for
+    // somebody, and both were implemented in the codec and wired to nothing.
+    // The generic word is now the fallback rather than the only answer.
+    //
+    // `PeerLabel::Origin` is deliberately **not** a heading — `name()` refuses
+    // to hand a hostname back for exactly this reason. Where they are hosted is
+    // a routing fact and gets its own line below, phrased as one.
+    let heading = match selected.label.name() {
+        Some(name) => name.to_string(),
+        None => crate::i18n::t(selected.heading_key(), &[]),
+    };
+    let title = components::subheading(&heading);
+    // The word, and where it came from, as attributes — never as a sentence.
+    // A gate reading a translated heading reds the day it is reworded, which
+    // this window has already paid for once.
+    let _ = title.set_attribute("data-field", "feed-panel-title");
+    let _ = title.set_attribute("data-label-source", selected.label.source());
+    util::append(&head, &title);
     // **`btn.refresh`, not a `feed.refresh` of our own.** Minting a second key
     // for a word the catalog already has is C15's drift inside the catalog, and
     // `i18n-locale-check` caught it: four locales had already rendered
@@ -875,6 +1004,25 @@ fn render_panel(parent: &Element, output: &FeedOutput, selected: &Selection, ctx
     let id_row = components::copy_code(ctx, &selected.peer_id, None);
     let _ = id_row.set_attribute("data-field", "feed-panel-peer");
     util::append(parent, &id_row);
+
+    // ⭐ **Where their bytes come from — a routing fact, said as one.**
+    //
+    // It is the only thing this deployment knows about every publisher it can
+    // reach, and on a multi-domain estate it is the one line that tells six
+    // otherwise-identical keys apart. **Same-origin (`Some("")`) draws nothing**
+    // rather than `Hosted at ` — a recorded empty origin is a real value and
+    // still not a host, which is `peer_label`'s rule arriving at the pixel.
+    if let Some(host) = selected
+        .origin
+        .as_deref()
+        .and_then(|o| (!o.trim().is_empty()).then_some(o))
+    {
+        let hosted = util::create_element("div");
+        hosted.set_attribute("style", theme::HINT).ok();
+        let _ = hosted.set_attribute("data-field", "feed-panel-origin");
+        util::set_text(&hosted, &crate::i18n::t("feed.hosted_at", &[("origin", host)]));
+        util::append(parent, &hosted);
+    }
 
     // ⭐ **What following does, at the control rather than in a help page.** The
     // question *"I clicked follow — what does that mean?"* had no answer
@@ -944,6 +1092,25 @@ const FILTER_FIELD: &str = "feed_filter";
 /// it rather than a taste.
 const FILTER_FROM: usize = 8;
 
+/// ⭐⭐ **How many posts a reading pane opens with.**
+///
+/// The complaint this exists for: a reading pane that scrolled all the way to
+/// the end with no paging and no count -- a publisher's whole archive rendered
+/// as one unbroken column, with no number anywhere saying how much of it there
+/// was.
+///
+/// ⛔ **This is a READING cap and it is not the fetch's.** The two are different
+/// dimensions and conflating them is how *"show me more"* turns into a network
+/// round trip nobody asked for: [`crate::feed_fetch::LIMIT`] bounds what one
+/// walk **obtains**, this bounds what one screen **draws**, and every post
+/// counted here is already in hand. Revealing more is free and instant, which
+/// is what makes it a DOM control rather than an event through the model.
+///
+/// Above [`FILTER_FROM`] so that any archive long enough to be capped is also
+/// long enough to have a filter — a person told there are more posts should have
+/// the means to find one.
+const PAGE_SIZE: usize = 20;
+
 /// ⭐⭐ **Show only the posts that match, and do it in the DOM.**
 ///
 /// The one thing this must not do is round-trip through the model. A filter
@@ -965,10 +1132,24 @@ const FILTER_FROM: usize = 8;
 /// somebody has typed into is indistinguishable from a publisher who posted
 /// nothing — the collapse `FeedPanel::Loading`/`NoPosts` exists one layer down
 /// to prevent, arriving here by a different road.
-fn apply_filter(list: &Element, empty: &Element, needle: &str) {
+///
+/// ⭐⭐ **It also applies the READING CAP, and the two are one pass on purpose.**
+/// Filtering and capping are both *"which of these slots are on screen"*, and
+/// two functions each writing `display` on the same elements is two predicates
+/// that disagree the first time they run in the wrong order — the exact reason
+/// the filter is one predicate over `textContent` rather than a DOM filter plus
+/// a Rust one. The cap counts **matches**, not slots, so narrowing a long
+/// archive to three posts shows three rather than three out of the first
+/// twenty.
+///
+/// Returns how many matched in total, so the caller can say whether the cap is
+/// hiding anything — *a control that reveals more must not appear when there is
+/// no more*, and a count is the only way to know.
+fn apply_view(list: &Element, empty: &Element, needle: &str, cap: usize) -> usize {
     let needle = needle.trim().to_lowercase();
     let slots = list.query_selector_all("[data-field=\"feed-entry-slot\"]").ok();
-    let mut shown = 0u32;
+    let mut matched = 0usize;
+    let mut shown = 0usize;
     if let Some(slots) = slots {
         for i in 0..slots.length() {
             let Some(slot) = slots.item(i).and_then(|n| n.dyn_into::<Element>().ok()) else {
@@ -979,18 +1160,28 @@ fn apply_filter(list: &Element, empty: &Element, needle: &str) {
                     .text_content()
                     .map(|t| t.to_lowercase().contains(&needle))
                     .unwrap_or(false);
+            if hit {
+                matched += 1;
+            }
+            let visible = hit && matched <= cap;
             // The slot exists so that hiding a card never touches the card's own
             // `style` — `components::card` puts the whole look there, and an
             // un-hide that wrote `display:block` over it would return a
             // different-looking post than the one that went away.
-            let _ = slot.set_attribute("style", if hit { "" } else { "display:none" });
-            if hit {
+            let _ = slot.set_attribute("style", if visible { "" } else { "display:none" });
+            if visible {
                 shown += 1;
             }
         }
     }
+    // ⚠ **`data-shown` is what the DOM DID; `data-matched` is what the model
+    // would have said.** A gate reading only the second measures the decision
+    // and not the effect — which is how a hide that never happened passes a
+    // check on the surface's own count.
     let _ = list.set_attribute("data-shown", &shown.to_string());
+    let _ = list.set_attribute("data-matched", &matched.to_string());
     let _ = empty.set_attribute("style", if shown == 0 { theme::HINT } else { "display:none" });
+    matched
 }
 
 fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow], ctx: &DomCtx) {
@@ -1015,6 +1206,59 @@ fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow], ctx: &DomCtx) 
     };
     util::set_text(&src, &text);
     util::append(parent, &src);
+
+    // ⭐ **How many posts this is.** The pane had no number anywhere, so
+    // *"how much of this is there?"* had no answer and the scroll bar was the
+    // only evidence — which is what made a working index walk read as broken
+    // paging. It also gives Refresh something observable to change.
+    let count = util::create_element("div");
+    count.set_attribute("style", theme::HINT).ok();
+    let _ = count.set_attribute("data-field", "feed-count");
+    let _ = count.set_attribute("data-count", &rows.len().to_string());
+    // ⚠ **`t_plural` picks the FORM; it does not fill the slot.** Passing `&[]`
+    // renders *"<FSI><PDI> posts"* — the bidi isolation marks around an empty
+    // substitution — and it is green in every native test, because nothing
+    // native reads this line. Found by reading a browser gate's failure dump for
+    // an unrelated neuter. The count goes in twice on purpose: once to choose
+    // the plural rule, once as the value.
+    util::set_text(
+        &count,
+        &crate::i18n::t_plural(
+            "feed.post_count",
+            rows.len() as i64,
+            &[("n", &rows.len().to_string())],
+        ),
+    );
+    util::append(parent, &count);
+
+    // ⛔⭐ **AND WHETHER THAT IS ALL OF THEM — the honest hedge.**
+    //
+    // One walk takes at most `feed_fetch::LIMIT` entries. When it comes back
+    // exactly full we **cannot tell** a publisher who has that many from one who
+    // has more: `read_feed_from` computes `truncated` and the no-cursor arm
+    // discards it (`Resumed::FromNewest` is returned either way), so the fact
+    // exists one module down and reaches no caller. That is the same defect
+    // `NameListing::complete` exists to prevent one window over — *a shortened
+    // list that does not announce itself* — and until the extent is threaded
+    // through `feed_route::reduce` this is what can honestly be said.
+    //
+    // So the sentence says *there may be* and the condition is our own request
+    // bound rather than a guess about the publisher. Unreachable on every feed
+    // published today (the largest is 34 against a limit of 50), which is
+    // exactly why it would otherwise ship untested and wrong.
+    if rows.len() >= crate::feed_fetch::LIMIT {
+        let more = util::create_element("div");
+        more.set_attribute("style", theme::HINT).ok();
+        let _ = more.set_attribute("data-field", "feed-newest-only");
+        util::set_text(
+            &more,
+            &crate::i18n::t(
+                "feed.newest_only",
+                &[("n", &crate::feed_fetch::LIMIT.to_string())],
+            ),
+        );
+        util::append(parent, &more);
+    }
 
     // **The filter, beside the line that says where these came from** — and
     // only on an archive long enough for narrowing to mean anything
@@ -1113,18 +1357,79 @@ fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow], ctx: &DomCtx) 
         Some(_) => ctx.drafts.borrow().get(FILTER_FIELD).cloned().unwrap_or_default(),
         None => String::new(),
     };
-    apply_filter(&list, &empty, &typed);
 
-    if let Some(filter) = filter {
+    // ⭐ **The reveal control — and the cap it lifts lives in the DOM, not in
+    // the model.**
+    //
+    // Everything it reveals is already on the page; pressing it changes no
+    // state, marks nothing dirty and cannot race a landing walk — the same
+    // argument the filter is built on, and the reason neither goes through a
+    // `WindowEvent`. A round trip through the model would rebuild the window
+    // under the caret and empty the filter box of attention on every press.
+    //
+    // ⚠ **The cap is session-scoped to this render**, so a repaint (a refresh
+    // landing, a follow) returns to the first page. That is deliberate rather
+    // than an oversight: a rebuild re-renders whatever the walk now holds, and
+    // carrying a reveal count across it would show a person the top of a list
+    // they had scrolled past with no way to tell what moved.
+    let cap = std::rc::Rc::new(std::cell::Cell::new(PAGE_SIZE));
+    let more = components::button_el(
+        // `contentsite.more` — *"More ▾ ({n})"*, already in thirty locales and
+        // already meaning exactly this. One English phrase, one key.
+        &crate::i18n::t("contentsite.more", &[("n", "0")]),
+        components::ButtonKind::Secondary,
+    );
+    let _ = more.set_attribute("data-field", "feed-more");
+    util::append(parent, &more);
+
+    // One function refreshes both the visibility and the control that governs
+    // it — **a reveal button that outlived its own reason is the dead-button
+    // disease**, and the count it carries is what tells somebody whether
+    // pressing it again will do anything.
+    let refresh_view = {
         let list = list.clone();
         let empty = empty.clone();
+        let more = more.clone();
+        let cap = cap.clone();
+        std::rc::Rc::new(move |needle: &str| {
+            let matched = apply_view(&list, &empty, needle, cap.get());
+            let remaining = matched.saturating_sub(cap.get());
+            let _ = more.set_attribute("data-remaining", &remaining.to_string());
+            let _ = more.set_attribute(
+                "style",
+                if remaining == 0 { "display:none" } else { "" },
+            );
+            more.set_text_content(Some(&crate::i18n::t(
+                "contentsite.more",
+                &[("n", &remaining.to_string())],
+            )));
+        })
+    };
+    refresh_view(&typed);
+
+    {
+        let cap = cap.clone();
+        let refresh_view = refresh_view.clone();
+        let drafts = ctx.drafts.clone();
+        ctx.listen(&more, "click", move |_| {
+            cap.set(cap.get() + PAGE_SIZE);
+            // **Re-read the draft rather than capturing it**: the box's contents
+            // change under this closure, and a reveal that re-applied a stale
+            // needle would show posts the filter had just excluded.
+            let needle = drafts.borrow().get(FILTER_FIELD).cloned().unwrap_or_default();
+            refresh_view(&needle);
+        });
+    }
+
+    if let Some(filter) = filter {
+        let refresh_view = refresh_view.clone();
         ctx.listen(&filter, "input", move |evt: web_sys::Event| {
             let value = evt
                 .target()
                 .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
                 .map(|i| i.value())
                 .unwrap_or_default();
-            apply_filter(&list, &empty, &value);
+            refresh_view(&value);
         });
     }
 }

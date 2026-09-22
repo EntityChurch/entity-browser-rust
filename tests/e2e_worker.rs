@@ -503,14 +503,26 @@ if ids:
 /// 2. Before this, stderr was piped and read **only** on the immediate-exit
 ///    path, so a server that died mid-run discarded its own explanation — the
 ///    same closed-pipe shape that cost a session on the Tauri listener.
+/// ⚠ `child` is an `Option` because **not every handle owns a server.** A test
+/// that runs a subject phase and then a control calls `setup()` twice while the
+/// first handle is still in scope, so the second call finds the port held by our
+/// own live server. That is not a collision — it is the same `dist/` on the same
+/// port — and the second handle *borrows* it: `None` child, shared `log`, and a
+/// `Drop` that takes nothing down. See [`reuse_our_dist_server`].
 struct DistServer {
-    child: Child,
+    child: Option<Child>,
     log: Arc<Mutex<Vec<String>>>,
+    port: u16,
 }
 
 impl DistServer {
     /// How many requests the server was asked to serve whose log line contains
     /// `needle`. Measured at the wire, not reported by the thing under test.
+    ///
+    /// A borrowed handle shares the owner's `log`, so this answers about the
+    /// server that is actually serving. The accident this replaced could not:
+    /// the second `setup()`'s child lost its bind and died, and its log stayed
+    /// empty forever, so a count taken through it silently read **0**.
     fn request_count(&self, needle: &str) -> usize {
         match self.log.lock() {
             Ok(lines) => lines.iter().filter(|l| l.contains(needle)).count(),
@@ -521,15 +533,243 @@ impl DistServer {
 
 impl Drop for DistServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // A borrowed handle owns nothing and must take nothing down — killing
+        // the shared server here would leave the still-live owning handle
+        // pointing at a corpse, which is worse than the bug this all started as.
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        deregister_our_server(self.port, &self.log);
     }
+}
+
+/// Ports **this process** is currently serving, each with the live server's
+/// request log.
+///
+/// This is the witness that lets [`refuse_if_port_is_already_served`] ask *is it
+/// ours* rather than *is something there*. A foreign server can never appear
+/// here: a row is written only after one of our own children has answered 200,
+/// and removed by that child's `Drop`.
+static OUR_SERVERS: Mutex<Vec<(u16, Arc<Mutex<Vec<String>>>)>> = Mutex::new(Vec::new());
+
+fn register_our_server(port: u16, log: &Arc<Mutex<Vec<String>>>) {
+    if let Ok(mut servers) = OUR_SERVERS.lock() {
+        servers.push((port, Arc::clone(log)));
+    }
+}
+
+fn deregister_our_server(port: u16, log: &Arc<Mutex<Vec<String>>>) {
+    if let Ok(mut servers) = OUR_SERVERS.lock() {
+        if let Some(i) = servers.iter().position(|(p, l)| *p == port && Arc::ptr_eq(l, log)) {
+            servers.remove(i);
+        }
+    }
+}
+
+/// A handle that borrows our own live dist server on `port`, or `None` if this
+/// process is not serving it.
+///
+/// **Registered is not the same as alive.** An owner killed from outside leaves
+/// a stale row, and handing back a handle to nothing would fail downstream
+/// wearing a product defect's clothes — so the row is confirmed against the wire
+/// before it is trusted, and dropped if the server is gone.
+///
+/// ⚠ **Dist only, and the asymmetry is deliberate.** `start_blackhole_server`
+/// takes a `stall` list, so two callers wanting that port want *different
+/// behaviour from it*; silently handing the second one a server that stalls the
+/// first one's paths would be a wrong answer rendered as a working rig. The dist
+/// server has no such parameter — it is `dist/` on a port, and two callers
+/// asking for it are asking for the same thing.
+fn reuse_our_dist_server(port: u16) -> Option<DistServer> {
+    let log = {
+        let servers = OUR_SERVERS.lock().ok()?;
+        let (_, log) = servers.iter().find(|(p, _)| *p == port)?;
+        Arc::clone(log)
+    };
+    if foreign_index_html(port).is_none() {
+        deregister_our_server(port, &log);
+        return None;
+    }
+    Some(DistServer { child: None, log, port })
+}
+
+/// Is this process already serving `port`? Used only to tell the refusal which
+/// sentence is true, so a message can never say *"it is not us"* about us.
+fn port_is_ours(port: u16) -> bool {
+    OUR_SERVERS.lock().map(|s| s.iter().any(|(p, _)| *p == port)).unwrap_or(false)
 }
 
 /// Cap on retained request lines. The monolith makes a few thousand requests;
 /// this is a diagnostic buffer, not a transcript, and an unbounded one in a
 /// 15-minute test is its own bug.
 const DIST_LOG_CAP: usize = 20_000;
+
+/// Refuse to start a server on a port **somebody else is already serving**.
+///
+/// `await_server_ready` asks "did our child exit?" before "is something
+/// listening?", and that order is load-bearing — for a child that has *already*
+/// died. **It cannot help on the first pass.** A freshly spawned python has not
+/// yet had time to fail its bind, so `try_wait()` answers `None`, the HTTP probe
+/// takes its 200 from the **foreign** server, and the helper returns `Ok` over a
+/// child that is about to exit. The suite then runs to completion against
+/// somebody else's `dist/`.
+///
+/// **Measured 2026-09-16, and it cost a session.** A second seat's suite held
+/// :8092 — `make e2e-worker` serves over `--network host`, so there is no
+/// namespace between two checkouts on one box and whichever binds first owns the
+/// port. A full unfiltered run read their tree: every navigation served their
+/// bytes, the failure set moved run to run with whatever their worktree held,
+/// and the run that should have been a baseline came back *worse* than the
+/// branch under test. One gate named the cause in its own output — *"running
+/// 63f958bc"*, a commit in no checkout of mine — and it was read as a cascade
+/// from an earlier failure.
+///
+/// So the question is not *is something serving* but **is it ours**, and the
+/// cheapest time to ask is before we bind.
+///
+/// ⛔ **The first cut of this answered *is something serving* and called that
+/// ownership, and its own output said so.** It printed *"it is not us"* directly
+/// above `build ed582364` — our own build id — and refused
+/// `a_deployment_boots_the_feed_window_at_a_named_publisher`, which holds its
+/// subject-phase server while it stands up a control. The doc here claimed
+/// *"nothing legitimate holds these ports: the suite is `--test-threads=1` and
+/// `DistServer::drop` reaps our own previous server before the next one
+/// starts"* — true of consecutive tests and **false within one**, and the one
+/// test in the suite that disproves it is the one that went red. ⇒ *a check that
+/// can name whose bytes these are and still says "not ours" is not asking about
+/// ownership.* Ownership is now a fact this process **records** ([`OUR_SERVERS`])
+/// rather than one inferred from a stamp, and a port that is ours is borrowed
+/// ([`reuse_our_dist_server`]), never refused.
+///
+/// Note what the refusal replaced, because it is why this went unnoticed for as
+/// long as the suite has existed: the second `setup()` used to spawn a python
+/// that lost the bind and died, while the HTTP probe took its 200 from our own
+/// first server. The test passed **by accident**, holding a handle to a corpse.
+///
+/// **It REFUSES**, which is deliberately the opposite of the Selenium preflight
+/// one file over. That one reports and proceeds because a leaked session is
+/// exactly what `reap_stale_sessions` exists to rescue; here there is no reaper
+/// and no case to rescue — a foreign server makes every assertion in the run a
+/// statement about a build nobody chose.
+///
+/// The refusal **names the build it found**, because *whose bytes are these* is
+/// the one fact that turns four hours of bisecting into one line. `curl -s <url>
+/// | grep entity-build` is the manual form this repo already recommends for
+/// :8081; this is it, wired to the place that would otherwise lie.
+///
+/// Scope, stated: this guards the two **fixed, well-known** ports every seat on
+/// a box shares (`E2E_HTTP_PORT`/8092, `E2E_BLACKHOLE_PORT`/8093). The staging
+/// servers take `pick_free_port()`, where the OS picks and a cross-seat
+/// collision needs an unlucky ephemeral reuse rather than a shared default.
+fn refuse_if_port_is_already_served(port: u16, what: &str) -> Result<(), std::io::Error> {
+    let Some(body) = foreign_index_html(port) else {
+        return Ok(());
+    };
+    let whose = meta_stamp(&body, "entity-build")
+        .map(|b| format!("build {b}"))
+        .unwrap_or_else(|| "no entity-build stamp — not one of our shells".to_string());
+
+    // OURS, and still refused: only the black-hole server reaches here that way,
+    // because it is parameterised by its `stall` list and two callers wanting
+    // the port want different behaviour from it. Say that, rather than sending
+    // somebody to hunt for another seat that is not there.
+    if port_is_ours(port) {
+        eprintln!(
+            "\n\
+             ┌─ REFUSING to start {what} ─────────────────────────────────────\n\
+             │ THIS PROCESS is already serving :{port} ({whose}).\n\
+             │\n\
+             │ Not another seat — a server this run started and still holds. The\n\
+             │ dist server would be borrowed here; this one cannot be, because it\n\
+             │ is built around a stall list and the holder's is not yours.\n\
+             │\n\
+             │ Drop the earlier handle before starting this one, or give this\n\
+             │ server its own port (E2E_BLACKHOLE_PORT).\n\
+             └────────────────────────────────────────────────────────────────\n"
+        );
+        return Err(std::io::Error::other(format!(
+            ":{port} is already served by this run ({whose}) — refused (see the block above)"
+        )));
+    }
+
+    // PRINTED, not only returned. A test harness renders a returned error with
+    // `{:?}`, which turns every newline into a literal `\n` and lays the whole
+    // block out as one unreadable line — at exactly the moment somebody has to
+    // read it. Falsified and seen: the first cut of this was legible in the
+    // source and a wall of escapes on the screen.
+    eprintln!(
+        "\n\
+         ┌─ REFUSING to start {what} ─────────────────────────────────────\n\
+         │ Something is ALREADY serving :{port}, and it is not us.\n\
+         │\n\
+         │   what is answering there:  {whose}\n\
+         │   who holds the port:       ss -ltnp | grep {port}\n\
+         │\n\
+         │ Every navigation in this run would have gone to that server's\n\
+         │ dist/, and every assertion would have been about ITS build. That\n\
+         │ is not a failure you can read off the results: the failure set\n\
+         │ moves with the other tree, and a clean run and a contaminated one\n\
+         │ look the same.\n\
+         │\n\
+         │ Usually another seat's suite on the same box — e2e-worker serves\n\
+         │ over --network host, so two checkouts share one port space.\n\
+         │ Give this run its own ports (do NOT kill their server):\n\
+         │\n\
+         │   make e2e-grid GRID_PORT=4455\n\
+         │   make e2e-worker WEBDRIVER=http://localhost:4455 \\\n\
+         │        E2E_HTTP_PORT=8492 E2E_BLACKHOLE_PORT=8493\n\
+         └────────────────────────────────────────────────────────────────\n"
+    );
+    Err(std::io::Error::other(format!(
+        ":{port} is already served by {whose} — refused (see the block above)"
+    )))
+}
+
+/// `GET /index.html` from `port`, returning the body only if a live server
+/// answers 200. `None` covers every other outcome — nothing listening, a socket
+/// that accepts and never answers, a non-200 — because the only thing this is
+/// allowed to conclude is *a server is serving here right now*.
+///
+/// A bare TCP connect would not do: it cannot tell a server from the black-hole
+/// rig's accept-and-never-answer socket, which is the distinction
+/// `await_server_ready` already had to learn.
+fn foreign_index_html(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut sock = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(300),
+    )
+    .ok()?;
+    sock.set_read_timeout(Some(Duration::from_millis(700))).ok()?;
+    let req = format!(
+        "GET /index.html HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
+    );
+    sock.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    // Bounded: a shell is ~100 KB and we only need the <head>. An unbounded read
+    // here would hand a hostile or merely enormous origin control of this probe.
+    let _ = sock.take(64 * 1024).read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let (head, _) = text.split_once("\r\n\r\n")?;
+    head.lines().next()?.contains(" 200 ").then_some(text)
+}
+
+/// Pull `<meta name="NAME" content="…">` out of a served shell.
+///
+/// Deliberately tolerant of attribute order and quoting: this reads a *foreign*
+/// document whose emitter we do not control, and the cost of missing the stamp
+/// is only a vaguer refusal message, never a wrong verdict — the refusal itself
+/// is decided by the 200, not by this.
+fn meta_stamp(html: &str, name: &str) -> Option<String> {
+    let needle = format!("name=\"{name}\"");
+    let at = html.find(&needle)?;
+    let rest = &html[at..];
+    let c = rest.find("content=\"")? + "content=\"".len();
+    let end = rest[c..].find('"')?;
+    Some(rest[c..c + end].to_string())
+}
 
 /// Start the dist server and **prove it is accepting connections** before
 /// returning.
@@ -558,6 +798,15 @@ fn start_dist_server() -> Result<DistServer, std::io::Error> {
     // app would run opaque-origin and then need a CORS-adding server; that arrives
     // with the sub-peer capability model — D21.)
     let port = http_server_port();
+    // Our own live server is not a collision — borrow it. Asked BEFORE the
+    // refusal, because "is it ours" is the question and "is something there" is
+    // only the fallback for when the answer is no.
+    if let Some(borrowed) = reuse_our_dist_server(port) {
+        return Ok(borrowed);
+    }
+    // Before we bind, not after: a bind failure is racy to observe and a foreign
+    // server answering our probe is not.
+    refuse_if_port_is_already_served(port, "the dist server")?;
     let child = Command::new("python3")
         .args(["-m", "http.server", &port.to_string(), "--directory", "dist"])
         .stdout(Stdio::null())
@@ -589,6 +838,7 @@ fn blackhole_server_port() -> u16 {
 #[allow(dead_code)]
 fn start_blackhole_server(stall: &[&str]) -> Result<DistServer, std::io::Error> {
     let port = blackhole_server_port();
+    refuse_if_port_is_already_served(port, "the black-hole server")?;
     let mut args: Vec<String> = vec![
         "tools/e2e/blackhole-serve.py".to_string(),
         port.to_string(),
@@ -728,7 +978,10 @@ fn await_server_ready(
                                 }
                             });
                         }
-                        return Ok(DistServer { child, log });
+                        // Registered only now — after a 200 off our own child,
+                        // so a row can never name a server that never served.
+                        register_our_server(port, &log);
+                        return Ok(DistServer { child: Some(child), log, port });
                     }
                 }
             }
@@ -1206,6 +1459,71 @@ fn last_shell_output<'a>(scrollback: &'a str, cmd: &str) -> &'a str {
     match scrollback.rfind(&marker) {
         Some(i) => &scrollback[i + marker.len()..],
         None => scrollback,
+    }
+}
+
+/// `last_shell_output`, but *absent* and *empty* stay apart.
+///
+/// The lenient version falls back to the WHOLE scrollback when the command
+/// never echoed, and that fallback can satisfy the assertion it was scoped to
+/// prevent: `ls app/e2e_deltest` is checked for the word `marker`, and the
+/// `put app/e2e_deltest/marker marker …` echo three lines up contains it. So a
+/// shell that never ran the `ls` at all returns a haystack in which the needle
+/// is guaranteed — a pass that means the opposite of what it reads as.
+///
+/// Use this wherever the *presence* of a token is the assertion. The lenient
+/// one is still right where absence is (there the fallback fails safe).
+fn last_shell_output_strict<'a>(scrollback: &'a str, cmd: &str) -> Option<&'a str> {
+    let marker = format!("> {cmd}");
+    scrollback
+        .rfind(&marker)
+        .map(|i| &scrollback[i + marker.len()..])
+}
+
+/// Re-issue `line` until `ready` holds on **that submission's own output**, or
+/// the deadline passes. Returns the final scrollback and the attempt count.
+///
+/// WHY THIS EXISTS: `shell_submit` dispatches Enter and then sleeps a FIXED
+/// `settle_ms`. That is a threshold nobody earned, and it is measured to be the
+/// wrong shape rather than merely the wrong number — on 2026-09-16 the
+/// delete-reflect phase failed an unfiltered run with its `put` scrollback still
+/// showing the output of `help`, i.e. after 800 ms the shell had not echoed the
+/// command, let alone run it. The same test passes filtered, which is this
+/// repo's own signature for *the rig is timing-sensitive*, not *the product
+/// regressed*.
+///
+/// Raising the sleep would buy a quieter box and lose the next one. Polling is
+/// the shape the charter already requires (`poll_json`, never a fixed sleep) and
+/// it is strictly stronger: a mirror that never fills still reds at the
+/// deadline, so nothing the original assertion could catch is given up.
+///
+/// It RE-SUBMITS rather than re-reading, deliberately: an `ls` renders its
+/// answer once, so re-reading the scrollback of a listing taken while the mirror
+/// was still empty polls a photograph. The question is asked again.
+async fn shell_poll<F>(
+    client: &Client,
+    line: &str,
+    deadline_ms: u64,
+    ready: F,
+) -> Result<(String, u32), Box<dyn std::error::Error>>
+where
+    F: Fn(&str) -> bool,
+{
+    let started = std::time::Instant::now();
+    let mut attempts = 0_u32;
+    let mut last = String::new();
+    loop {
+        attempts += 1;
+        last = shell_submit(client, line, 250).await.unwrap_or(last);
+        if let Some(out) = last_shell_output_strict(&last, line) {
+            if ready(out) {
+                return Ok((last, attempts));
+            }
+        }
+        if started.elapsed() >= Duration::from_millis(deadline_ms) {
+            return Ok((last, attempts));
+        }
+        sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -1745,12 +2063,13 @@ async fn setup(
         .into());
     }
 
-    let server = start_dist_server().map_err(|e| {
-        format!(
-            "failed to start python3 -m http.server: {e}. \
-             Is dist/ built? Run `make wasm` first (or `make e2e-worker`)."
-        )
-    })?;
+    // No advice added here, deliberately. This used to append "Is dist/ built?
+    // Run `make wasm` first", which is one cause among several and was simply
+    // WRONG for the other two: a port held by another seat, and a server that
+    // never served a 200. Both inner errors already name their own remedy, and a
+    // wrapper that guesses outranks them on the screen — the reader acts on the
+    // last sentence. AP40's cost is the wrong sentence, not the merged value.
+    let server = start_dist_server().map_err(|e| format!("could not start the dist server: {e}"))?;
 
     let mut caps = serde_json::Map::new();
     caps.insert(
@@ -2605,17 +2924,36 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     )
     .await?;
     println!("  delete-reflect put: {del_put:?}");
-    let del_ls_present = shell_submit(&client, "ls app/e2e_deltest", 600).await?;
-    let present_out = last_shell_output(&del_ls_present, "ls app/e2e_deltest");
+    // Poll, do not sleep. The subject is *does the mirror ever reflect this*,
+    // and a fixed settle answers *had it reflected by 600 ms on this box*.
+    let (del_ls_present, present_tries) =
+        shell_poll(&client, "ls app/e2e_deltest", 8_000, |out| {
+            out.contains("marker")
+        })
+        .await?;
+    let present_out = last_shell_output_strict(&del_ls_present, "ls app/e2e_deltest").expect(
+        "the `ls` never echoed into the scrollback, so there is no output to judge — \
+         the shell is not processing submissions, which is a different fault from \
+         the mirror not reflecting",
+    );
     assert!(
         present_out.contains("marker"),
         "after put, the Worker-arm mirror must show the new entity \
-         (creates reflect). last `ls app/e2e_deltest` output: {present_out:?}"
+         (creates reflect). Gave it 8s across {present_tries} listing(s). \
+         last `ls app/e2e_deltest` output: {present_out:?}"
     );
+    println!("  delete-reflect present after {present_tries} listing(s)");
 
     let del_rm = shell_submit(&client, "rm app/e2e_deltest/marker", 800).await?;
     println!("  delete-reflect rm: {del_rm:?}");
-    let del_ls_gone = shell_submit(&client, "ls app/e2e_deltest", 600).await?;
+    // The delete half polls the other way — and the original defect it gates
+    // ("creates reflect, deletes don't") still reds, because a ghost that is
+    // never removed is still there at the deadline.
+    let (del_ls_gone, gone_tries) = shell_poll(&client, "ls app/e2e_deltest", 8_000, |out| {
+        !out.contains("marker")
+    })
+    .await?;
+    println!("  delete-reflect gone-check after {gone_tries} listing(s)");
     // Scope to the LAST `ls` output — scrollback is cumulative, so the
     // earlier present-listing + the `put`/`rm` command echoes still mention
     // the path and would false-match a whole-history `contains`.
@@ -8096,7 +8434,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 addr.value = 'ws://127.0.0.1:65535';
                 addr.dispatchEvent(new Event('input', { bubbles: true }));
                 for (const b of sec.querySelectorAll('button')) {
-                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                    if (b.getAttribute('data-field') === 'connector-add') { b.click(); return { ok: true }; }
                 }
                 return { ok: false, reason: 'no-add-button' };
             }
@@ -8262,7 +8600,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 }
                 return {
                     card: text.includes('Meet at a name'),
-                    needs_connector: text.includes('Select a connector first'),
+                    needs_connector: text.includes('Choose a rendezvous node first'),
                     meet_btn,
                 };
             }
@@ -8314,7 +8652,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 addr.value = 'ws://127.0.0.1:65534';
                 addr.dispatchEvent(new Event('input', { bubbles: true }));
                 for (const b of sec.querySelectorAll('button')) {
-                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                    if (b.getAttribute('data-field') === 'connector-add') { b.click(); return { ok: true }; }
                 }
                 return { ok: false, reason: 'no-add-button' };
             }
@@ -8506,6 +8844,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         for (const sec of root.querySelectorAll('section.window')) {
             if (!sec.querySelector('.peer-connections')) continue;
             const text = sec.textContent;
+            const line = (text.match(/Searching at[^\n]*/) || [''])[0];
             return {
                 searching: text.includes('Searching at'),
                 // The reach_node failure text specifically — NOT the address,
@@ -8514,6 +8853,11 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 failed: text.includes('connector: dialing'),
                 stop_btn: Array.from(sec.querySelectorAll('button'))
                     .some(b => b.textContent.trim() === 'Stop'),
+                // What the line SAYS, so the shape of it is assertable: a
+                // duration a person can price, and never a bare N/M counter.
+                line,
+                says_how_long: /min left|under a minute/.test(line),
+                counter: /\d+\s*\/\s*\d+/.test(line),
             };
         }
         return { searching: false, reason: 'no-section' };
@@ -8539,9 +8883,32 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             "A running meet offers no way to stop it — it would poll for its whole \
              window with no way out. Detail: {running}"
         );
-        println!("  meet observed in progress, with a way to stop it: {running}");
+        // **The wait has to be priceable.** What this replaced was the raw poll
+        // counter climbing toward its bound, which says nothing a person can act
+        // on — reported, in those words, as stressful to watch. The phrase is
+        // renderable from the first frame precisely because `remaining_ms` is
+        // the whole window until listening begins: a slow dial must not look
+        // like a short search.
+        assert_eq!(
+            running.get("says_how_long").and_then(|v| v.as_bool()),
+            Some(true),
+            "A running meet does not say how long it runs for. Detail: {running}"
+        );
+        assert_eq!(
+            running.get("counter").and_then(|v| v.as_bool()),
+            Some(false),
+            "The meet line is back to a bare N/M counter. Detail: {running}"
+        );
+        println!("  meet observed in progress, priced and stoppable: {running}");
     } else {
-        println!("  meet failed before the first look — that is a report too: {running}");
+        // Say which arm ran. The node here is unreachable by construction, so
+        // catching the search mid-flight is a race — and an assertion that may
+        // not have executed must not be read as coverage. When this line prints,
+        // the two checks above did NOT run.
+        println!(
+            "  meet failed before the first look — that is a report too, and the \
+             mid-search line went UNMEASURED this run: {running}"
+        );
     }
 
     // It ENDS, and says why. The node is unreachable by construction, so a
@@ -14196,7 +14563,7 @@ async fn selecting_a_connector_says_it_needs_a_reload(
             if (!set('connector_addr', 'ws://127.0.0.1:65535')) return 'no-addr-field';
             if (!set('connector_expect', {pid:?})) return 'no-expect-field';
             for (const b of card.querySelectorAll('button')) {{
-                if (b.textContent.trim() === 'Add connector') {{ b.click(); return 'added'; }}
+                if (b.getAttribute('data-field') === 'connector-add') {{ b.click(); return 'added'; }}
             }}
             return 'no-add-button';
             "#,
@@ -19592,6 +19959,239 @@ async fn a_running_app_survives_its_own_save() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// A running app must survive **another window opening**.
+///
+/// Reported from the outside as: start a VM in the Apps window, open any other
+/// window, and the VM is back at its boot screen. A section rebuild runs
+/// `render_player`, which replaces the `<iframe>` — so anything that dirties an
+/// Apps window holding a mounted player restarts the app.
+///
+/// Two spawns are measured **separately and in order**, because they have
+/// different candidate causes and a gate that only opened one of them could not
+/// tell them apart:
+///
+///  1. a window of an unrelated type (Shell) — nothing it does touches any
+///     prefix the Apps window watches, so a teardown here means the spawn
+///     itself is the trigger (the window index, the palette, the section list);
+///  2. a **second Apps window** — its factory fetches every set's catalog once
+///     per open, so a teardown here and not there means the fetch wrote;
+///  3. a **write under `apps/<set>/bundles/`** — the row that was red. This is
+///     what the fetch performs when it finds anything moved
+///     (`ForeignArtifact::AppBundle::store_path()` is that path), and what
+///     launching an app in the second window performs for the app it launches.
+///
+/// **Stated bound on row 3: the write is issued by a Shell, not by a fetch.**
+/// This rig serves no app origin, so the two spawns above download nothing and
+/// the production writer cannot be provoked here. What row 3 measures is the
+/// *consequence* — any write under a prefix the launcher watches tears the
+/// player down — which is the half that was defective; that `ensure_current`
+/// writes at exactly that path on `Currency::Fetched` is read off the code, not
+/// asserted here.
+///
+/// The survival probe is a JS expando on the iframe, not an attribute: the
+/// regression's signature is that the element is replaced, so anything stamped
+/// on it is destroyed exactly when the gate needs to read it.
+#[tokio::test]
+async fn a_running_app_survives_another_window_opening() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    assert_eq!(
+        click_spawn_btn(&client, "+ Apps").await?,
+        "clicked",
+        "couldn't open the Apps window"
+    );
+
+    let read_apps = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return {
+                open: true,
+                war: !!Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War')),
+            };
+        }
+        return { open: false, war: false };
+    "#;
+    let grid = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("war").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        grid.get("war").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the Apps launcher never listed the War demo, so there is nothing to run. Got: {grid:?}"
+    );
+
+    let launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War'));
+                if (!card) return 'no-war-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(launched.as_str().unwrap_or(""), "clicked", "War launch failed: {launched:?}");
+
+    // Mark the mounted frame. `players` is the anti-vacuity half: with no player
+    // mounted at all, "the probe is gone" and "there was never a probe" read the
+    // same, and the second is a rig fault rather than the defect.
+    const MARK: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let fr = null;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const f = sec.querySelector('iframe[sandbox]');
+            if (f) fr = f;
+        }
+        if (!fr) return { mounted: false };
+        fr.__aliveProbe = 'war-still-running';
+        return { mounted: true, has_cw: !!fr.contentWindow };
+    "#;
+    const READ: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let players = 0, alive = false;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const f = sec.querySelector('iframe[sandbox]');
+            if (!f) continue;
+            players += 1;
+            if (f.__aliveProbe === 'war-still-running') alive = true;
+        }
+        return {
+            players,
+            alive,
+            windows: root.querySelectorAll('section.window').length,
+        };
+    "#;
+    let marked = poll_json(&client, MARK, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("mounted").and_then(|b| b.as_bool()).unwrap_or(false)
+            && v.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        marked.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false),
+        "War never mounted its sandboxed iframe. Got: {marked:?}"
+    );
+
+    // Step 1 — an unrelated window type.
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open a Shell window"
+    );
+    let after_shell = poll_json(&client, READ, Duration::from_secs(3), |v| {
+        !v.get("alive").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    let shell_alive = after_shell.get("alive").and_then(|b| b.as_bool()).unwrap_or(false);
+    println!("  after '+ Shell': {after_shell:?}");
+
+    // Step 2 — a second Apps window. Run it either way: if step 1 already tore
+    // the app down, step 2 still says whether the fetch is a *second* cause, and
+    // a gate that stopped at the first red would report one of two defects.
+    let _ = client
+        .execute(MARK, vec![])
+        .await?;
+    assert_eq!(
+        click_spawn_btn(&client, "+ Apps").await?,
+        "clicked",
+        "couldn't open a second Apps window"
+    );
+    let after_apps = poll_json(&client, READ, Duration::from_secs(3), |v| {
+        !v.get("alive").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    let apps_alive = after_apps.get("alive").and_then(|b| b.as_bool()).unwrap_or(false);
+    println!("  after '+ Apps':  {after_apps:?}");
+
+    // Step 3 — a write under a prefix the launcher watches, which is what a
+    // second window's catalog/bundle refresh performs.
+    let _ = client.execute(MARK, vec![]).await?;
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open a Shell window for the write"
+    );
+    let _ = shell_submit(
+        &client,
+        "put apps/games/bundles/e2e-probe app/bundle {\"html\":\"<p>probe</p>\"}",
+        400,
+    )
+    .await?;
+    // The write has to LAND, or this row is satisfied by a Shell that silently
+    // did nothing — which is the same green as a fixed gate. Polled rather than
+    // slept on: `shell_submit`'s settle is a fixed number nobody earned, and it
+    // was measured returning before the command had even echoed.
+    // Read back through THIS command's own output slice, never the whole
+    // scrollback. The first cut searched the `<pre>` and found its needle in the
+    // echo of the `put` one line up — so it confirmed the write by reading the
+    // command that requested it, and stayed green with the read pointed at a
+    // path nothing had written. Falsified now by a needle nothing writes.
+    const PROBE_READ: &str = "ls apps/games/bundles";
+    let (scroll, tries) =
+        shell_poll(&client, PROBE_READ, 8_000, |out| out.contains("e2e-probe")).await?;
+    let landed = last_shell_output_strict(&scroll, PROBE_READ)
+        .is_some_and(|out| out.contains("e2e-probe"));
+    assert!(
+        landed,
+        "the probe write never landed in the tree after {tries} attempt(s), so \
+         nothing below measures what a launcher-prefix write does — a green here \
+         would be a Shell that did nothing, not an app that survived."
+    );
+    let after_write = poll_json(&client, READ, Duration::from_secs(3), |v| {
+        !v.get("alive").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    let write_alive = after_write.get("alive").and_then(|b| b.as_bool()).unwrap_or(false);
+    println!("  after a bundles/ write: {after_write:?}");
+
+    assert!(
+        shell_alive,
+        "the running app was torn down by an unrelated window opening: \
+         opening a Shell rebuilt the Apps window's section, and `render_player` \
+         replaced the iframe — which restarts the app at its start screen. \
+         Got: {after_shell:?}"
+    );
+    assert!(
+        apps_alive,
+        "the running app was torn down by a SECOND Apps window opening. \
+         The new window's factory refreshes every set's catalog once per open; \
+         a write there flips the dirty flag of every Apps window watching that \
+         prefix, including the one holding a mounted player. Got: {after_apps:?}"
+    );
+    assert!(
+        write_alive,
+        "the running app was torn down by a write under `apps/<set>/bundles/`. \
+         That prefix is watched so the launcher grid notices new app code — and \
+         a catalog/bundle refresh (another Apps window opening, a retry, a \
+         republish) performs exactly this write, so it rebuilds every Apps \
+         window including the one holding a mounted player. Got: {after_write:?}"
+    );
+    println!("  the app survived both spawns and a launcher-prefix write");
+    client.close().await.ok();
+    Ok(())
+}
+
 /// A **trusted** left click at viewport coordinates.
 ///
 /// Necessary rather than stylistic: our windows render inside a shadow root, so
@@ -19831,6 +20431,22 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
     }).await?;
     client.enter_parent_frame().await?;
     println!("  app side: {inside}");
+    // ── 0, asserted FIRST because it is the one an app decides on before it asks
+    // anything: did the host OFFER the family in `init`?
+    //
+    // entity-apps' SDK gates `ext.files.available()` on exactly this, `=== true`,
+    // so a host that implements every verb and offers nothing is indistinguishable
+    // from one that will never answer — and that was us from 2026-09-14 to 09-16,
+    // with every other assertion in this gate passing the whole time. This fixture
+    // asks the host directly and so could not see it; the app's own view is the
+    // only place the omission is visible.
+    assert_eq!(
+        inside.get("filesOffered").and_then(|b| b.as_bool()),
+        Some(true),
+        "the host never offered `x-files` in init, so an app following the contract \
+         cannot tell this host from one that will never answer (entity-apps \
+         EMBEDDING §8). The verbs working is not the same as the offer being made: {inside}"
+    );
     let results = inside.get("results").and_then(|r| r.as_array()).cloned().unwrap_or_default();
     let refused = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(false));
     let kept = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(true));
@@ -20173,6 +20789,77 @@ async fn the_system_monitor_counts_a_stall_and_closes_a_window() -> Result<(), B
     assert_eq!(restored.get("maximized").and_then(|b| b.as_bool()), Some(false),
         "Show left the maximized monitor covering the window it was asked to show: {restored}");
 
+    // ── 9: a REAL payload reports itself — no injected message
+    //
+    // ⭐ Step 7 proves the HOST arm by posting `x-stats` from the test. That is
+    // the whole of what it can prove, and until 2026-09-15 it was also the whole
+    // of what anything proved: `x-stats` had exactly ONE producer (the v86
+    // machines' `vm-sdk.js`), so every other app — and every compute program —
+    // rendered a row with no numbers in it. *A capability with one producer
+    // reads, from inside, as a capability the surface has.*
+    //
+    // ⚠ And the fix that looks obvious is unbuildable: `src/program_host/` reads
+    // as in-process and is not. A Programs window delivers
+    // `index.html?app-host={key}` through the same `dom::games::render_player`
+    // an app uses, so the tick loop is a separate WASM instance in a separate
+    // document with its own `monitor::sampler` thread-local that nothing reads.
+    // A hook beside `note_sections` cannot see a tick. The numbers must cross
+    // ③α — and what makes that cheap is that for a PROGRAM both ends are ours.
+    //
+    // So this step launches Life from the production launcher and waits for the
+    // row to go busy **with nothing injected**. Its falsifier is the emit:
+    // delete `post_stats_to_host` from the tick loop and the row sits on
+    // *not reporting* forever.
+    assert_eq!(click_spawn_btn(&client, "+ Entity Native Apps").await?, "clicked",
+        "couldn't open the Programs window");
+    let life_launched = poll_json(&client, r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+            const card = Array.from(sec.querySelectorAll('button')).find(b => b.textContent.includes('Life'));
+            if (!card) return 'no-life-card';
+            card.click(); return 'clicked';
+        }
+        return 'no-programs-window';
+    "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(life_launched.as_str(), Some("clicked"), "could not launch Life: {life_launched}");
+
+    // Read the Programs row on its own rather than widening `state`, whose
+    // `apps` array is filtered to `data-window-type === 'Apps'` and is depended
+    // on by step 7.
+    let prog_state = format!(r#"{MON}
+        if (!sec) return {{ window: false }};
+        const row = Array.from(sec.querySelectorAll('[data-field="monitor-window-row"]'))
+            .find(r => r.getAttribute('data-window-type') === 'Programs');
+        return {{
+            window: true,
+            found: !!row,
+            load: row ? row.getAttribute('data-app-load') : null,
+            name: row ? row.querySelector('td').textContent.replace(/[\u2068\u2069]/g, '') : null,
+        }};
+    "#);
+    // The payload has to boot its own wasm, materialize the bundle and run a
+    // tick before it has anything to report, so this is a longer wait than an
+    // ordinary round trip — and it is a wait for the ROW, never for a log line.
+    //
+    // `busy` OR `idle` — both are a REPORT, and which one a 1 Hz Life lands on
+    // is a threshold question this gate has no business pinning. The claim is
+    // that it stopped saying *not reporting*, which is a third state and the
+    // only one that means "nobody told us".
+    let reported = |v: &serde_json::Value| {
+        matches!(v.get("load").and_then(|x| x.as_str()), Some("busy") | Some("idle"))
+    };
+    let reporting = poll_json(&client, &prog_state, Duration::from_secs(60), reported).await?;
+    println!("  programs row: {reporting}");
+    assert!(reporting.get("found").and_then(|b| b.as_bool()) == Some(true),
+        "the monitor lists no Programs window at all, so this step measured nothing: {reporting}");
+    assert!(reported(&reporting),
+        "a compute program running in its own iframe never reported its share of the thread — \
+         the Programs row is still 'not reporting', which is what every non-VM app read before \
+         `post_stats_to_host` existed: {reporting}");
+
     client.close().await.ok();
     Ok(())
 }
@@ -20495,7 +21182,7 @@ async fn on_a_phone_a_windows_content_stays_inside_it() -> Result<(), Box<dyn st
             addr.value = '{long_addr}';
             addr.dispatchEvent(new Event('input', {{ bubbles: true }}));
             for (const b of sec.querySelectorAll('button'))
-                if (b.textContent.trim() === 'Add connector') {{ b.click(); return {{ ok: true }}; }}
+                if (b.getAttribute('data-field') === 'connector-add') {{ b.click(); return {{ ok: true }}; }}
             return {{ ok: false, reason: 'no-add-button' }};
         }}
         return {{ ok: false, reason: 'no-section' }};
@@ -26486,6 +27173,84 @@ const READ_FEED: &str = r#"
         entry_meta_texts: Array.from(
             win.querySelectorAll('[data-field="feed-entry-meta"]')
         ).map(d => (d.textContent || '').trim()),
+        // ⭐⭐ **HOW MANY FEED WINDOWS ARE OPEN — and it is counted here rather
+        // than inferred from `error: no-feed-window`.**
+        //
+        // Every field above describes *the* Feed window, which was fine while
+        // nothing could produce a second one. *Open in Feed* pressed twice left
+        // two stacked on each other, and the only probe that could have seen it
+        // reported the first. A transition from one to two is invisible to a
+        // field whose domain is `null | the window`.
+        feed_windows: Array.from(root.querySelectorAll('section.window'))
+            .filter(sec => {
+                const h = sec.querySelector('header h3');
+                return h && h.textContent.trim() === 'Feed';
+            }).length,
+        // ⭐ **What this publisher is CALLED on screen, and where the word came
+        // from.** The source is the assertable half: a heading that happens to
+        // contain the right characters could be the peer id, the origin, or a
+        // petname somebody set — `data-label-source` is the only thing that says
+        // which of the four `PeerLabel` arms won, and the whole feature is which
+        // one.
+        panel_title: (() => {
+            const el = win.querySelector('[data-field="feed-panel-title"]');
+            return el ? (el.textContent || '').trim() : null;
+        })(),
+        panel_label_source: (() => {
+            const el = win.querySelector('[data-field="feed-panel-title"]');
+            return el ? el.getAttribute('data-label-source') : null;
+        })(),
+        // Where this deployment says they are hosted — drawn only when there is
+        // a host, so `null` is the same-origin case and not a missing element.
+        panel_origin: (() => {
+            const el = win.querySelector('[data-field="feed-panel-origin"]');
+            return el ? (el.textContent || '').trim() : null;
+        })(),
+        // The words in the lists — browse rows and follow rows both. Read as
+        // text because a petname IS text a person typed; the source attribute
+        // beside each is what a rule about precedence asserts on.
+        publisher_names: Array.from(
+            win.querySelectorAll('[data-field="feed-publisher-name"]')
+        ).map(d => (d.textContent || '').trim()),
+        publisher_label_sources: Array.from(
+            win.querySelectorAll('[data-field="feed-publisher"]')
+        ).map(d => d.getAttribute('data-label-source')),
+        // The petname box, per row — its VALUE, because the rule is that it
+        // opens on what you typed and never on the word that fell through.
+        alias_values: Array.from(
+            win.querySelectorAll('[data-field="feed-alias"]')
+        ).map(i => i.value || ''),
+        // ⭐ **The reading cap's control — present, and how much it is holding
+        // back.** `display:none` rather than absence is what the renderer does
+        // when there is nothing more to reveal, so *visible* is the fact and the
+        // element's existence is not.
+        more_visible: (() => {
+            const el = win.querySelector('[data-field="feed-more"]');
+            if (!el) return false;
+            return !(el.getAttribute('style') || '').includes('display:none');
+        })(),
+        more_remaining: (() => {
+            const el = win.querySelector('[data-field="feed-more"]');
+            return el ? el.getAttribute('data-remaining') : null;
+        })(),
+        // Whether the honest hedge about an archive longer than one walk is up.
+        newest_only: !!win.querySelector('[data-field="feed-newest-only"]'),
+        // How many posts the pane says it is showing, off the count line's own
+        // attribute rather than the pluralised sentence.
+        post_count: (() => {
+            const el = win.querySelector('[data-field="feed-count"]');
+            return el ? el.getAttribute('data-count') : null;
+        })(),
+        // ⚠ **The count line's TEXT, beside the attribute above, because the
+        // two can disagree and did.** `i18n::t_plural` selects the plural form
+        // and does NOT fill `{n}`; called without the argument it renders the
+        // bidi isolation marks around an empty substitution — *"<FSI><PDI> posts"* —
+        // while `data-count` is perfect. Same shape as `data-shown` vs the DOM
+        // one field up: one is the decision, one is what a person reads.
+        post_count_text: (() => {
+            const el = win.querySelector('[data-field="feed-count"]');
+            return el ? (el.textContent || '').trim() : null;
+        })(),
     });
 "#;
 
@@ -26576,6 +27341,57 @@ async fn feed_open_compose(client: &Client) -> Result<String, Box<dyn std::error
 /// *Read* — the browse list, or the publisher you selected.
 async fn feed_open_read(client: &Client) -> Result<String, Box<dyn std::error::Error>> {
     feed_open_pane(client, "read").await
+}
+
+/// Name a publisher — type into their alias box under *Manage sources* and
+/// press Save.
+///
+/// **Dispatches a real `input` event** for `feed_type_and_follow`'s reason: the
+/// box is draft-tracked, so the value the Save button reads comes from
+/// `ctx.drafts` and setting `.value` alone would measure an empty save while
+/// looking like it measured a real one.
+///
+/// ⭐ **Finds the row by `data-peer`**, never by position: the alias boxes are
+/// per-row and per-draft-key precisely so that naming one publisher cannot
+/// pre-fill the next, and a positional selector would pass a build that shared
+/// one box across the list.
+async fn feed_set_alias(
+    client: &Client,
+    peer_id: &str,
+    alias: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    feed_open_manage(client).await?;
+    // ⚠ **Escaped, because a petname is a person's own words.** The first cut
+    // interpolated the alias straight into a single-quoted JS literal and the
+    // name under test — `Bill's lab` — closed the string: the whole gate died on
+    // `SyntaxError: unexpected token`, which reads as a broken rig rather than
+    // as the apostrophe it was. An alias with a quote in it is the ordinary
+    // case, not an edge one.
+    let alias = alias.replace('\\', "\\\\").replace('\'', "\\'");
+    let script = format!(
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let win = null;
+        for (const sec of root.querySelectorAll('section.window')) {{
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Feed') win = sec;
+        }}
+        if (!win) return 'no-feed-window';
+        const input = win.querySelector('[data-field="feed-alias"][data-peer="{peer_id}"]');
+        if (!input) return 'no-alias-box';
+        input.value = '{alias}';
+        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        // The Save button is the sibling control in the same row.
+        const row = input.parentElement;
+        const save = row && row.querySelector('[data-field="feed-alias-save"]');
+        if (!save) return 'no-save-control';
+        save.click();
+        return 'saved';
+        "#
+    );
+    let v = client.execute(&script, vec![]).await?;
+    Ok(v.as_str().unwrap_or("non-string").to_string())
 }
 
 /// Type into the Feed window's peer-id box and press Follow.
@@ -28228,11 +29044,108 @@ async fn a_published_feed_reaches_a_browser_over_its_authors_own_origin(
             state["filter_present"] == serde_json::Value::Bool(true),
             "RED — no filter control on a {posts}-post feed: {text}"
         );
+
+        // ⭐⭐ 9b — **THE READING CAP: HOW MANY POSTS ONE SCREEN OPENS WITH, AND
+        // A CONTROL THAT SAYS HOW MANY IT IS HOLDING BACK.**
+        //
+        // *"It just goes down all the way … I see no paging, I see nothing,
+        // it's just every single post."* An archive rendered as one unbroken
+        // column with no number anywhere — which is also why a working index
+        // walk read as broken paging.
+        //
+        // ⛔ **This is the READING cap and NOT the fetch's.** Two dimensions:
+        // `feed_fetch::LIMIT` bounds what one walk obtains (asserted as
+        // `entries` == {posts}, unchanged below), `dom::feed::PAGE_SIZE` bounds
+        // what one screen draws. Every post counted here is already in hand, so
+        // revealing more is free — which is why it is a DOM control and not an
+        // event through the model.
+        let capped = state["filter_shown"].as_u64().unwrap_or(0);
+        assert!(
+            capped < posts,
+            "RED — the pane opened on the whole archive. {posts} posts in one \
+             unbroken column is the complaint this cap exists for: shown={capped}"
+        );
+        assert_eq!(
+            state["filter_claimed"].as_str().unwrap_or(""),
+            capped.to_string(),
+            "RED — the surface's own count disagrees with what it drew"
+        );
+        assert!(
+            state["more_visible"] == serde_json::Value::Bool(true),
+            "RED — posts are held back and no control offers them: {text}"
+        );
+        assert_eq!(
+            state["more_remaining"].as_str().unwrap_or(""),
+            (posts - capped).to_string(),
+            "RED — the reveal control does not say how many are left. A person \
+             cannot tell whether pressing it will do anything: {:?}",
+            state["more_remaining"]
+        );
+        // …and the count line says how many there ARE, which is the other half:
+        // one number is what is drawn, the other is what was delivered, and
+        // reporting only the first is how a capped view reads as a short feed.
+        assert_eq!(
+            state["post_count"].as_str().unwrap_or(""),
+            posts.to_string(),
+            "RED — the count line counts what is visible rather than what the \
+             walk delivered, so the cap reads as a publisher with fewer posts"
+        );
+        assert!(
+            state["post_count_text"].as_str().unwrap_or("").contains(&posts.to_string()),
+            "RED — the count line does not carry the number: {:?}",
+            state["post_count_text"]
+        );
+        // ⛔ **And it does NOT claim there may be older posts.** 34 is under one
+        // walk's limit, so the archive on screen IS what the publisher's index
+        // reaches; saying otherwise would be a hedge about a fact we have.
+        assert!(
+            state["newest_only"] == serde_json::Value::Bool(false),
+            "RED — a complete archive is hedged as possibly-shortened: {text}"
+        );
+
+        // Press it: everything already in hand, on screen, and the control
+        // retires itself rather than sitting there with nothing left to give.
+        let more = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                let win = null;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h = sec.querySelector('header h3');
+                    if (h && h.textContent.trim() === 'Feed') win = sec;
+                }
+                if (!win) return 'no-feed-window';
+                const b = win.querySelector('[data-field="feed-more"]');
+                if (!b) return 'no-more-control';
+                b.click();
+                return 'clicked';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(more.as_str(), Some("clicked"), "could not press More: {more:?}");
+        let st = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| s.contains(&format!("\"filter_shown\":{posts},")))
+        })
+        .await?;
+        let state: serde_json::Value =
+            serde_json::from_str(st.as_str().unwrap_or("{}")).unwrap_or_default();
         assert_eq!(
             state["filter_shown"].as_u64().unwrap_or(0),
             posts,
-            "RED — an untouched filter is hiding posts: {text}"
+            "RED — revealing more did not reveal them: {state:?}"
         );
+        assert!(
+            state["more_visible"] == serde_json::Value::Bool(false),
+            "RED — nothing is held back and the control still offers to reveal \
+             it. A button that cannot do anything is the dead-button disease: \
+             remaining={:?}",
+            state["more_remaining"]
+        );
+        println!("  published: the pane opens capped, and says how many it is holding ✓");
+        let text = state["text"].as_str().unwrap_or_default().to_string();
+        let _ = &text;
         let narrowed = feed_type_filter(&client, "body 0").await?;
         assert_eq!(narrowed.as_str(), "typed", "could not type into the filter: {narrowed}");
         let st = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
@@ -28759,12 +29672,248 @@ async fn a_name_resolved_from_a_registry_opens_a_publisher_that_reads(
             st["entries"].as_str().unwrap_or("0") != "0",
             "RED — the panel named the published leg and carries no posts: {text}"
         );
+        // ⭐ **How many, as a NUMBER a person can read** — the pane had no count
+        // anywhere, which is most of why a working index walk read as broken
+        // paging. Asserted on the rendered text and not only on `data-count`:
+        // the first cut called `t_plural` without the `n` argument and drew
+        // *"<FSI><PDI> posts"* with the attribute perfectly correct beside it.
+        let delivered = st["entries"].as_str().unwrap_or_default().to_string();
+        assert_eq!(
+            st["post_count"].as_str().unwrap_or_default(),
+            delivered,
+            "RED — the count line disagrees with the list it is counting"
+        );
+        assert!(
+            st["post_count_text"].as_str().unwrap_or_default().contains(&delivered),
+            "RED — the count line does not carry the number: {:?}",
+            st["post_count_text"]
+        );
         assert!(
             text.contains(&newest),
             "RED — the newest post's body is not on screen, so the walk reached \
              the index and not the entries: {text}"
         );
-        println!("  registry-walk: Open in Feed → the publisher's posts are on screen ✓");
+        println!("  registry-walk: Add to my feed → the publisher's posts are on screen ✓");
+
+        // 5a — ⭐⭐ **THE NAME SURVIVED THE PRESS.** The whole of what a person
+        // asked for: they resolved `{name}` and the surface that shows the
+        // publisher says `{name}`, not a 45-character key.
+        //
+        // **`data-label-source` is the assertion, not the text.** A heading that
+        // merely contains the right characters could be the origin's host (this
+        // rig serves the registry and the publisher from one origin, so the
+        // hostname is on screen elsewhere) or a petname; only the source says
+        // which of `PeerLabel`'s four arms won, and `via` is the one that means
+        // *the name you resolved reached this window*.
+        assert_eq!(
+            st["panel_label_source"].as_str().unwrap_or(""),
+            "via",
+            "RED — the publisher is on screen with no name from the resolve.              §2.4's `via` is the only durable record of `{name}` → this peer,              and it is written by the press that opened this window: {text}"
+        );
+        assert_eq!(
+            st["panel_title"].as_str().unwrap_or_default(),
+            name,
+            "RED — the panel names the publisher something other than the name              that was resolved: {text}"
+        );
+
+        // 5b — ⭐ **AND THE PRESS SAID *ADD*, SO IT ADDED.** The durable half:
+        // the follow is what carries the name, and a window opened from the
+        // launcher tomorrow reads the same row out of the same tree. Asserted
+        // through the panel's own follow control, whose two states are the
+        // model's answer to *are they in your list*.
+        let followed = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                let win = null;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h = sec.querySelector('header h3');
+                    if (h && h.textContent.trim() === 'Feed') win = sec;
+                }
+                if (!win) return 'no-feed-window';
+                const b = win.querySelector('[data-field="feed-panel-follow"]');
+                if (!b) return 'no-follow-control';
+                return b.getAttribute('data-followed');
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            followed.as_str(),
+            Some("1"),
+            "RED — *Add to my feed* opened the publisher and did not add them.              The follow record is the only durable thing this press writes and              the only place the resolved name can live: {followed:?}"
+        );
+
+        // 5c — ⭐⭐ **PRESS IT AGAIN: STILL ONE WINDOW.**
+        //
+        // The complaint: every aimed open spawned ANOTHER feed window, leaving
+        // a pile of them to close by hand. An aim is a
+        // NAVIGATION: the control carries an address and the window that already
+        // shows that kind of thing is where it belongs. The condition is
+        // `find_open`'s `(type, peer)` — open it if it is not already open —
+        // and it is independent of the singleton-windows setting, which is off
+        // by default and is a different preference about a different thing.
+        //
+        // The control window is row 4, which established there were **zero**
+        // before the first press: without it, *"one after two presses"* is
+        // equally explained by a window that was already there.
+        //
+        // ⚠⚠ **THE BARRIER IS THE GATE, and its first cut had none — the neuter
+        // came back GREEN.** `READ_FEED`'s `body:true` was already true before
+        // the second press, so the poll returned instantly and measured the
+        // window count *before the action had been processed*. The gate was
+        // sound about a real property and was reading it at the wrong moment:
+        // *a poll whose condition is satisfied by the state you started in is
+        // not a wait.*
+        //
+        // What it waits on has to be **arm-neutral**, or the barrier is the
+        // fix's own evidence and the defect can never reach the assertion: the
+        // reuse arm logs `SpawnWindow: focusing existing` and the spawn arm logs
+        // `SpawnWindow`, so the needle is the shorter one and both satisfy it.
+        // Counted from *before* the press rather than to a fixed total, because
+        // spawning the Registry Browser logged one too.
+        let spawn_lines = r#"
+            return String((window.__entity_browser_log || []).filter(e =>
+                (e.args || []).some(a =>
+                    typeof a === 'string' && a.includes('SpawnWindow'))).length);
+        "#;
+        let before_presses: usize = client
+            .execute(spawn_lines, vec![])
+            .await?
+            .as_str()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        let again = registry_open_viewer(&client, "Feed").await?;
+        assert_eq!(again.as_str(), "clicked", "could not press it a second time: {again}");
+        let seen = poll_json(&client, spawn_lines, Duration::from_secs(10), |v| {
+            v.as_str().and_then(|s| s.parse::<usize>().ok()).is_some_and(|n| n > before_presses)
+        })
+        .await?;
+        assert!(
+            seen.as_str().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0) > before_presses,
+            "RED (VACUOUS) — the second press was never processed, so nothing \
+             below is measuring it: spawn lines {before_presses} \u{2192} {seen:?}"
+        );
+
+        // ⚠⚠ **AND THAT BARRIER IS STILL NOT ENOUGH ON ITS OWN — the second cut
+        // was satisfied too early as well, one layer in.** `SpawnWindow` is
+        // logged at the *top* of the action's handling, before `spawn_at` runs
+        // and before anything re-renders: the log line is the DECISION and the
+        // window count is the EFFECT. On a fast run the count was read between
+        // the two and came back 1 for a build that was about to produce 2 —
+        // same neuter, same bundle, **green at 9.2 s and red at 2.3 s**.
+        //
+        // ⇒ ***when the healthy outcome is "nothing changes" there is no effect
+        // to wait for, and the only honest barrier is to give the defect time
+        // to appear.*** So this waits for a SECOND window and expects the wait
+        // to run out. `poll_json` returns the last value on a timeout (AP47),
+        // which is exactly the shape wanted: the assertion is on the value and
+        // never on the poll having succeeded.
+        let st = poll_json(&client, READ_FEED, Duration::from_secs(6), |v| {
+            v.as_str().is_some_and(|s| !s.contains("\"feed_windows\":1"))
+        })
+        .await?;
+        let st: serde_json::Value =
+            serde_json::from_str(st.as_str().unwrap_or("{}")).unwrap_or_default();
+        assert_eq!(
+            st["feed_windows"].as_u64(),
+            Some(1),
+            "RED — a second press opened a second Feed window. An aimed open is a \
+             navigation, so it must re-point the one already showing this kind of \
+             thing rather than stacking another on top of it: feed_windows={}",
+            st["feed_windows"]
+        );
+        // …and it is still the right publisher, so *reuse* has not become
+        // *ignore*: a focused window is still owed the address.
+        assert_eq!(
+            st["panel_title"].as_str().unwrap_or_default(),
+            name,
+            "RED — the reused window is no longer aimed at the publisher the              press named"
+        );
+        println!("  registry-walk: pressed twice → one window, still on `{name}` ✓");
+
+        // 5d — ⭐⭐ **NAME THEM YOURSELF, AND YOUR NAME WINS.**
+        //
+        // §2.4's petname — *"local, chosen by the reader, and never
+        // authoritative … the answer to 'I cannot read a public key' that
+        // requires no naming authority at all"*. The convention shipped the
+        // field, this crate shipped the codec, and **nothing ever wrote one**
+        // until 2026-09-18, on the surface whose complaint was that all it shows
+        // is the key.
+        //
+        // ⚠ **This is the half no native gate can reach**: the model's verbs are
+        // covered every way, and what is untested is the WIRING — a per-row
+        // draft key, a `{peer}\x1f{name}` value read at press time, and a Save
+        // that has to find its own row's box. *When you split an impure lookup
+        // out to make a decision testable, the lookup is the untested half* —
+        // one surface over, and the same shape here.
+        let saved = feed_set_alias(&client, &author, "Bill's lab").await?;
+        assert_eq!(saved.as_str(), "saved", "could not name the publisher: {saved}");
+        // ⚠ **The needle is the LABEL SOURCE, not the word.** The first cut
+        // polled for `"Bill"` anywhere in the window — which the alias BOX
+        // contains the moment it is typed into, before the Save is pressed. So
+        // the poll was satisfied by the state the act started from and the
+        // assertion read a row that had not changed yet: *a poll whose condition
+        // is satisfied by what you typed is not a wait for what you saved.*
+        // Third instance of that shape in one session; `petname` can only be
+        // reported by a row whose stored label came back out of the tree.
+        let st = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| s.contains("\"petname\""))
+        })
+        .await?;
+        let st: serde_json::Value =
+            serde_json::from_str(st.as_str().unwrap_or("{}")).unwrap_or_default();
+        let sources = st["publisher_label_sources"].to_string();
+        assert!(
+            sources.contains("petname"),
+            "RED — the name a person typed did not reach the row. §2.4's `label` \
+             hangs off the follow record, so this is the whole loop: draft → \
+             `feed_set_label` → `amend` → tree → re-read: sources={sources} \
+             names={}",
+            st["publisher_names"]
+        );
+        assert!(
+            st["publisher_names"].to_string().contains("Bill"),
+            "RED — the row reports a petname and does not draw it: {}",
+            st["publisher_names"]
+        );
+        // …and the box stays open on what was typed, so editing it is editing
+        // the same value rather than re-typing from the word on screen.
+        assert!(
+            st["alias_values"].to_string().contains("Bill"),
+            "RED — the alias box lost the name it just saved: {}",
+            st["alias_values"]
+        );
+
+        // Clear it: the name falls back to the one that was resolved rather
+        // than blanking the row. An empty save IS the clear, which is why the
+        // value travels on a unit separator and not on whitespace.
+        let cleared = feed_set_alias(&client, &author, "").await?;
+        assert_eq!(cleared.as_str(), "saved", "could not clear the name: {cleared}");
+        let st = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| !s.contains("Bill"))
+        })
+        .await?;
+        let st: serde_json::Value =
+            serde_json::from_str(st.as_str().unwrap_or("{}")).unwrap_or_default();
+        let sources = st["publisher_label_sources"].to_string();
+        assert!(
+            sources.contains("via") && !sources.contains("petname"),
+            "RED — clearing an alias did not fall back to the resolved name. \
+             Blank is absence at every level; a row that blanks instead is a \
+             publisher a person can no longer tell apart: sources={sources}"
+        );
+        println!("  registry-walk: named them, and clearing falls back to `{name}` ✓");
+
+        // ⚠ **Back to the reading pane, because naming somebody happens on
+        // another one.** `READ_FEED`'s fields are scoped to whichever pane is
+        // open, so the rows below — which are about the archive and the browse
+        // list — have to navigate there the same way a person would. Without
+        // this the next step reds with `no-back-control`, which reads as a
+        // missing control rather than as a gate standing on the wrong page.
+        feed_open_read(&client).await?;
 
         // 6 — ⭐⭐ THE ROW THE DEFECT REDS. Back, to the list of publishers this
         // profile can reach. `known_ids` is only drawn on that page, so the
@@ -28994,5 +30143,900 @@ async fn a_deployment_boots_the_feed_window_at_a_named_publisher(
     let _ = client.close().await;
     r?;
     println!("AIMED BOOT OK — a deployment can say which feed, and one that says nothing opens at nobody.");
+    Ok(())
+}
+
+/// **A DEAD WASM INSTANCE IS REPORTED FROM OUTSIDE THE WASM.**
+///
+/// Earned 2026-09-15 on a real session: the instance stopped resolving its own
+/// closures and the page threw `RuntimeError: index out of bounds` from a
+/// wasm-bindgen closure shim **388 times**, after which not one more tracing
+/// line was emitted — not even the 5-minute `build_update` interval that had
+/// been ticking right up to it. The app was dead and nobody was told.
+///
+/// **The reason nothing reported it is the reason this gate exists, and it is
+/// structural rather than an oversight.** We had three detectors and every one
+/// of them lives inside the thing that dies: `diagnostics.rs` installs `window`
+/// error capture whose whole stated purpose is to make a browser-level failure
+/// "visible in-app" and logged **zero** lines against those 388 errors, because
+/// the handler is itself a wasm closure; `watchdog.rs` watches off-thread in a
+/// Worker (correctly) and then reports back through a main-thread wasm closure,
+/// so it ticked into a corpse; and it is installed `show_banner = false` so even
+/// a correct detection drew nothing. That is G8's argument about the recovery
+/// console arriving over the channel the worker poisoned, one tier in.
+///
+/// **Scope, stated plainly, because the name could be read wider than the
+/// measurement.** This gates the DETECTOR — listener → classification →
+/// threshold → banner → durable record → readout. It does **not** produce a
+/// real trap: that needs a deliberately broken bundle, which is a different rig.
+/// The events are synthetic and dispatched at the real `window`, so everything
+/// above the trap itself is the production path.
+///
+/// Six rows, each separately falsifiable:
+///   1. anti-vacuity + a healthy profile is `ok` and draws nothing;
+///   2. a non-trap error is not counted as a trap (neuter: count everything);
+///   3. BELOW the threshold is `isolated`, never `dead` — one freed closure must
+///      not accuse the whole instance (neuter: declare on the first trap);
+///   4. AT the threshold: `dead`, and a banner with a way out is on screen;
+///   5. the record names the **FIRST** trap and keeps its stack (neuter:
+///      overwrite on every trap — the 388th is an echo, the 1st is the evidence);
+///   6. it survives a reload and System Recovery RENDERS it, because a record
+///      only a console prints is a record nobody reads.
+#[tokio::test]
+async fn a_dead_wasm_instance_is_reported_from_outside_the_wasm(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const FIRST_MARK: &str = "FIRST-TRAP-MARKER-7f3a";
+    const LATER_MARK: &str = "LATER-TRAP-MARKER-91cd";
+
+    const WATCH: &str = r#"
+        var w = window.__ENTITY_INSTANCE_WATCH__;
+        var bar = document.getElementById('entity-dead-instance');
+        var btns = bar ? Array.prototype.map.call(bar.querySelectorAll('button'),
+                                                  function (b) { return b.textContent; }) : [];
+        return {
+            armed: !!w,
+            verdict: w ? w.verdict : '(no watch)',
+            traps: w ? w.traps : -1,
+            other: w ? w.other : -1,
+            first_message: (w && w.first) ? w.first.message : '',
+            first_stack_len: (w && w.first && w.first.stack) ? w.first.stack.length : 0,
+            banner: !!bar,
+            buttons: btns
+        };
+    "#;
+
+    let _server = start_blackhole_server(&[])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    // `deadinstance=3` lowers the threshold so the branch is reachable inside a
+    // scenario the harness can build. Same affordance shape, and same reason, as
+    // `?bootstall=` — nothing in the product sets it.
+    let url = format!("http://localhost:{port}/?log=trace&deadinstance=3");
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── ROW 1 — armed, and silent on a healthy profile ──────────────────
+        let healthy: serde_json::Value = client.execute(WATCH, vec![]).await?;
+        assert!(
+            healthy["armed"].as_bool().unwrap_or(false),
+            "VACUOUS: `window.__ENTITY_INSTANCE_WATCH__` does not exist, so every \
+             assertion below is about nothing — the detector did not install. \
+             Probe: {healthy}"
+        );
+        assert_eq!(
+            healthy["verdict"].as_str().unwrap_or(""),
+            "ok",
+            "a healthy profile is not `ok` — the detector is accusing a working \
+             instance, which is the false positive that would put a 'the program \
+             stopped' banner over a running app. Probe: {healthy}"
+        );
+        assert!(
+            !healthy["banner"].as_bool().unwrap_or(true),
+            "RED — the stopped-program banner is on screen on a HEALTHY boot. \
+             Probe: {healthy}"
+        );
+        println!("  row 1: armed, and a healthy profile draws nothing ✓");
+
+        // ── ROW 2 — a non-trap error is not a trap ──────────────────────────
+        client
+            .execute(
+                r#"window.dispatchEvent(new ErrorEvent('error', {
+                       message: 'an ordinary page error',
+                       filename: location.origin + '/something.js',
+                       error: new Error('an ordinary page error') }));
+                   return true;"#,
+                vec![],
+            )
+            .await?;
+        let ordinary: serde_json::Value = client.execute(WATCH, vec![]).await?;
+        assert_eq!(
+            ordinary["traps"].as_i64().unwrap_or(-1),
+            0,
+            "RED — an ordinary JS error was counted as a WASM trap. The whole \
+             discrimination is that a trap means the instance stopped executing \
+             our code and a page error does not. Probe: {ordinary}"
+        );
+        assert!(
+            ordinary["other"].as_i64().unwrap_or(0) >= 1,
+            "the ordinary error was not seen at ALL, so row 2 is measuring a \
+             listener that is not attached rather than a classification. \
+             Probe: {ordinary}"
+        );
+        assert_eq!(
+            ordinary["verdict"].as_str().unwrap_or(""),
+            "ok",
+            "a page error moved the verdict off `ok`. Probe: {ordinary}"
+        );
+        println!("  row 2: a page error is counted, and is not a trap ✓");
+
+        // ── ROW 3 — below the threshold is `isolated`, never `dead` ─────────
+        let trap = |msg: &str| {
+            format!(
+                r#"window.dispatchEvent(new ErrorEvent('error', {{
+                       message: '{msg}',
+                       filename: location.origin + '/entity-browser-deadbeef_bg.wasm',
+                       lineno: 5132886, colno: 1,
+                       error: new WebAssembly.RuntimeError('{msg}') }}));
+                   return true;"#
+            )
+        };
+        client.execute(&trap(FIRST_MARK), vec![]).await?;
+        client.execute(&trap(LATER_MARK), vec![]).await?;
+        let below: serde_json::Value = client.execute(WATCH, vec![]).await?;
+        assert_eq!(
+            below["traps"].as_i64().unwrap_or(-1),
+            2,
+            "the two synthetic traps were not both counted. Probe: {below}"
+        );
+        assert_eq!(
+            below["verdict"].as_str().unwrap_or(""),
+            "isolated",
+            "RED — 2 traps against a threshold of 3 and the verdict is \
+             '{}'. One freed closure is a defect; it is not evidence that the \
+             whole instance is dead, and calling it dead is how a working session \
+             gets a brick's banner. Probe: {below}",
+            below["verdict"].as_str().unwrap_or("?")
+        );
+        assert!(
+            !below["banner"].as_bool().unwrap_or(true),
+            "RED — the banner is up below the threshold. Probe: {below}"
+        );
+        println!("  row 3: 2 traps under a threshold of 3 is `isolated`, no banner ✓");
+
+        // ── ROW 4 — at the threshold: dead, with a way out on screen ────────
+        client.execute(&trap(LATER_MARK), vec![]).await?;
+        let dead: serde_json::Value = client.execute(WATCH, vec![]).await?;
+        assert_eq!(
+            dead["verdict"].as_str().unwrap_or(""),
+            "dead",
+            "RED — 3 traps in well under the window and the instance is still not \
+             declared dead. This is the production symptom: 388 traps and nothing \
+             said a word. Probe: {dead}"
+        );
+        assert!(
+            dead["banner"].as_bool().unwrap_or(false),
+            "RED — the verdict is `dead` and NOTHING IS ON SCREEN. The verdict is \
+             not the feature; the person being told is the feature. Probe: {dead}"
+        );
+        let buttons = dead["buttons"].to_string();
+        assert!(
+            buttons.contains("Reload"),
+            "the banner offers no Reload, so it reports a dead program and leaves \
+             the person with no way out of it. Buttons: {buttons}"
+        );
+        assert!(
+            buttons.contains("System Recovery"),
+            "the banner does not offer System Recovery — the one surface that can \
+             act when the program is the broken thing. Buttons: {buttons}"
+        );
+        assert!(
+            buttons.contains("Dismiss"),
+            "the banner cannot be dismissed, so a FALSE positive is us bricking a \
+             working session on our own verdict (F2: a lease, not a deed). \
+             Buttons: {buttons}"
+        );
+        println!("  row 4: 3 traps → `dead`, banner up, with Reload / Recovery / Dismiss ✓");
+
+        // ── ROW 5 — the record names the FIRST trap, with its stack ─────────
+        assert!(
+            dead["first_message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(FIRST_MARK),
+            "RED — the retained record names '{}' instead of the FIRST trap. The \
+             388th trap is an echo of a closure that was already gone; the first \
+             one is the only one whose stack names it. Probe: {dead}",
+            dead["first_message"].as_str().unwrap_or("?")
+        );
+        assert!(
+            dead["first_stack_len"].as_i64().unwrap_or(0) > 0,
+            "the record kept a message and NO STACK, which is the half that turns \
+             'something died' into 'this died'. Probe: {dead}"
+        );
+        println!("  row 5: the record names the first trap and kept its stack ✓");
+
+        // ── ROW 6 — it survives a reload, and Recovery RENDERS it ───────────
+        let recovery = format!("http://localhost:{port}/?systemrecovery=1");
+        client.goto(&recovery).await?;
+        let shown = poll_json(
+            &client,
+            r#"
+            var el = document.getElementById('lastcrash');
+            var watch = window.__ENTITY_INSTANCE_WATCH__;
+            return {
+                present: !!el,
+                text: el ? el.textContent : '',
+                // The recovery console must NOT arm the detector: it is the
+                // surface that HELPS here, and overlaying it is the same
+                // mistake as re-registering a bad worker on the way in.
+                armed_here: !!watch
+            };
+            "#,
+            Duration::from_millis(8_000),
+            |v| !v["text"].as_str().unwrap_or("").contains("probing"),
+        )
+        .await?;
+        assert!(
+            shown["present"].as_bool().unwrap_or(false),
+            "VACUOUS: System Recovery has no #lastcrash section, so the record is \
+             write-only and the only reader is a devtools console the stuck person \
+             cannot open on a phone. Probe: {shown}"
+        );
+        let text = shown["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains(FIRST_MARK),
+            "RED — the crash record did not survive the reload into System \
+             Recovery, so a person who reloads loses the one artifact that names \
+             what killed their session. Section read: {text}"
+        );
+        assert!(
+            !shown["armed_here"].as_bool().unwrap_or(true),
+            "RED — the detector armed itself on the recovery console. That is the \
+             surface that can act when the program is the broken thing; a banner \
+             over it is the console reinstalling the problem on the way in. \
+             Probe: {shown}"
+        );
+        println!("  row 6: the record survives a reload and Recovery renders it ✓");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "DEAD-INSTANCE DETECTOR OK — a stopped program is detected, reported and \
+         escapable from OUTSIDE the wasm, which is the only place that can."
+    );
+    Ok(())
+}
+
+/// **A HIGH REBUILD RATE NAMES A WINDOW.**
+///
+/// Earned 2026-09-15 on the crash capture (`AUDIT-2026-09-15-a`), which carries
+/// **32** occurrences of `DOM: HIGH REBUILD RATE rebuilds_per_sec=13 total=4438`
+/// and not one of them names a window. Four lines below it in the same function,
+/// `DOM: SLOW REBUILD` prints a full per-section breakdown out of
+/// `section_timings` — which `render()` populates every frame regardless and
+/// which the rate warning simply did not read. So a sustained 11–14/sec ran for
+/// the life of that session and stayed unattributable, and the audit had to
+/// record it as *"its own defect, and a plausible amplifier for anything
+/// closure-lifetime shaped"* with no way to say whose.
+///
+/// **Why a browser gate for a log line.** The decision — who is named, how a
+/// forced sweep is kept apart from a per-window churn, what an empty interval
+/// says — is pure and gated by `make test` (`src/rebuild_attribution.rs`, seven
+/// tests). What no native test can see is the **wiring**: that the real
+/// `section_timings` reach the tally and that the real threshold reads it. That
+/// half is the half that decides whether the *next* capture is evidence or
+/// another number, and we get one shot at the next capture.
+///
+/// `?rebuildrate=0` lowers the threshold so any rebuild in a completed interval
+/// trips the warning — the same affordance shape, and the same reason, as
+/// `?bootstall=` and `?deadinstance=`; nothing in the product sets it, and it
+/// can only ever make the warning more talkative.
+///
+/// Two rows:
+///   1. anti-vacuity — the warning fires at all under the lowered threshold;
+///   2. the subject — at least one of those lines attributes the rebuilds to a
+///      named window section, rather than printing a rate and nothing else.
+///
+/// **Stated bound:** the `forced=` arm (a moving locale / reachability
+/// generation rebuilding every open window, which must not read as an
+/// eleven-window churn storm) is gated natively, not here — reaching it from a
+/// browser needs a locale switch mid-session, which is a different rig.
+#[tokio::test]
+async fn a_high_rebuild_rate_names_a_window() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace&rebuildrate=0", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ⚠ **Drive rebuilds until the warning flushes, rather than assuming a
+        // spawn count lands across an interval boundary.** The line is emitted
+        // on the first rebuild frame AFTER a second has elapsed, so a burst that
+        // fits inside one interval is never flushed at all — and a fixed
+        // three-spawn sequence is a guess about how long a spawn takes on a
+        // loaded box. It passed standalone and produced ZERO lines inside the
+        // unfiltered run, which is the same fixed-sleep mistake `poll_json`
+        // exists to refuse, wearing a spawn's clothes.
+        //
+        // Each pass spawns a window (a guaranteed rebuild) and then waits past
+        // the 1s interval, so every pass closes an interval that contains one.
+        let mut log: Vec<String> = Vec::new();
+        let mut rate_lines: Vec<String> = Vec::new();
+        for (i, label) in
+            ["+ Shell", "+ Event Log", "+ Entity Tree", "+ Key Manager", "+ Storage"]
+                .iter()
+                .enumerate()
+        {
+            spawn_window_labeled(&client, label).await?;
+            sleep(Duration::from_millis(1200)).await;
+            log = capture_log(&client).await?;
+            rate_lines =
+                log.iter().filter(|l| l.contains("HIGH REBUILD RATE")).cloned().collect();
+            // Two lines, so the second is a flush of an interval this loop drove
+            // rather than the boot burst that precedes any of it.
+            if rate_lines.len() >= 2 {
+                println!("  drove {} rate line(s) in {} pass(es)", rate_lines.len(), i + 1);
+                break;
+            }
+        }
+        let rate_lines: Vec<&String> = rate_lines.iter().collect();
+        for l in &rate_lines {
+            println!("    rate line: {}", attributed_value(l).unwrap_or("(no attributed_to field)"));
+        }
+
+        // ── ROW 1 — anti-vacuity ────────────────────────────────────────────
+        assert!(
+            !rate_lines.is_empty(),
+            "VACUOUS: no `DOM: HIGH REBUILD RATE` line was emitted at all under \
+             `?rebuildrate=0`, so row 2 is about nothing. Either the threshold \
+             override is not read, or five window spawns produced no rebuild frame \
+             across a completed interval.\n{} lines captured; last 15:\n  {}",
+            log.len(),
+            log.iter()
+                .rev()
+                .take(15)
+                .rev()
+                .map(|l| l.chars().take(180).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+        println!("  row 1: the rate warning fires ({} lines) ✓", rate_lines.len());
+
+        // ── ROW 2 — it names a culprit ──────────────────────────────────────
+        // Asserted on the SECTION key spelling (`type#id`), not on any one
+        // window's name: which window happens to be churning is the product's
+        // business, and pinning a name would make this gate fail the day the
+        // spawn order changes. What must hold is that SOMETHING is named.
+        let attributed: Vec<&&String> = rate_lines
+            .iter()
+            .filter(|l| attributed_value(l).is_some_and(|v| v.contains('#')))
+            .collect();
+        assert!(
+            !attributed.is_empty(),
+            "RED — every `HIGH REBUILD RATE` line reports a rate and no window, \
+             which is exactly the state the 2026-09-15 capture was left in: 32 \
+             warnings, 4438 rebuilds, nobody named. The lines were:\n  {}",
+            rate_lines
+                .iter()
+                .take(8)
+                .map(|l| l.chars().take(240).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+        println!(
+            "  row 2: attributed — {} ✓",
+            attributed_value(attributed[0]).unwrap_or("")
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "REBUILD ATTRIBUTION OK — a rate warning names the window, so the next \
+         capture is evidence rather than a number."
+    );
+    Ok(())
+}
+
+/// Pull the `attributed_to` field's value out of one captured console line.
+///
+/// **Not a convenience.** `tracing-wasm` renders a log line with its own CSS
+/// colour directives appended — `color: orange; background: #444 …` — so a naive
+/// `line.contains('#')` looking for a `type#id` section key matches the CSS and
+/// passes on a line that attributed nothing. Measured: the first cut of
+/// [`a_high_rebuild_rate_names_a_window`] went green against
+/// `attributed_to = palette=1`. *A log assertion is a coupling to a formatter;
+/// isolate the field before you match on it.*
+fn attributed_value(line: &str) -> Option<&str> {
+    let rest = line.split("attributed_to = ").nth(1)?;
+    Some(rest.split(';').next().unwrap_or(rest).trim())
+}
+
+/// **The gauge switch turns them OFF and BACK ON** — the settings toggle,
+/// end to end, through the real checkbox.
+///
+/// ⭐ **The second half is the gate.** Off is easy and was never at risk; ON is
+/// where this class fails, and it failed here for real during the session that
+/// built it. The first cut re-read the preference only when
+/// `sampler::roll` reported the second had turned — which looked like the one
+/// cheap signal already on the frame path, and is not: `with_active` returns
+/// early when nothing holds the sampler, so `roll` answers `false` forever once
+/// the gauges are off. **The switch was one-way.** AP36 in its smallest form —
+/// the guard went on the ACQUISITION (is the sampler running) when the question
+/// is a DECISION (does the user still want it running), and the acquisition is
+/// precisely what the decision switches off.
+///
+/// It was found by reading `with_active` while falsifying an unrelated neuter,
+/// which is the reason this gate exists rather than a note: nothing native can
+/// see it (`mod dom` and the frame path are `cfg(wasm32)`) and a gate that only
+/// asserted *off* would have shipped it green.
+///
+/// **Off is a real off, and the gate says so by what it asserts:** the sparks
+/// go to zero because the sampler goes dormant and `segments` omits every gauge
+/// — the same route a profile takes when nobody has ever opened the System
+/// Monitor. The counts stay, at every step, or the switch has taken more than
+/// it was pointed at.
+#[tokio::test]
+async fn the_gauge_switch_turns_them_off_and_back_on(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const SPARKS: &str = r#"
+        var host = document.getElementById('mode-display');
+        if (!host) return { present: false };
+        return {
+            present: true,
+            sparks: host.querySelectorAll('.status-spark').length,
+            counts: host.querySelectorAll('[data-seg="windows"],[data-seg="peers"],\
+[data-seg="durability"]').length
+        };
+    "#;
+    // Set the checkbox to `want` and fire the change the model listens for.
+    const SET: &str = r#"
+        var [want] = arguments;
+        var layer = document.getElementById('dom-layer');
+        if (!layer) return 'no-dom-layer';
+        var root = layer.shadowRoot || layer;
+        var cb = root.querySelector('input[data-field="status_gauges"]');
+        if (!cb) return 'no-checkbox';
+        if (cb.checked === want) return 'already';
+        cb.checked = want;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        return 'set';
+    "#;
+
+    // Poll for a spark count rather than sleeping a fixed budget: the setting
+    // is re-read once a second and the sampler rolls once a second, so the
+    // round trip is ~2s and a fixed settle is a threshold nobody earned.
+    async fn wait_sparks(
+        client: &Client,
+        probe: &str,
+        want_any: bool,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let mut last = serde_json::Value::Null;
+        for _ in 0..40 {
+            last = client.execute(probe, vec![]).await?;
+            let n = last["sparks"].as_u64().unwrap_or(0);
+            if (n > 0) == want_any {
+                return Ok(last);
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
+        Ok(last)
+    }
+
+    let (client, _server) = setup().await?;
+    client.set_window_size(1400, 900).await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── ROW 1 — on by default, and really gauging ───────────────────────
+        let on = wait_sparks(&client, SPARKS, true).await?;
+        assert!(
+            on["sparks"].as_u64().unwrap_or(0) > 0,
+            "VACUOUS: no gauge ever appeared, so there is nothing for a switch \
+             to turn off and every row below measures nothing. Probe: {on}"
+        );
+        let counts = on["counts"].as_u64().unwrap_or(0);
+        assert_eq!(counts, 3, "the three counts must be there to start: {on}");
+
+        // ── ROW 2 — the checkbox exists and turns them off ──────────────────
+        spawn_window_labeled(&client, "+ Settings").await?;
+        let set = client.execute(SET, vec![false.into()]).await?;
+        assert_eq!(
+            set.as_str().unwrap_or(""),
+            "set",
+            "could not uncheck the gauge setting — the Settings window has no \
+             `input[data-field=status_gauges]`, so the switch this gate is about \
+             is not reachable by a person."
+        );
+        let off = wait_sparks(&client, SPARKS, false).await?;
+        assert_eq!(
+            off["sparks"].as_u64().unwrap_or(0),
+            0,
+            "the gauges are still drawn after switching them off. Probe: {off}"
+        );
+        assert_eq!(
+            off["counts"].as_u64().unwrap_or(0),
+            3,
+            "switching the gauges off took the window/peer/durability counts \
+             with it — the switch is pointed at the gauges, and the bar without \
+             them is exactly what it was before the feature. Probe: {off}"
+        );
+
+        // ── ROW 3 — AND BACK ON. This is the row the one-way bug reds. ──────
+        let set = client.execute(SET, vec![true.into()]).await?;
+        assert_eq!(
+            set.as_str().unwrap_or(""),
+            "set",
+            "could not re-check the gauge setting: {set:?}"
+        );
+        let back = wait_sparks(&client, SPARKS, true).await?;
+        assert!(
+            back["sparks"].as_u64().unwrap_or(0) > 0,
+            "THE SWITCH IS ONE-WAY: the gauges went off and never came back. \
+             The preference re-read is gated on something the preference itself \
+             switches off — check what signal drives `sync_status_gauge_hold` \
+             and whether that signal survives the sampler going dormant. \
+             Probe: {back}"
+        );
+        println!(
+            "  on {} sparks -> off {} -> back on {}, counts steady at 3",
+            on["sparks"], off["sparks"], back["sparks"]
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "GAUGE SWITCH OK — off stops the sampling, on starts it again, and the \
+         counts never move."
+    );
+    Ok(())
+}
+
+/// **The status bar is a row of segments, and the gauges are live** —
+/// `DESIGN-2026-09-16` §9 step 5.
+///
+/// Five rows, each separately falsifiable. Everything below row 2 is
+/// unreachable from `make test`: `mod dom` is `cfg(wasm32)`, the sampling hold
+/// only does anything against a real rAF loop, and the width tiers depend on
+/// real font metrics — `APPROX_CHAR_PX` is an estimate and this is the only
+/// place it meets a browser.
+///
+///   1. anti-vacuity — the bar renders SEGMENTS, not one formatted string;
+///   2. the three counts are there, each with its own `data-seg` and its words;
+///  2b. the three counts sit LEFT of every gauge, with a divider between the
+///      groups — the operator's arrangement, asserted on DOM order because that
+///      is what a person sees (`layout` not reordering is the model half);
+///   3. a gauge appears once sampling has a second of history, which is the
+///      always-on hold working (with no hold the history is empty and
+///      `segments` omits every gauge — the off-switch, and the failure mode);
+///  3b. **a gauge paints no number**, and still says the number in its
+///      accessible label — both halves, or a change that merely deleted the
+///      reading passes the easy one;
+///   4. accessibility — the braille is `aria-hidden`, every segment carries an
+///      `aria-label`, and the BAR carries the summary sentence, so a screen
+///      reader gets one phrase rather than a row of marks to reassemble;
+///   5. **a LADDER of widths**: the row never grows as it narrows, never
+///      overflows at any rung, keeps the storage mark at every rung, and is
+///      strictly shorter at the narrowest than at the widest. It was a single
+///      1400 → 520 step until the bar got more compact and landed exactly on
+///      that boundary — *a fixed width is a threshold nobody earned*.
+///
+/// **Scope, stated so the name is not read wider than the measurement:** it
+/// gates the BAR, not the sampler's accuracy. Whether `frozen` is the right
+/// number is `monitor::sampler`'s question; this asserts that whatever it says
+/// reaches the screen, is readable, and fits.
+#[tokio::test]
+async fn the_status_bar_shows_segments_and_stays_readable_as_it_narrows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Read the bar as STRUCTURE, never as a sentence: `data-seg` keys come from
+    // `Segment::selector_key`, which `make test` pins as distinct. Matching on
+    // copy would make this gate red on a wording change and green on a broken
+    // layout — exactly backwards.
+    const PROBE: &str = r#"
+        var host = document.getElementById('mode-display');
+        var bar  = document.getElementById('status-bar');
+        if (!host || !bar) return { present: false };
+        var segs = Array.prototype.slice.call(host.querySelectorAll('[data-seg]'));
+        return {
+            present: true,
+            count: segs.length,
+            keys: segs.map(function (s) { return s.getAttribute('data-seg'); }),
+            labelled: segs.filter(function (s) {
+                var l = s.getAttribute('aria-label');
+                return l && l.trim().length > 0;
+            }).length,
+            // A sparkline a screen reader would read as braille cells.
+            sparks: host.querySelectorAll('.status-spark').length,
+            sparks_hidden: host.querySelectorAll('.status-spark[aria-hidden="true"]').length,
+            // What each segment PAINTS, in DOM order, keyed by segment. Read as
+            // a map so a row can ask about one segment without depending on
+            // where in the row it landed.
+            painted: segs.reduce(function (m, s) {
+                m[s.getAttribute('data-seg')] = s.textContent || '';
+                return m;
+            }, {}),
+            dividers: host.querySelectorAll('.status-div').length,
+            bar_label: host.getAttribute('aria-label') || '',
+            // Does the row fit? scrollWidth > clientWidth means it is clipped.
+            host_client: host.clientWidth,
+            host_scroll: host.scrollWidth,
+            text: host.textContent
+        };
+    "#;
+
+    let (client, _server) = setup().await?;
+    client.set_window_size(1400, 900).await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── ROW 1 — it is a list of segments, not a string ──────────────────
+        let wide: serde_json::Value = client.execute(PROBE, vec![]).await?;
+        assert!(
+            wide["present"].as_bool().unwrap_or(false),
+            "VACUOUS: #status-bar / #mode-display is missing, so every assertion \
+             below is about nothing. Probe: {wide}"
+        );
+        let count = wide["count"].as_u64().unwrap_or(0);
+        assert!(
+            count >= 3,
+            "VACUOUS: the bar rendered {count} `[data-seg]` element(s). Before this \
+             feature it was one formatted string and this gate must red on a \
+             revert to it. Text was {:?}",
+            wide["text"].as_str().unwrap_or("")
+        );
+
+        // ── ROW 2 — the three counts, by key ────────────────────────────────
+        let keys: Vec<&str> = wide["keys"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect()
+        }).unwrap_or_default();
+        for want in ["windows", "peers", "durability"] {
+            assert!(
+                keys.contains(&want),
+                "the bar does not carry the `{want}` segment — keys were {keys:?}. \
+                 These are the facts the bar has always shown and no width tier \
+                 may drop them while a gauge survives."
+            );
+        }
+
+        // ── ROW 2b — the fixed facts sit LEFT of every gauge ────────────────
+        // The operator's arrangement (2026-09-16): windows · peers · durability
+        // do not move second to second, so they belong beside the product name
+        // and the gauges fill what is left. Asserted on DOM ORDER, which is the
+        // thing a person sees — `layout` promising not to reorder is the model
+        // half and is gated natively.
+        let order_of = |keys: &[&str], k: &str| keys.iter().position(|x| *x == k);
+        // (checked again after the gauges arrive, below — at this point the
+        // live group may legitimately be empty)
+
+        // ── ROW 3 — a gauge, once a second of sampling exists ───────────────
+        // The sampler rolls once a second, so the first second of a boot has no
+        // history and NO gauge is the correct render. Poll rather than sleep a
+        // fixed budget: a fixed settle is a threshold nobody earned.
+        let mut gauged = wide.clone();
+        for _ in 0..40 {
+            if gauged["sparks"].as_u64().unwrap_or(0) > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            gauged = client.execute(PROBE, vec![]).await?;
+        }
+        let sparks = gauged["sparks"].as_u64().unwrap_or(0);
+        assert!(
+            sparks > 0,
+            "no gauge ever appeared. The status bar holds a `MonitorHold` for the \
+             life of the tab, so the sampler should be filling; with no hold the \
+             history stays empty, `segments` omits every gauge and the bar \
+             degrades to the counts. That is the off-switch — and here it is the \
+             defect. Probe: {gauged}"
+        );
+        let gkeys: Vec<&str> = gauged["keys"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect()
+        }).unwrap_or_default();
+        assert!(
+            gkeys.contains(&"smoothness"),
+            "a sparkline rendered but not the smoothness one — that is the gauge \
+             the whole feature exists for. Keys: {gkeys:?}"
+        );
+
+        let fixed_last = ["windows", "peers", "durability"]
+            .iter()
+            .filter_map(|k| order_of(&gkeys, k))
+            .max();
+        let live_first = ["smoothness", "drawing", "app-1", "app-2", "app-3"]
+            .iter()
+            .filter_map(|k| order_of(&gkeys, k))
+            .min();
+        if let (Some(f), Some(l)) = (fixed_last, live_first) {
+            assert!(
+                f < l,
+                "a gauge is painted to the LEFT of a fixed fact: {gkeys:?}. The \
+                 three counts belong beside the product name — they are the \
+                 facts that do not move, and a row that interleaves them with \
+                 sparklines is the arrangement this replaced."
+            );
+        } else {
+            panic!("VACUOUS: the row has no fixed segment or no gauge, so the \
+                    ordering claim is about nothing. Keys: {gkeys:?}");
+        }
+        assert!(
+            gauged["dividers"].as_u64().unwrap_or(0) >= 1,
+            "no divider between the fixed group and the gauges — the boundary is \
+             a model fact (`Segment::group`) and the renderer draws it. Probe: {gauged}"
+        );
+
+        // ── ROW 3b — a gauge paints NO number ───────────────────────────────
+        // The braille IS the reading; a `0 ms` beside it is the widest part of
+        // an idle segment (operator, 2026-09-16). The figure moved to the
+        // accessible label, so this asserts BOTH halves — a change that simply
+        // deleted the reading would pass the easy one.
+        let painted = &gauged["painted"];
+        for key in ["smoothness", "drawing", "app-1", "app-2", "app-3"] {
+            let Some(text) = painted.get(key).and_then(|v| v.as_str()) else { continue };
+            assert!(
+                !text.chars().any(|c| c.is_ascii_digit()),
+                "the `{key}` gauge paints a number: {text:?}. The sparkline is the \
+                 reading — the figure belongs in the label, not on a 28px bar."
+            );
+        }
+        for key in ["smoothness", "drawing"] {
+            if order_of(&gkeys, key).is_none() {
+                continue;
+            }
+            let got = client
+                .execute(
+                    &format!(
+                        "var e = document.querySelector('[data-seg=\"{key}\"]'); \
+                         return e ? (e.getAttribute('aria-label') || '') : '';"
+                    ),
+                    vec![],
+                )
+                .await?;
+            let label = got.as_str().unwrap_or("");
+            assert!(
+                label.chars().any(|c| c.is_ascii_digit()),
+                "the `{key}` gauge dropped its reading instead of moving it — its \
+                 aria-label is {label:?}, so a screen reader and a hover now get \
+                 no figure at all."
+            );
+        }
+
+        // ── ROW 4 — accessibility ───────────────────────────────────────────
+        let hidden = gauged["sparks_hidden"].as_u64().unwrap_or(0);
+        assert_eq!(
+            hidden, sparks,
+            "{} of {sparks} sparkline(s) are not aria-hidden. A screen reader \
+             reads U+2800–U+28FF as BRAILLE CELLS, so an exposed graph is read \
+             aloud as nonsense. Dropping the attribute does not change the \
+             display, which is exactly why it needs a gate.",
+            sparks - hidden
+        );
+        let (segs, labelled) = (
+            gauged["count"].as_u64().unwrap_or(0),
+            gauged["labelled"].as_u64().unwrap_or(0),
+        );
+        assert_eq!(
+            labelled, segs,
+            "{} of {segs} segment(s) carry no aria-label. With the braille hidden, \
+             the label is the ONLY thing a screen reader gets from that segment.",
+            segs - labelled
+        );
+        let bar_label = gauged["bar_label"].as_str().unwrap_or("");
+        assert!(
+            bar_label.contains('·') && bar_label.len() > 5,
+            "the bar carries no summary sentence as its accessible name (got \
+             {bar_label:?}). The phrase is wider than the icons, so it can never \
+             be a visible tier — being the bar's aria-label is the job it kept, \
+             and it is how a screen reader gets one sentence instead of three \
+             isolated marks."
+        );
+
+        // ── ROW 5 — the LADDER: it narrows monotonically and never overflows ─
+        // The one place APPROX_CHAR_PX meets real font metrics.
+        //
+        // ⚠ **This was a single 1400 → 520 step and a magic number, and the
+        // change that made the bar more compact invalidated it** — dropping the
+        // `0 ms` readings and the redundant "Saved" word took the full row from
+        // ~60 cells to ~46, which is almost exactly what 520px affords, so the
+        // gate sat ON the boundary: green filtered, red unfiltered, for no
+        // reason a reader of either result could see.
+        //
+        // ⇒ ***a fixed width is a threshold nobody earned, exactly like a fixed
+        // settle*** — and the tell is that the number encoded an assumption
+        // about segment widths that the feature is free to change. The claim was
+        // never "520 drops something"; it is **monotonicity plus no overflow**,
+        // so that is what is asserted, across a ladder. Narrowing can now make
+        // the bar more compact without anybody having to re-tune a constant in
+        // a test.
+        let wide_keys = gkeys.len();
+        let mut ladder: Vec<(u32, Vec<String>)> = vec![(1400, gkeys.iter().map(|s| s.to_string()).collect())];
+        for width in [1000u32, 760, 560, 380] {
+            client.set_window_size(width, 900).await?;
+            // Poll rather than sleep: the row re-measures on the frame loop, and
+            // a fixed settle here would be the same defect one layer down.
+            let prev = ladder.last().map(|(_, k)| k.len()).unwrap_or(0);
+            let mut step = client.execute(PROBE, vec![]).await?;
+            for _ in 0..15 {
+                if step["count"].as_u64().unwrap_or(0) < prev as u64 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                step = client.execute(PROBE, vec![]).await?;
+            }
+            let keys: Vec<String> = step["keys"].as_array().map(|a| {
+                a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+            }).unwrap_or_default();
+            // Every rung, not just the last: no overflow, and the storage mark
+            // is priority 0 and must be the last one standing.
+            let (c, sc) = (
+                step["host_client"].as_i64().unwrap_or(0),
+                step["host_scroll"].as_i64().unwrap_or(0),
+            );
+            assert!(
+                sc <= c + 2, // 2px of rounding slack; the host is overflow:hidden
+                "the segment row overflows its host at {width}px ({sc}px of content \
+                 in a {c}px box), so a reading is clipped and a clipped reading is \
+                 a wrong reading. APPROX_CHAR_PX is under-estimating. Keys: {keys:?}"
+            );
+            assert!(
+                keys.contains(&"durability".to_string()),
+                "narrowing to {width}px dropped the durability segment while others \
+                 survived — it is priority 0 and must be the last one standing. \
+                 Keys: {keys:?}"
+            );
+            ladder.push((width, keys));
+        }
+        // Monotone: a narrower bar never shows MORE. A single-width check cannot
+        // see a priority that stopped being monotone in the middle of the range.
+        for pair in ladder.windows(2) {
+            let ((w0, k0), (w1, k1)) = (&pair[0], &pair[1]);
+            assert!(
+                k1.len() <= k0.len(),
+                "the bar grew as it narrowed: {}px showed {} segment(s) {k0:?} and \
+                 {}px showed {} {k1:?}. `layout` only ever drops, so this is a \
+                 priority that is not monotone or a row that did not re-measure.",
+                w0, k0.len(), w1, k1.len()
+            );
+        }
+        let (narrow_w, narrow_keys) = ladder.last().cloned().unwrap_or((0, vec![]));
+        assert!(
+            narrow_keys.len() < wide_keys,
+            "the whole ladder 1400px → {narrow_w}px dropped nothing: {wide_keys} \
+             segment(s) wide, {} at the narrowest ({narrow_keys:?}). Either the bar \
+             is not re-measuring at all, or APPROX_CHAR_PX is so generous that \
+             every tier fits at every width.",
+            narrow_keys.len()
+        );
+
+        println!(
+            "  ladder: {}\n  sparks {sparks}, all aria-hidden; bar label {bar_label:?}",
+            ladder
+                .iter()
+                .map(|(w, k)| format!("{w}px:{}", k.len()))
+                .collect::<Vec<_>>()
+                .join(" → ")
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "STATUS BAR OK — segments render, the gauge is live, the braille is hidden \
+         from a screen reader and the row narrows without clipping."
+    );
     Ok(())
 }

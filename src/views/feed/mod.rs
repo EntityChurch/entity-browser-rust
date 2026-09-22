@@ -141,6 +141,18 @@ impl WindowView for FeedWindow {
         "Feed" // i18n-ignore — stable type identifier, not UI text
     }
 
+    /// The store this window reads — the follow, gatherer and entry registries
+    /// are all under it.
+    ///
+    /// ⭐ **It was not reported at all until 2026-09-18**, while every read in
+    /// this file used the field. `find_open` matches `(type, peer)`, so a
+    /// window answering `""` is a window nothing can find: *Open in Feed*
+    /// stacked a new one on every press and the singleton-windows setting did
+    /// not apply here. The trait method is undefaulted now — see its doc.
+    fn peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
     fn watch(&self) -> &WindowWatch {
         &self.watch
     }
@@ -190,6 +202,10 @@ impl WindowView for FeedWindow {
             // one-shot press rather than as a keystroke event.
             "feed_follow" => self.model.follow(peers, &me, value, now_ms_u64()),
             "feed_unfollow" => self.model.unfollow(peers, &me, value),
+            // `{peer}\x1f{name}` — the reader's own petname (§2.4's `label`).
+            // An empty name is the clear, which is why the split is on a unit
+            // separator and not on whitespace.
+            "feed_set_label" => self.model.set_label(peers, &me, value),
             "feed_select" => self.model.select(value),
             "feed_refresh" => self.model.refresh(),
             "feed_add_gatherer" => self.model.add_gatherer(peers, &me, value, now_ms_u64()),

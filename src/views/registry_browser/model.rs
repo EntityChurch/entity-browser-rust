@@ -413,9 +413,8 @@ impl RegistryBrowserModel {
     }
 
     pub fn open_in_site_browser(&self, peers: &Peers, target: &ResolvedName) -> Option<String> {
-        let origin = target.origin.clone()?;
+        let origin = self.register_route(peers, target)?;
         let system_pid = Self::reader_peer(peers);
-        crate::content_site::origins::set_origin(peers, &system_pid, &target.peer_id, &origin);
         crate::content_site::discovery::warm_peer_sites(
             peers,
             &system_pid,
@@ -423,6 +422,76 @@ impl RegistryBrowserModel {
         );
         self.mark();
         Some(target.peer_id.clone())
+    }
+
+    /// ⭐ **Add this publisher to the reader's feed, carrying the name they
+    /// resolved** — the Feed viewer's half of the *Open* press.
+    ///
+    /// # Why the press writes at all
+    ///
+    /// **This is the only moment `billslab.com → 2KBj…` exists.** A registry
+    /// binding expires, nothing durable holds the pair, and a Feed window
+    /// spawned from here used to arrive with a 45-character key and no way back
+    /// to the word that was on screen when the button was pressed. §2.4's `via`
+    /// is the slot the convention already put there for it, on the reader's own
+    /// private follow record.
+    ///
+    /// ⛔ **So the caption says *add*, not *open*.** Following somebody is a
+    /// durable act and a button that performs one while promising to show you a
+    /// window is doing more than it says — see
+    /// [`crate::open_target::Viewer::open_key`], which is where the two viewers
+    /// stopped sharing a caption.
+    ///
+    /// The route is registered first and unconditionally: a follow with no
+    /// origin can only ever render `FeedPanel::NoRoute`, which is the *"this
+    /// deployment does not know where they are hosted"* screen about a
+    /// publisher we had the origin for a moment ago.
+    pub fn add_to_feed(
+        &self,
+        peers: &Peers,
+        target: &ResolvedName,
+        now: u64,
+    ) -> Option<crate::feed_follows::FollowOutcome> {
+        self.register_route(peers, target)?;
+        let outcome = crate::feed_follows::follow_via(
+            peers,
+            &Self::reader_peer(peers),
+            &target.peer_id,
+            now,
+            Some(&target.name),
+        );
+        tracing::info!(
+            name = %target.name,
+            peer_id = %target.peer_id,
+            outcome = ?outcome,
+            "registry: added a resolved publisher to the feed"
+        );
+        self.mark();
+        Some(outcome)
+    }
+
+    /// Register where the signed binding says this publisher is served, in the
+    /// store every viewer opened from here reads.
+    ///
+    /// **Common to every viewer**, because *where are they hosted* is what the
+    /// press established and every one of them needs it — the Site Browser to
+    /// fetch manifests, the Feed to have a published leg at all. Split out when
+    /// the second viewer arrived rather than duplicated: two expressions of
+    /// *"the open registers the origin"* is one drifting away from the other,
+    /// and the row it writes is `SOURCE_USER`, which boot deliberately never
+    /// repairs.
+    ///
+    /// `None` when the binding resolved **who** but not **where** — a different
+    /// failure from *no such name*, and one the caller must not paper over.
+    pub fn register_route_for(&self, peers: &Peers, target: &ResolvedName) -> Option<String> {
+        self.register_route(peers, target)
+    }
+
+    fn register_route(&self, peers: &Peers, target: &ResolvedName) -> Option<String> {
+        let origin = target.origin.clone()?;
+        let system_pid = Self::reader_peer(peers);
+        crate::content_site::origins::set_origin(peers, &system_pid, &target.peer_id, &origin);
+        Some(origin)
     }
 
     /// Fill every registry-scoped slot with something that is not `Idle`, so
@@ -664,6 +733,92 @@ mod tests {
             "the window is bound to a peer whose registry does not carry the origin \
              the click just resolved — the site will report as unreachable"
         );
+    }
+
+    /// ⭐⭐ **THE RESOLVED NAME SURVIVES THE PRESS — the whole point of the
+    /// Feed viewer's control, in one assertion.**
+    ///
+    /// A registry resolve is the **only** moment `billslab.com → 2KBj…` exists:
+    /// the binding has a TTL, nothing durable holds the pair, and until this
+    /// landed the Feed window spawned from here arrived with a 45-character key
+    /// and no way back to the word that was on screen when the button was
+    /// pressed. §2.4's `via` is the slot the convention already had for it.
+    ///
+    /// Asserted **in the store the spawned window reads** — `reader_peer`, the
+    /// same pair the sibling above measures — because a follow written into any
+    /// other local peer's tree is a follow that window cannot see, which is the
+    /// desync this whole surface's history is about.
+    ///
+    /// ⚠ **The fixture's peer id is a REAL one**, from a real keypair.
+    /// `feed_follows::follow` refuses an id that carries no public key (nothing
+    /// could ever be verified against it), so `"PUBPEER"` — which the two tests
+    /// either side of this one use quite correctly — would make this vacuous by
+    /// landing on `NotAPeerId` with no row written and no assertion able to tell.
+    #[test]
+    fn adding_a_resolved_publisher_to_the_feed_keeps_the_name_that_was_resolved() {
+        let peers = Peers::new_direct();
+        let m = RegistryBrowserModel::new(1);
+        let pid = entity_crypto::Keypair::from_seed([77; 32]);
+        let peer_id = entity_crypto::PeerId::from_public_key(&pid.public_key_bytes()).to_string();
+        let target = ResolvedName {
+            name: "billslab.com".to_string(),
+            peer_id: peer_id.clone(),
+            origin: Some("https://billslab.com".to_string()),
+            association_committed: true,
+            name_checked: true,
+            revocation_checked: true,
+            expires_at_ms: 0,
+            clamped: None,
+        };
+
+        assert_eq!(
+            m.add_to_feed(&peers, &target, 1_757_000_000_000),
+            Some(crate::feed_follows::FollowOutcome::Followed)
+        );
+
+        let bound_to = m.render_output(&peers).local_peer;
+        let rows = crate::feed_follows::list(&peers, &bound_to);
+        assert_eq!(rows.len(), 1, "the follow lands in the store the window reads");
+        assert_eq!(rows[0].subject, peer_id);
+        assert_eq!(
+            rows[0].via.as_deref(),
+            Some("billslab.com"),
+            "the name is the only thing this press knows that nothing else will"
+        );
+
+        // …and the route it needs is registered, or the window it opens can only
+        // ever render *"this deployment does not know where they are hosted"*
+        // about a publisher whose origin we had a moment ago.
+        assert_eq!(
+            crate::content_site::origins::get_origin(&peers, &bound_to, &peer_id).as_deref(),
+            Some("https://billslab.com")
+        );
+    }
+
+    /// **Resolved WHO but not WHERE writes nothing.** A follow with no origin
+    /// can only ever render `FeedPanel::NoRoute`, so adding one would put a row
+    /// in somebody's durable list whose sole effect is a dead entry — and the
+    /// refusal is the same one `open_in_site_browser` makes, for the same reason.
+    #[test]
+    fn a_publisher_we_resolved_but_cannot_reach_is_not_added_to_the_feed() {
+        let peers = Peers::new_direct();
+        let m = RegistryBrowserModel::new(1);
+        let pid = entity_crypto::Keypair::from_seed([78; 32]);
+        let peer_id = entity_crypto::PeerId::from_public_key(&pid.public_key_bytes()).to_string();
+        let target = ResolvedName {
+            name: "billslab.com".to_string(),
+            peer_id,
+            origin: None,
+            association_committed: true,
+            name_checked: true,
+            revocation_checked: true,
+            expires_at_ms: 0,
+            clamped: None,
+        };
+
+        assert_eq!(m.add_to_feed(&peers, &target, 0), None);
+        let bound_to = m.render_output(&peers).local_peer;
+        assert!(crate::feed_follows::list(&peers, &bound_to).is_empty());
     }
 
     /// ⭐⭐ **THE SAME-ORIGIN BINDING — the shape every single-domain deployment

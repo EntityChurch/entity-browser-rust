@@ -491,11 +491,20 @@ fn render_publications(
                 // life: the window handler alone can only mark itself dirty (it
                 // has no way to emit an `Action`), so a control that must open
                 // *another* window needs the DOM half.
-                let open = c::button(
+                //
+                // ⭐ **The caption and the event value are both the viewer's**
+                // — `open_key` because the two viewers do different things (the
+                // Feed's press writes a durable follow, so its caption says
+                // *add*), and the value because the handler has to know which
+                // act was asked for. It was a bare `c::button` sending `""`, so
+                // the model ran the Site Browser's half whichever control was
+                // pressed.
+                let open = c::button_value(
                     ctx,
-                    &crate::i18n::t("registry.open_in", &[("viewer", to_open.window_type)]),
+                    &crate::i18n::t(to_open.open_key, &[("viewer", to_open.window_type)]),
                     c::ButtonKind::Secondary,
                     "registry_open",
+                    to_open.window_type,
                 );
                 // The viewer's identity key, not its caption: `registry.open_in`
                 // interpolates a translated viewer name, and this is the control

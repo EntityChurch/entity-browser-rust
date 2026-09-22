@@ -124,6 +124,15 @@ impl WindowView for StorageWindow {
         "Storage" // i18n-ignore — stable type identifier, not UI text
     }
 
+    /// The peer this window was constructed against. **System-scoped**, so in
+    /// practice the system peer — but it is the value the window manager was
+    /// handed, not one re-derived here, which is what keeps `find_open` and
+    /// `CloseWindow` agreeing with the spawn. It went unreported until
+    /// 2026-09-18; see `WindowView::peer_id`.
+    fn peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
     fn watch(&self) -> &WindowWatch {
         &self.watch
     }

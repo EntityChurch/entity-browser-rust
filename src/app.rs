@@ -268,6 +268,15 @@ pub struct EntityApp {
     /// return a different identity.
     #[cfg(target_arch = "wasm32")]
     webrtc_seed: Option<[u8; 32]>,
+    /// Has [`Self::adopt_url_rendezvous`] already acted this session?
+    ///
+    /// The URL does not change under a running tab, so this is a once-per-load
+    /// decision on a per-frame path. It is a flag rather than a re-read because
+    /// the *registry* does change: without it, a user who removed the row would
+    /// have it written back on the next frame, and `connector rm` would be a
+    /// button that does nothing.
+    #[cfg(target_arch = "wasm32")]
+    url_rendezvous_adopted: bool,
     /// Session-lived inspect sink on the system peer feeding the app-tier
     /// access log (`crate::access_log_store`) with local dispatches. Installed
     /// once at boot — app-global, not per-window — so the Access Log window is a
@@ -405,6 +414,45 @@ pub struct EntityApp {
     /// string compare vs a DOM write every frame).
     #[cfg(target_arch = "wasm32")]
     last_status_text: Option<String>,
+    /// **The status bar's own sampling hold** (`DESIGN-2026-09-16` §2).
+    ///
+    /// The sampler is dormant unless something holds it, and the bar's gauges
+    /// need it held for the life of the tab. It lives here as an `Option` and
+    /// **not** as an unconditional `monitor::sampler::hold()` at construction,
+    /// because a hold nothing can release makes the planned on/off setting a
+    /// lie that still costs ~377 ns a frame. Dropping this field is the whole
+    /// of turning the gauges off.
+    ///
+    /// Consequence, stated: while this is held, closing the System Monitor no
+    /// longer resets sampler history (the last-drop reset never fires). That is
+    /// deliberate — the monitor now opens with history instead of a blank ring —
+    /// and `a_held_status_bar_keeps_history_when_the_monitor_closes` names it.
+    #[cfg(target_arch = "wasm32")]
+    status_gauge_hold: Option<crate::monitor::sampler::MonitorHold>,
+    /// **The previous frame's app ranking, by window id** — the state half of
+    /// the status bar's hysteresis (`status_bar::rank_apps`, which is pure and
+    /// takes this as an argument rather than hiding it in a `thread_local`).
+    ///
+    /// The whole ranking is carried, not only the slots the bar shows, so an
+    /// app sitting just outside the visible slots keeps its incumbency instead
+    /// of re-entering as a newcomer every second.
+    #[cfg(target_arch = "wasm32")]
+    status_app_order: Vec<crate::window::WindowId>,
+    /// When the status-gauge preference was last read, in `Date::now()` ms.
+    /// **Our own clock** — see [`settings_recheck_due`] and the note at the
+    /// call site for why it cannot be the sampler's.
+    #[cfg(target_arch = "wasm32")]
+    status_settings_checked_ms: f64,
+}
+
+/// Is a settings re-read due? Once a second, and **on the very first frame**
+/// (`last == 0.0`), so a profile that switched the gauges off does not spend a
+/// whole second sampling before anybody asks.
+///
+/// Pure, so the interval is a `make test` case: its caller is a `cfg(wasm32)`
+/// frame path that no native test can reach.
+pub(crate) fn settings_recheck_due(last_ms: f64, now_ms: f64) -> bool {
+    !last_ms.is_finite() || last_ms <= 0.0 || now_ms - last_ms >= 1_000.0 || now_ms < last_ms
 }
 
 /// Wall-clock milliseconds since navigation start (the page-load
@@ -1402,7 +1450,7 @@ impl EntityApp {
             webrtc_enabled,
         };
         // The WebRTC establisher *capability* — the resolved signaling node
-        // (URL > the user's durable connector selection > build knob), shared by
+        // (the user's durable connector selection > URL > build knob), shared by
         // every peer this worker hosts.
         let webrtc = webrtc_init_config();
         // Only the PRIMARY peer installs it. That restraint is the part of the v6
@@ -1837,6 +1885,8 @@ impl EntityApp {
             late_establisher: None,
             #[cfg(target_arch = "wasm32")]
             webrtc_seed: None,
+            #[cfg(target_arch = "wasm32")]
+            url_rendezvous_adopted: false,
             access_log_sink,
             dom,
             pending_backend_peers,
@@ -1862,6 +1912,15 @@ impl EntityApp {
             // yet, so no create action can fire) makes this purely defensive.
             can_persist: false,
             last_status_text: None,
+            // Taken once, here, so the gauges have history from the first
+            // second rather than from whenever somebody first looked. The
+            // settings toggle drops and re-takes it (`sync_status_gauge_hold`);
+            // it is taken at construction because the tree is not readable yet
+            // and ON is the default, so a profile that switched it off spends
+            // at most one second of sampling before the first read.
+            status_gauge_hold: Some(crate::monitor::sampler::hold()),
+            status_app_order: Vec::new(),
+            status_settings_checked_ms: 0.0,
         }
     }
 
@@ -3483,13 +3542,21 @@ impl EntityApp {
     /// operation reported as an event is a bug one layer up).
     ///
     /// The resolve goes through `resolve_provisioning_quietly` — the one
-    /// expression of URL > selection mirror > build knob, the same one boot uses
-    /// — so a session booted with `?webrtc_node=` is never re-pointed by a
-    /// selection that the precedence says loses.
+    /// expression of selection mirror > URL > build knob, the same one boot uses
+    /// — so this and `connectors::node_in_force` (what `meet` dials) can never
+    /// name two different nodes. They did, until 2026-09-16, and the session it
+    /// broke was the commonest one there is: a device on a desktop-served page
+    /// that added a connector.
+    ///
+    /// **This is the path that makes a connector chosen mid-session take
+    /// effect**, which is why the selection is above the URL rather than below
+    /// it: a `?webrtc_node=` the app server put in the address bar would
+    /// otherwise outrank every later choice for the life of the tab.
     #[cfg(target_arch = "wasm32")]
     fn arm_webrtc_if_provisioned(&mut self) -> LateArm {
-        let resolved =
-            crate::connectors::resolve_provisioning_quietly(&webrtc_url_query()).map(|(p, _)| p);
+        let resolved_with_source =
+            crate::connectors::resolve_provisioning_quietly(&webrtc_url_query());
+        let resolved = resolved_with_source.clone().map(|(p, _)| p);
         let outcome = decide_late_arm(
             self.late_establisher.is_some() && self.webrtc_seed.is_some(),
             self.webrtc_applied.as_ref(),
@@ -3506,7 +3573,7 @@ impl EntityApp {
         // stops the next frame deciding the same thing again, and what the
         // reload notice compares against.
         self.webrtc_applied = resolved.clone();
-        crate::connectors::record_applied(resolved.clone());
+        crate::connectors::record_applied(resolved_with_source.clone());
         let primary = self.peer_manager.primary_peer_id().to_string();
         // Rebuild through the SAME builder boot uses, so there is one expression
         // of what an establisher is made of (carrier, ICE, policy, observer).
@@ -3736,6 +3803,13 @@ impl EntityApp {
         // both above the render, and check the mechanism before moving either.
         self.connectors.sync(&self.peer_manager);
 
+        // **The node this page was served by becomes a row the user can see.**
+        // Above the arm, so the first arm of a fresh profile already resolves
+        // through the selection this writes rather than through the URL —
+        // one source, from the first frame.
+        #[cfg(target_arch = "wasm32")]
+        self.adopt_url_rendezvous();
+
         // **Arm the §6.5 seam if a rendezvous node has appeared since boot.**
         // This is what makes the ordinary flow — open the app, add a connector,
         // meet someone — work without a reload. See `crate::late_establish`.
@@ -3817,11 +3891,126 @@ impl EntityApp {
     fn update_status_bar(&mut self) {
         let windows = self.window_manager.open_count();
         let peers = self.peer_manager.peer_ids().len();
-        let status = status_summary(windows, peers, self.can_persist);
-        if self.last_status_text.as_deref() != Some(status.as_str()) {
-            crate::dom::util::set_status_text(&status);
-            self.last_status_text = Some(status);
+        let summary = status_summary(windows, peers, self.can_persist);
+
+        // ⚠ **Holding the sampler is not enough — something has to ROLL it.**
+        // The hooks accumulate into a current-second bucket and `roll` is what
+        // moves that bucket into the history rings. Until 2026-09-16 the ONLY
+        // caller was the System Monitor window's own tick, so a status bar that
+        // held the sampler recorded diligently into a bucket nobody ever
+        // emptied: every hook fired, every accumulator grew, and `history()`
+        // stayed empty forever. Found by the browser gate, not by reasoning —
+        // the native tests call `roll` by hand, which is exactly why none of
+        // them could see it (a test population that does the caller's job for
+        // it cannot notice the caller is missing).
+        //
+        // It belongs on the frame path rather than in a window, for AP44's
+        // reason: `roll` is per-tab state and every surface that reads history
+        // needs it to have happened. The monitor keeps its own call — `roll`
+        // only acts once a second and is already designed for several callers
+        // ("the first to tick rolls it"), and with no holders `with_active`
+        // returns before touching anything, so this is free when the gauges are
+        // off.
+        let now = js_sys::Date::now();
+        crate::monitor::sampler::roll(now);
+        // ⚠ **This clock is OURS, and the first cut used the sampler's.**
+        // `roll` reports whether the second turned — which looked like the one
+        // cheap signal already on this path, and is not: `with_active` returns
+        // early when nothing holds the sampler, so `roll` answers `false`
+        // forever once the gauges are off. Gating the settings re-read on it
+        // made the switch ONE-WAY — off was reachable and on was not.
+        //
+        // AP36, in the smallest possible form: the guard went on the
+        // ACQUISITION (is the sampler running) when the question is a DECISION
+        // (does the user still want it running), and the acquisition is the
+        // thing the decision turns off. Found by reading `with_active` while
+        // falsifying an unrelated neuter, not by a test.
+        if settings_recheck_due(self.status_settings_checked_ms, now) {
+            self.status_settings_checked_ms = now;
+            self.sync_status_gauge_hold();
         }
+
+        // With no hold the sampler answers an empty history, `segments` omits
+        // every gauge, and the bar degrades to the three counts — which is the
+        // off-switch working rather than a special case to write.
+        let history = crate::monitor::sampler::history();
+        let metrics = crate::status_bar::Metrics::from_history(
+            &history,
+            windows,
+            peers,
+            self.can_persist,
+            &self.status_app_order,
+        );
+        // Carry the ranking forward — this is the state half of the bar's
+        // hysteresis, and it is written back EVERY frame rather than only when
+        // the second turns: a window closing between rolls must leave the
+        // order, or a stale id keeps an incumbency nothing can spend.
+        self.status_app_order = metrics.app_order();
+        let all = crate::status_bar::segments(&metrics);
+        let cells = crate::dom::util::status_bar_cells();
+        let shown = crate::status_bar::layout(&all, cells);
+
+        // Write-on-change, per the WHOLE bar: a gauge moves once a second, so
+        // keying on a cheap fingerprint keeps a still bar from touching the DOM
+        // every frame (the property the old string compare had, kept).
+        let fingerprint = format!("{cells}|{summary}|{shown:?}");
+        if self.last_status_text.as_deref() != Some(fingerprint.as_str()) {
+            crate::dom::status_bar::render(&shown, &summary);
+            self.last_status_text = Some(fingerprint);
+        }
+    }
+
+    /// Take or drop the status bar's sampling hold to match the user's
+    /// `status_gauges` setting.
+    ///
+    /// **Called once a second, not every frame** — the caller gates on
+    /// `sampler::roll` reporting that the second turned. A settings read is a
+    /// tree read plus a CBOR decode, which is nothing at 1 Hz and is not
+    /// nothing at 60; a preference a person flips by hand does not need frame
+    /// resolution.
+    ///
+    /// Read per call and never retained, which is the [`SettingsModel`] shape
+    /// the charter names as the safe one (AP41 is about *retaining* a
+    /// construction read, not about taking one). On the Worker arm a cold cache
+    /// mirror answers the default — **on** — and self-heals on the next second
+    /// once the mirror fills, so the failure direction is "the feature you
+    /// asked for is visible", never "your setting was silently discarded".
+    ///
+    /// Dropping the hold is a real off: the sampler goes dormant, `history()`
+    /// answers empty and `segments` omits every gauge. There is no `enabled`
+    /// branch anywhere in the bar.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_status_gauge_hold(&mut self) {
+        let want = self.status_gauges_enabled();
+        match (want, self.status_gauge_hold.is_some()) {
+            (true, false) => {
+                self.status_gauge_hold = Some(crate::monitor::sampler::hold());
+            }
+            (false, true) => {
+                self.status_gauge_hold = None;
+                // The carried ranking is about a history that no longer exists.
+                self.status_app_order.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Read the status-bar gauge preference from the global settings entity
+    /// (system peer, `settings/ui`). Defaults to **on** when the entity is
+    /// absent — the same shape as [`Self::singleton_windows_enabled`], which
+    /// defaults to its own historical behaviour.
+    #[cfg(target_arch = "wasm32")]
+    fn status_gauges_enabled(&self) -> bool {
+        let sys = self.peer_manager.system_peer_id();
+        let path = crate::app_paths::settings_path(
+            crate::app_paths::APP_ID,
+            sys,
+            crate::views::settings::model::SETTINGS_PATH,
+        );
+        self.peer_manager
+            .get_entity(sys, &path)
+            .map(|e| crate::views::settings::model::SettingsState::from_entity(&e).status_gauges)
+            .unwrap_or(true)
     }
 
     /// Apply the site-overlay surface to the DOM: container mode class +
@@ -3921,9 +4110,39 @@ impl EntityApp {
                     // Single-instance ("immutable") windows: if enabled and a
                     // window of this type is already open for this peer, focus
                     // it instead of spawning a duplicate.
-                    if self.singleton_windows_enabled() {
+                    //
+                    // ⭐⭐ **…and an AIMED spawn reuses one whatever that setting
+                    // says, because an aim is a NAVIGATION.** *Open in Feed*
+                    // pressed four times left four Feed windows stacked on each
+                    // other, every one of them showing a publisher the person
+                    // had already moved on from — so the cost of following a
+                    // registry walk was closing the windows it opened behind
+                    // you. A control carrying an address is asking for
+                    // *somewhere to be shown*, and the window that already shows
+                    // that kind of thing is where it belongs; `aim` below is
+                    // what re-points it, and it is the same call the singleton
+                    // arm has made since it existed.
+                    //
+                    // The condition is `find_open`'s `(type, peer)`, which is
+                    // exactly what the operator asked for — *open it if it is
+                    // not already open* — and it is why this is not a policy
+                    // about window count: two Feed windows bound to two
+                    // different peers stay two windows.
+                    let is_aimed = target.is_some();
+                    if self.singleton_windows_enabled() || is_aimed {
                         if let Some(existing) = self.window_manager.find_open(type_name, pid) {
-                            tracing::info!(type_name = %type_name, peer_id = %pid, existing, "SpawnWindow: focusing existing (singleton)");
+                            tracing::info!(
+                                type_name = %type_name,
+                                peer_id = %pid,
+                                existing,
+                                // Which rule reused it. A log that said only
+                                // "focusing existing" could not tell a profile
+                                // with singleton windows on from an aimed open
+                                // — and only one of them owes the window an
+                                // address afterwards.
+                                reason = if is_aimed { "aimed" } else { "singleton" },
+                                "SpawnWindow: focusing existing"
+                            );
                             if self.maximized_window.is_some_and(|m| m != existing) {
                                 self.maximized_window = None;
                             }
@@ -6504,6 +6723,120 @@ impl EntityApp {
         // tree registry, which every peer-aware window subscribes to.
     }
 
+    /// **The node that served this page becomes a row the user can see.**
+    ///
+    /// # Why this exists
+    ///
+    /// `src-tauri`'s app server redirects `/` → `/?webrtc_node_peer=…&webrtc_node=…`,
+    /// so every device that walks over and types the desktop's address is
+    /// provisioned by a URL — with an **empty connector registry**. That node was
+    /// therefore invisible: it appeared in no list, `connector rm` could not
+    /// remove it, and nothing on screen could name it. A fourth source of the
+    /// same fact that no surface could show, which is exactly what
+    /// [`Self::adopt_backend_rendezvous`]'s doc argues against for the desktop's
+    /// own backend. *The principle was written down and applied to one source.*
+    ///
+    /// It is also what makes the precedence flip safe. With the user's selection
+    /// now above the URL (`connectors::resolve_provisioning_quietly`), a
+    /// returning profile that already has a selection would otherwise have **no
+    /// way to reach the node this page is offering** — it would lose silently and
+    /// be unlistable. As a row it loses *visibly*, and is one click away.
+    ///
+    /// # The rules, and each is load-bearing
+    ///
+    /// - **Once per load.** The URL cannot change under a running tab, and
+    ///   re-deciding per frame would rewrite a row the user had just deleted —
+    ///   `connector rm` would be a button that does nothing.
+    /// - **Selects only when nothing is selected**, which is `plan_write`'s
+    ///   existing rule and the whole of *chosen beats seeded*. A fresh profile
+    ///   gets the zero-config path exactly as before; a profile with a choice
+    ///   keeps it.
+    /// - **Keep the label, take the address** (`plan_self_adoption`, shared with
+    ///   the backend adoption). A served node's identity is durable and its port
+    ///   is not — the 4041 bind falls back to an ephemeral port when something
+    ///   else holds it — so a row keeping yesterday's port would rendezvous at a
+    ///   process that has moved.
+    /// - **The reflectors ride along.** `?webrtc_ice=` is part of the same
+    ///   provisioning; dropping it would make the row resolve to a host-only
+    ///   session the moment the selection sourced from it — a NAT regression
+    ///   introduced by a row we wrote ourselves.
+    /// - **A disagreement is reported, never resolved silently.** If this page
+    ///   was served by one node and the user has chosen another, that is a fact
+    ///   they need. Picking one without saying so is how the split this repairs
+    ///   started.
+    #[cfg(target_arch = "wasm32")]
+    fn adopt_url_rendezvous(&mut self) {
+        if self.url_rendezvous_adopted {
+            return;
+        }
+        self.url_rendezvous_adopted = true;
+        let Some(p) = crate::session_config::webrtc_provisioning_from_query(&webrtc_url_query())
+        else {
+            return;
+        };
+        let sys = self.peer_manager.system_peer_id().to_string();
+        let existing = crate::connectors::read_connectors(&self.peer_manager, &sys)
+            .into_iter()
+            .find(|c| c.node_peer_id == p.node_peer_id);
+        let default_label = crate::i18n::t("connector.served_this_page", &[]);
+        match crate::connectors::plan_self_adoption(
+            existing.as_ref().map(|c| (c.node_addr.as_str(), c.label.as_str())),
+            &p.node_addr,
+            &default_label,
+        ) {
+            crate::connectors::AdoptPlan::Unchanged => {}
+            crate::connectors::AdoptPlan::Write { label } => {
+                let row = crate::connectors::Connector {
+                    node_peer_id: p.node_peer_id.clone(),
+                    node_addr: p.node_addr.clone(),
+                    label,
+                    ice: p
+                        .ice_servers
+                        .iter()
+                        .filter(|s| !s.is_relay())
+                        .flat_map(|s| s.urls.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    // `plan_write` preserves whatever the node advertised; the
+                    // caller's value is ignored by construction.
+                    ice_advertised: String::new(),
+                    relay: String::new(),
+                    relay_username: String::new(),
+                    relay_credential: String::new(),
+                };
+                match crate::connectors::add_connector(&self.peer_manager, &sys, &row) {
+                    Ok(outcome) => tracing::info!(
+                        node = %p.node_peer_id, addr = %p.node_addr,
+                        selected = outcome.selected, repointed = existing.is_some(),
+                        "adopted the rendezvous node this page was served by"
+                    ),
+                    // Never fatal: the URL still provisions this session through
+                    // the precedence. What is lost is the row — the ability to
+                    // name the node and to manage it.
+                    Err(e) => tracing::warn!(
+                        node = %p.node_peer_id, error = %e,
+                        "could not write a connector row for the node that served this \
+                         page — it still provisions this session, but it will not appear \
+                         in the connector list"
+                    ),
+                }
+            }
+        }
+        // The disagreement, said out loud. A selection pointing elsewhere is
+        // legitimate and we keep it — but a person who loaded this page
+        // expecting its node is owed the reason it is not the one in force.
+        if let Some(sel) = crate::connectors::selected_connector(&self.peer_manager, &sys) {
+            if sel.node_peer_id != p.node_peer_id {
+                tracing::info!(
+                    served_by = %p.node_peer_id,
+                    in_force = %sel.node_peer_id,
+                    "this page was served by one rendezvous node and a different one is \
+                     selected — keeping your choice; the page's node is in the connector list"
+                );
+            }
+        }
+    }
+
     /// **If this desktop's own backend is serving a rendezvous, use it.**
     ///
     /// # The bug this closes
@@ -6532,10 +6865,17 @@ impl EntityApp {
     /// # The reload, stated rather than discovered [AP22]
     ///
     /// Provisioning is consumed at boot, so the row written here installs no
-    /// establisher until the next load. `meet` works immediately anyway
+    /// establisher until the next load.
+    ///
+    /// ⚠ **Both halves of that paragraph have since moved and the correction is
+    /// the useful part.** It used to read *"`meet` works immediately anyway
     /// (`connectors::node_in_force` reads the registry at call time), but a peer
-    /// met before the reload has no way to connect *back* — which is worse than
-    /// failing, so the notice says so. The second boot needs nothing.
+    /// met before the reload has no way to connect back"* — which described a
+    /// **split**, not a workaround: meeting at a node you are not armed at is
+    /// the failure, not the consolation. `node_in_force` answers from the arm
+    /// now, and `arm_webrtc_if_provisioned` applies a row chosen mid-session
+    /// without a reload, so the row written here takes effect on the frame after
+    /// it lands and `meet` follows it. See `connectors::node_in_force`.
     fn adopt_backend_rendezvous(&mut self, info: &crate::tauri_ipc::BackendPeerInfo) {
         if !info.signaling_node {
             return;
@@ -6839,18 +7179,15 @@ fn release_request_entity(peer_id: &str, reason: &str) -> entity_entity::Entity 
         .expect("release-request entity construction is infallible")
 }
 
-/// Compose the always-on status-bar summary (`N windows · M peers · Saved`).
-/// Pure so the wording/pluralization/durability label is unit-testable without
-/// a DOM. Called from the wasm-only [`EntityApp::update_status_bar`].
+/// The always-on status-bar summary (`N windows · M peers · Saved`).
+///
+/// **One expression, in [`crate::status_bar`]** — it is both the bar's narrowest
+/// tier and its fallback, so a copy here would be a second wording for one
+/// phrase with nothing keeping them equal (C15). It lived here until
+/// 2026-09-16, when the bar became a list of segments.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn status_summary(windows: usize, peers: usize, can_persist: bool) -> String {
-    let win = crate::i18n::t_plural("window.count", windows as i64, &[("n", &windows.to_string())]);
-    let peer = crate::i18n::t_plural("peer.count", peers as i64, &[("n", &peers.to_string())]);
-    let durability = crate::i18n::t(
-        if can_persist { "statusbar.saved" } else { "statusbar.not_saved" },
-        &[],
-    );
-    format!("{win} · {peer} · {durability}") // i18n-ignore — slot-only composition; parts localized above
+    crate::status_bar::summary_text(windows, peers, can_persist)
 }
 
 #[cfg(test)]
@@ -7028,6 +7365,31 @@ mod release_candidates_tests {
             None,
         );
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod settings_recheck_tests {
+    use super::settings_recheck_due;
+
+    /// Once a second, and immediately on the first frame.
+    #[test]
+    fn a_settings_recheck_is_due_once_a_second_and_on_the_first_frame() {
+        assert!(settings_recheck_due(0.0, 1.0), "the first frame must not wait a second");
+        assert!(!settings_recheck_due(1_000.0, 1_500.0), "half a second is not due");
+        assert!(settings_recheck_due(1_000.0, 2_000.0), "exactly a second is");
+        assert!(settings_recheck_due(1_000.0, 9_000.0));
+    }
+
+    /// ⚠ **A clock that went backwards must not wedge the switch.** This is the
+    /// same class as the defect this function exists to fix: the whole point is
+    /// that the re-read cannot be stopped by anything the setting controls, and
+    /// `Date::now()` is a wall clock that an NTP step or a suspend can move
+    /// backwards. Never-due is the failure mode with no way out of it.
+    #[test]
+    fn a_clock_that_went_backwards_is_due_rather_than_never_due() {
+        assert!(settings_recheck_due(9_000.0, 1_000.0));
+        assert!(settings_recheck_due(f64::NAN, 1_000.0));
     }
 }
 

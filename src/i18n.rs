@@ -386,6 +386,26 @@ pub const EN: &[(&str, Message)] = &[
     ("status.granted", Message::Simple("granted")),
     // Status-bar durability label (capitalized, sentence position — distinct
     // from status.saved "saved" used as an inline chip).
+    // Status-bar gauges (DESIGN-2026-09-16). The braille itself is aria-hidden,
+    // so these labels are the ONLY thing a screen reader gets — they say the
+    // reading in words, never "graph".
+    ("statusbar.smoothness", Message::Simple("Smoothness: {ms} ms per second waiting")),
+    (
+        "statusbar.smoothness.tip",
+        Message::Simple(
+            "How much of each second this tab was held past one frame — the time taps and keys waited.",
+        ),
+    ),
+    ("statusbar.drawing", Message::Simple("Drawing: {ms} ms per second")),
+    (
+        "statusbar.drawing.tip",
+        Message::Simple("The part of the held time this app spent drawing its own windows."),
+    ),
+    ("statusbar.top_app", Message::Simple("{app}: {ms} ms per second, reported by the app")),
+    (
+        "statusbar.top_app.tip",
+        Message::Simple("The busiest app that reports its own work. Most apps report nothing."),
+    ),
     ("statusbar.saved", Message::Simple("Saved")),
     ("statusbar.not_saved", Message::Simple("Not saved")),
     // Inline on/off state words (system-peers posture line).
@@ -1208,6 +1228,13 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Show the site toggle in the status bar"),
     ),
     ("settings.show_inspector", Message::Simple("Show inspector panel")),
+    ("settings.status_gauges", Message::Simple("Show performance gauges in the status bar")),
+    (
+        "settings.status_gauges.hint",
+        Message::Simple(
+            "Turning these off stops the measuring, not just the drawing. The window and peer counts stay.",
+        ),
+    ),
     (
         "settings.auto_connect",
         Message::Simple("Auto-connect to known peers on startup"),
@@ -1332,7 +1359,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_reflector",
         Message::Simple(
             "No reflector is set up, so this app can only reach devices on your local \
-             network. Add one on the connector you rendezvous through.",
+             network. Add one on the rendezvous node you meet through.",
         ),
     ),
     (
@@ -1346,7 +1373,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_direct_path",
         Message::Simple(
             "This network needs a relay — neither device can be reached directly. \
-             Add a relay on the connector you rendezvous through.",
+             Add a relay on the rendezvous node you meet through.",
         ),
     ),
     ("window.chain_trace", Message::Simple("Chain Trace")),
@@ -1610,6 +1637,14 @@ pub const EN: &[(&str, Message)] = &[
         "That publisher's peer-id carries no public key, so their signed root cannot be \
          verified.")),
     ("registry.open_in", Message::Simple("Open in {viewer}")),
+    // ⭐ **The Feed viewer's control, and it says *add* because it writes.**
+    // Pressing it follows this publisher — a durable row in the reader's own
+    // tree, carrying the name they just resolved, which is the only moment that
+    // name exists. `registry.open_in` promises to show you a window and nothing
+    // else, so it would be the button doing more than it says. Translators: this
+    // is *add them to the list of publishers I read*, not *open a window*; the
+    // window opening is the consequence, not the act.
+    ("registry.add_to_feed", Message::Simple("Add to my feed")),
     ("registry.open_caveat", Message::Simple(
         "This registers the origin the signed binding named. The pages themselves are not \
          verified \u{2014} the Site Browser reads no signed root, so that origin still chooses \
@@ -2009,6 +2044,39 @@ pub const EN: &[(&str, Message)] = &[
              own author's key.",
         ),
     ),
+    // ⭐ How many posts are on screen. The surface rendered an unbroken scroll
+    // with no number anywhere, so *"how much of this is there?"* had no answer —
+    // and the control that reveals more of it needs something to sit beside.
+    (
+        "feed.post_count",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} post"),
+            (PluralCategory::Other, "{n} posts"),
+        ]),
+    ),
+    // ⛔ **The honest hedge, and translators should keep it hedged.** One read
+    // walks at most a fixed number of entries; when it comes back exactly full
+    // we cannot tell a publisher who has that many from one who has more, so
+    // this says *there may be* and never *there are*. Claiming either would be
+    // a statement we did not check.
+    (
+        "feed.newest_only",
+        Message::Simple(
+            "This is the newest {n}. There may be older posts this read did not \
+             reach.",
+        ),
+    ),
+    // Where this deployment says the publisher is served. **A routing fact, not
+    // a name** — translators: this is the host their bytes come from, never what
+    // they are called.
+    ("feed.hosted_at", Message::Simple("Hosted at {origin}")),
+    // The petname box. `APP-CONVENTION-FEED` §2.4: *"local, chosen by the
+    // reader, and never authoritative"* — it lives only in this profile's tree
+    // and is shown to nobody else, which is what the placeholder should convey.
+    (
+        "feed.alias_placeholder",
+        Message::Simple("your own name for them"),
+    ),
     (
         "feed.no_posts",
         Message::Simple("This publisher has not posted anything."),
@@ -2214,6 +2282,12 @@ pub const EN: &[(&str, Message)] = &[
     // and the message names the reload, because the row takes effect for
     // *reaching* people only on the next load [AP22].
     ("connector.this_desktop", Message::Simple("This desktop")),
+    // The node a browser was handed by the page it loaded — the app server's
+    // `?webrtc_node_peer=…` redirect. A real row for the same reason the one
+    // above is: it is listed, selectable and removable, and until 2026-09-16 it
+    // was none of those. Named for what the user did ("I typed that machine's
+    // address"), not for a peer-id they have never seen.
+    ("connector.served_this_page", Message::Simple("The device serving this page")),
     (
         "connector.adopted_backend",
         Message::Simple(
@@ -2360,7 +2434,7 @@ pub const EN: &[(&str, Message)] = &[
              username and the credential are required.",
         ),
     ),
-    ("peerconn.connector_add", Message::Simple("Add connector")),
+    ("peerconn.connector_add", Message::Simple("Add rendezvous node")),
     ("peerconn.connector_use", Message::Simple("Use")),
     ("peerconn.connector_in_use", Message::Simple("In use")),
     ("peerconn.connector_check", Message::Simple("Check")),
@@ -2384,7 +2458,7 @@ pub const EN: &[(&str, Message)] = &[
     ),
     (
         "peerconn.meet_needs_connector",
-        Message::Simple("Select a connector first — a meet happens at a signaling node."),
+        Message::Simple("Choose a rendezvous node first — a meet happens at one."),
     ),
     // The meet runs, and the peers it finds are real — but they will not be able
     // to reach back, because this peer has no §6.5 establisher. Worth saying at
@@ -2441,7 +2515,7 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.meet_no_node",
         Message::Simple(
             "Heads up: peers you meet will find you but won't reach you — no \
-             rendezvous node is set up. Add one under Connectors, then reload this \
+             rendezvous node is set up. Add one under Rendezvous nodes, then reload \
              page to become reachable.",
         ),
     ),
@@ -2480,17 +2554,22 @@ pub const EN: &[(&str, Message)] = &[
     ),
     ("peerconn.meet_start", Message::Simple("Meet")),
     ("peerconn.meet_stop", Message::Simple("Stop")),
+    // No counter. The poll count used to be here, climbing toward its bound with
+    // nothing to say what the bound meant; what a person waiting for a friend to
+    // press a button needs is roughly how long this goes on for.
     (
         "peerconn.meet_searching",
-        Message::Simple("Searching at {mode} via {node} — {polls}/{max}"),
+        Message::Simple("Searching at {mode} via {node} — {left}"),
     ),
+    ("peerconn.meet_time_minutes", Message::Simple("about {n} min left")),
+    ("peerconn.meet_time_under_minute", Message::Simple("under a minute left")),
     // The honest empty result, with the two things that have to be true for a
     // meet to work — otherwise "nobody there" reads as "this is broken".
     (
         "peerconn.meet_none",
         Message::Simple(
             "Nobody else was there. Both sides have to be searching at the same name, \
-             through the same connector.",
+             through the same rendezvous node.",
         ),
     ),
     ("peerconn.meet_unverified", Message::Simple("unverified claim")),

@@ -106,16 +106,41 @@ impl WindowView for RegistryBrowserWindow {
                 self.model.unpin();
                 self.watch.mark_dirty();
             }
-            // Opening registers the origin the SIGNED binding carried, then hands
-            // the peer to a Site Browser. See `open_in_site_browser` for what that
-            // does and does not establish — the pages themselves stay unverified,
-            // and the Site Browser says so.
+            // ⭐ **Which viewer was pressed decides what the press DOES.**
+            //
+            // Both register the origin the SIGNED binding carried — that is what
+            // the resolve established and every viewer needs it. Beyond that
+            // they diverge: the Site Browser warms the publisher's manifests
+            // (see `open_in_site_browser` for what that does and does not
+            // establish — the pages stay unverified, and it says so), and the
+            // Feed **adds them to the reader's feed, carrying the resolved
+            // name**, which is the only moment that name exists.
+            //
+            // `value` is the viewer's identity key, not its caption. An
+            // unrecognised one registers the route and stops: that half is right
+            // for every viewer, and guessing at the other half is how a press
+            // does something nobody asked for.
             "registry_open" => {
                 let out = self.model.render_output(peers);
-                if let output::Phase::Done(target) = out.resolved {
-                    if self.model.open_in_site_browser(peers, &target).is_some() {
-                        self.watch.mark_dirty();
+                let output::Phase::Done(target) = out.resolved else { return };
+                let acted = match value.as_str() {
+                    crate::open_target::FEED => self
+                        .model
+                        .add_to_feed(peers, &target, now_ms_u64())
+                        .is_some(),
+                    crate::open_target::SITE_BROWSER => {
+                        self.model.open_in_site_browser(peers, &target).is_some()
                     }
+                    other => {
+                        tracing::warn!(
+                            viewer = %other,
+                            "registry open: an unrecognised viewer — registering the route only"
+                        );
+                        self.model.register_route_for(peers, &target).is_some()
+                    }
+                };
+                if acted {
+                    self.watch.mark_dirty();
                 }
             }
             _ => {}
@@ -132,4 +157,22 @@ impl WindowView for RegistryBrowserWindow {
         let output = self.model.render_output(peers);
         crate::dom::registry_browser::render(container, &output, ctx, self.window_id);
     }
+}
+
+/// Wall-clock ms for the `since` of a follow this window writes.
+///
+/// **`Date.now()`, not `performance.now()`** — the same split the Feed window's
+/// own `now_ms_u64` carries, and for the same reason: `since` is a timestamp
+/// somebody may one day see, and a monotonic clock measured from page load would
+/// record every follow as having happened a few seconds after the epoch.
+#[cfg(target_arch = "wasm32")]
+fn now_ms_u64() -> u64 {
+    js_sys::Date::now() as u64
+}
+
+/// Natively there is no clock; `0` is an honest *"we do not know when"* rather
+/// than a fabricated instant.
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms_u64() -> u64 {
+    0
 }

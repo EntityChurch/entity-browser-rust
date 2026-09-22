@@ -19,13 +19,25 @@ pub struct EventLogWindow {
     #[allow(dead_code)]
     model: EventLogModel,
     watch: WindowWatch,
+    /// The peer this window was spawned against.
+    ///
+    /// ⭐ **Held only so it can be REPORTED.** Every read here goes through the
+    /// system peer the factory resolves, so the struct had no use for the
+    /// argument and dropped it — and then `WindowView::peer_id` answered `""`,
+    /// which is what makes a window invisible to `find_open` and therefore
+    /// impossible to focus instead of duplicating. The binding is the window
+    /// manager's fact about this window, not this window's fact about itself:
+    /// answering with what we were handed is what keeps the spawn, the reuse and
+    /// the close talking about the same window.
+    peer_id: String,
 }
 
 impl EventLogWindow {
-    pub fn new() -> Self {
+    pub fn new(peer_id: &str) -> Self {
         Self {
             model: EventLogModel::new(),
             watch: WindowWatch::new(),
+            peer_id: peer_id.to_string(),
         }
     }
 
@@ -34,8 +46,8 @@ impl EventLogWindow {
             name: "Event Log", // i18n-ignore — identity key; display via window.event_log
             description: "Connection events, execute results, and errors", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
-            create: |_id, _peer_id, pm| {
-                let mut window = EventLogWindow::new();
+            create: |_id, peer_id, pm| {
+                let mut window = EventLogWindow::new(peer_id);
                 // Stage C: per-event subscription drives
                 // the in-memory `EventLogCache`. apply_change updates
                 // the cache mirror; render reads in-memory only.
@@ -54,11 +66,7 @@ impl EventLogWindow {
     }
 }
 
-impl Default for EventLogWindow {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+
 
 impl WindowView for EventLogWindow {
     fn title(&self) -> String {
@@ -67,6 +75,11 @@ impl WindowView for EventLogWindow {
 
     fn type_name(&self) -> &'static str {
         "Event Log" // i18n-ignore — stable type identifier, not UI text
+    }
+
+    /// What the window manager bound this to — see the field.
+    fn peer_id(&self) -> &str {
+        &self.peer_id
     }
 
     fn watch(&self) -> &WindowWatch {

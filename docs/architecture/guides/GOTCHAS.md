@@ -279,6 +279,28 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   falsified against the literal first cut. **When a switch has two directions, the easy one is
   never the gate.**
 
+- ⭐⭐ **A WINDOW THAT DOES NOT REPORT ITS BINDING IS INVISIBLE TO EVERY MECHANISM KEYED ON
+  `(type, peer)` — `WindowView::peer_id` defaulted to `""` (fixed 2026-09-18).**
+  `WindowManager::find_open` matches `type_name == t && peer_id == p`, so a window answering the
+  empty string **can never be found**: `"" == pid` is false for every real peer. Three windows
+  relied on the default and **two of them held a `peer_id` field they used on every read** — bound
+  to a peer, reading that peer's tree, telling the window manager nothing.
+  **The consequences raise no error anywhere.** Every aimed open stacked another window (*Open in
+  Feed* pressed four times left four, each showing a publisher the person had moved on from); the
+  singleton-windows setting silently did not apply to them; and `CloseWindow` removed window state
+  at a path built from `""` — inert for these three, because none persists any, and not a property
+  to rely on.
+  ⇒ ***a defaulted accessor for a fact the CALLER cannot do without is a rule with no enforcement
+  point.*** It is undefaulted now, so `error[E0046]` names every impl — `publish_axes::carried_peers`'
+  own lesson (*a new obligation on a trait goes in undefaulted*), written three days earlier, in
+  the place it was already costing something. A window with no peer of its own answers with the one
+  it was constructed against; **there is no honest `""`**.
+  ⚠ **Found by a gate written for something else.** The reuse rule (*an aimed open is a navigation*)
+  is in `app.rs`; the reason it did not work was in `window.rs`, two layers down, in a method nobody
+  had read since it was written. **When a fix does not take, check what the mechanism it leans on
+  is actually comparing** — `find_open`'s two operands were right there and one of them was a
+  constant.
+
 ## State, subscriptions & change detection
 
 - **A RUNNING APP WAS TORN DOWN BY ITS OWN SAVE — the Apps window subscribed the prefix it is also
@@ -3419,6 +3441,47 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Apps & embedded programs
 
+- ⭐⭐ **A RUNNING APP WAS TORN DOWN BY ANOTHER WINDOW'S DOWNLOAD — and the gate that fixed the
+  first instance a week earlier could not see it, because it named the WRITER instead of the
+  CONDITION (2026-09-18, reported from a live desktop).** Start a VM in the Apps window, open
+  another app, and the VM is back at its boot screen. Every Apps window watches the same two
+  launcher prefixes (`catalog` and `bundles/` — `paths::launcher_watch_prefixes`) so the grid
+  notices new app code, and a write there is **ordinary traffic**: opening a second Apps window
+  refreshes each set's catalog once per open, launching an app fetches its bundle, and
+  `foreign_cache::ensure_current` writes at exactly `ForeignArtifact::AppBundle::store_path()` on
+  `Currency::Fetched`. That write flipped the dirty flag of **every** Apps window, and a section
+  rebuild runs `render_player`, which replaces the `<iframe>`.
+  ⇒ ***the fix is the mechanism that was already there: a `RebuildGate` closed for exactly as long
+  as a player is mounted.*** `saves_gate` → **`player_gate`**, one condition, two prefix families —
+  and the reason the second family was missed is the whole entry: **the save case has this window as
+  its own writer**, so it was found by watching one window misbehave on its own, and this one
+  arrives from a window the user had just opened. *A gate documented by who writes is a gate nobody
+  re-reads when somebody else writes.*
+  **Nothing is suppressed that the window needs**, and check this before copying the shape: while a
+  player is up the launcher grid is **not drawn**, so a catalog change has nothing on screen to
+  update; returning to the grid writes this window's **own view state**, which is ungated and
+  rebuilds against the current store; and the subscriptions stay live, so the Worker arm's cache
+  mirror keeps filling (that is `RebuildGate`'s entire design).
+  ⚠ **`ensure_fetched`'s own `dirty.mark()` is deliberately NOT gated** — it takes `watch.flag()`,
+  whose gate is `None`, so a window still heals the code **it is itself running**
+  (`an_app_republished_under_a_stable_identity_reaches_a_returning_profile` depends on that mark
+  landing after the player mounts). Gate the subscription, not the window's own deliberate refresh.
+  ⛔ **One narrower path is left open and is stated rather than fixed:** `AppWindow::tick` marks
+  dirty ungated when `refresh_ledger::retry_generation()` moves, so pressing the Problems card's
+  retry remedy restarts every running app. Same class, but reachable only by a deliberate press, and
+  neither `tick` nor that remedy can be falsified from a browser rig here (check 3 needs a publisher
+  that withholds a set) — so it is recorded, not changed under cover of this fix.
+  **Gate: `make e2e-worker T=a_running_app_survives_another_window_opening`** — three rows in order,
+  an unrelated window · a second Apps window · a write under `apps/<set>/bundles/`. The first two
+  were **green before the fix**, which is what makes the third's red a diagnosis rather than a
+  symptom: *the spawn is not the trigger, the download is.* Stated bound: row 3's write is issued by
+  a Shell, because this rig serves no app origin and the production writer cannot be provoked in it.
+  ⚠ **And its anti-vacuity guard confirmed the write by reading the request.** *"The write landed"*
+  was asserted by searching the Shell's whole `<pre>` for the value — which the `put` command's own
+  echo quotes verbatim, one line up. It stayed green with the read-back pointed at a path nothing
+  had written. It reads the command's own output slice now (`last_shell_output_strict`).
+  ⇒ ***a read-back that shares a scrollback with the write it is confirming has the needle in it
+  twice, and only one of them is evidence.***
 - **TWO WINDOWS OF ONE APP SAVE AGAINST WHAT THEY READ — the workspace takes `expect` (2026-09-15, B-10).** The
   listing and every save report each file's version (its blob hash); `x-work-save` may carry `expect: {path: version |
   null}`, and `workspace::save_expecting` refuses a path whose version moved (`conflict`) and leaves it untouched. A
@@ -3848,6 +3911,30 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   `DESIGN-2026-09-14-c-THE-SYSTEM-MONITOR-…` §4 and §8's **M3** (`x-ping`/`x-pong` and the busy flag +
   Close are also unbuilt — `grep -rn x-ping src/` is empty, so an app that goes *quiet* is currently
   indistinguishable from one that is *idle*).
+
+- ⛔⭐⭐ **OPEN, MEASURED 2026-09-18: `player_gate` BREAKS D24's REPUBLISH HEAL ON THE WORKER ARM.**
+  `make e2e-worker T=an_app_republished` fails its `…_on_the_worker_arm` half — a returning profile
+  keeps running V1 after the publisher republished under a stable identity — while the **Direct**
+  twin (the shipped default arm) passes. **Measured, not inferred:** neuter `player_gate.set_open(false)`
+  at the bottom of the player render and **both arms pass**; reproduced at `f9d0cdc8`, so it predates
+  the feed work and belongs to `91d8cecd` (*a running app is torn down by another window's download*).
+  **What the log says**: the fetch succeeds (`http_poll fetch ok … marker-app.bin`), the subscription
+  event is processed, `tree put: stored` lands the new bundle — **and the mounted player is never
+  rebuilt with it.** That commit's stated escape is `ensure_fetched`'s own **ungated** `dirty.mark()`
+  on `Currency::Fetched`, and it is enough on Direct and not on Worker: the mark fires before the
+  per-prefix mirror carries the new bytes, the rebuild re-mounts the copy it can still see, and the
+  *later* subscription event that would heal it is exactly what the gate suppresses. ⇒ **a gate that
+  suppresses a rebuild also suppresses the second chance an asynchronous mirror needs.**
+  ⚠ **The tidy fix is wrong twice.** Ungating the foreign launcher prefixes reinstates the original
+  tear-down (a foreign publisher's bundle IS the ordinary case — that is where the VMs come from),
+  and ungating only the own-peer ones does nothing for it. The shape that holds both properties is
+  **an exemption for the RUNNING app's own bundle key**: the gate exists to stop *another* app's
+  download replacing my iframe, and a write to the code I am running is the one write that should.
+  `RebuildGate` is a bare `AtomicBool` today and the running key is only known after launch, so this
+  is a design change in `window_watch` rather than a line — deliberately not attempted at the end of
+  a session in another subsystem.
+  **Bound, stated:** `?worker=1` is opt-in and Direct/IDB is the default, so no shipped profile is
+  affected today. Do **not** describe `an_app_republished` as green.
 
 ## File transfer & chat
 
@@ -4363,6 +4450,21 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
       the next Android run becomes decisive either way.
 
 ## Build, packaging & tree hygiene
+
+- ⛔ **DO NOT RUN `cargo fmt` OR `make fmt`. THIS TREE IS NOT RUSTFMT-DEFAULT-CLEAN, AND THE TARGET
+  FORMATS EVERYTHING (measured 2026-09-16: 280 files, +23,164 / −7,749).** `make fmt` is a real
+  target and there is **no `rustfmt.toml`**, so it applies stock defaults to a tree that has never
+  had them applied. One `cargo fmt` inside the build container, run to tidy ~40 edited lines in one
+  file, rewrote the whole repository; recovered with `git checkout -- .` and the edits replayed from
+  a script. **`src/content_site/publish.rs` alone is a 790-line rustfmt delta at rest** — so even
+  the single-file spelling (`rustfmt <path>`) buries a change in unrelated churn.
+  ⇒ **Wrap the lines you lengthened by hand.** Nothing gates formatting: `make lint` runs clippy,
+  which does not check it. **Check before you believe the diff you are about to commit**
+  (`git diff --stat`): the expected number is *your* files, and anything near 280 is this.
+  ⭐ **The transferable half is that the tool did exactly what it says and the damage came from its
+  SCOPE, not its behaviour** — same family as the scripted-edit entries, where the instrument was
+  fine and what it was pointed at was not. A formatter is a whole-tree rewrite wearing a tidy-up's
+  name, and the tell is free: **`git diff --stat` before `git add`, always.**
 
 - **THE BUILD ENVIRONMENT IS AN ARTIFACT, IT IS NAMED BY A DIGEST OR NOT AT ALL, AND EVERY GUESS
   ABOUT WHAT MAKES IT DRIFT WAS WRONG — `make image-verify`, 2026-09-11.** The toolchain image is
@@ -5105,6 +5207,25 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   hardcoded literals rather than from the sentence. And note what the ceiling is: the stateful phase
   monolith must stay whole on one shard, so the speedup is bounded by **its** wall time, not by the
   serial total (measured serial total, headless, 2026-09-16: **869 s / 83 tests, 83 passed**).
+- ⛔ **`SKIP_BUILD=1` CHANGES WHAT YOU MEASURED, NOT JUST HOW LONG IT TOOK — and at least one gate
+  asserts the artifact matches the tree (2026-09-16).** An unfiltered run with `SKIP_BUILD=1` came
+  back **73/8** against a morning baseline of 80/1, which reads as a seven-test regression. It was
+  not: `dist/` had been built several commits earlier, and
+  `system_recovery_renders_readonly_inventory_without_booting` **says so in its own failure** — *"the
+  recovery version panel does not name the running build `b8996661-dirty` … Got: running
+  `c495e999-dirty`."* The gate was right; the run was invalid.
+  ⇒ ***an e2e run is a measurement of an ARTIFACT, and the flag that skips building it makes the
+  artifact a different one.*** The Makefile already says `SKIP_BUILD=1` is *dev only*; this is what
+  "dev only" means — it is for iterating on a gate you are writing, never for a landing measurement
+  or an A/B, where the whole question is what the current tree does.
+  **Two things that made it expensive and are free to avoid.** (1) **Compare against a recorded
+  baseline before diagnosing** — `80/1` was in this repo's own charter from the same morning, so the
+  delta was visible in one grep and the *first* question should have been *what changed about the
+  run*, not *what changed about the code*. (2) **A stale-artifact failure looks exactly like a
+  regression in whatever subsystem it lands in**: here it produced red gates in the recovery console,
+  the connector form, the phone layout and boot — four unrelated areas, none of them near the diff,
+  which is itself the tell. *If a change to one subsystem reds four others, suspect the rig.*
+  Same family as **name the artifact your evidence came from, in the sentence that makes the claim**.
 
 - **A poll that breaks on the FIRST frame matching "recovered" samples a transient — wait for the end
   state (2026-09-13).** The kill-switch drill (`the_kill_switch_recovers_…`) was red ~1 run in 3 with
@@ -5929,6 +6050,31 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   decision in it belongs outside `dom/`; what stays is element creation, attributes and append
   order, which only a browser gate can measure.**
 
+- ⭐⭐ **WHEN THE HEALTHY OUTCOME IS *NOTHING CHANGES*, THERE IS NO EFFECT TO WAIT FOR — AND BOTH
+  OBVIOUS BARRIERS ARE SATISFIED TOO EARLY (2026-09-18).** A gate for *a second press must not open
+  a second window* took **three cuts**, each green under a neuter that was fully present:
+  **(1) No barrier.** The poll condition (`body:true`) was **already true before the press**, so it
+  returned instantly and read the window count before the action had been processed. *A poll whose
+  condition is satisfied by the state you started in is not a wait.*
+  **(2) A log barrier.** `SpawnWindow` is logged at the **top** of the action's handling, before
+  `spawn_at` runs and before anything re-renders — so the log line is the **decision** and the
+  window count is the **effect**. Same neuter, same bundle: **green at 9.2 s, red at 2.3 s.** That
+  is the *decision vs effect* trap this file already records for `data-shown`, arriving inside a
+  **barrier** rather than inside an assertion, where it produces a **flaky** gate instead of a
+  permanently wrong one — which is worse, because a green run reads as evidence.
+  **(3) The honest one: give the defect time to appear.** Poll for the SECOND window and expect the
+  wait to run out. `poll_json` returns the last value on timeout (AP47), which is exactly the shape
+  wanted — the assertion is on the **value**, never on the poll having succeeded. 3/3 red under each
+  neuter, 3/3 green with the fix.
+  ⇒ **Standing check: before writing a barrier, evaluate its condition against the state BEFORE the
+  act.** If it is already true, it is not a barrier. And a barrier must be **arm-neutral** — waiting
+  for the fix's own log line makes the defect unable to reach the assertion at all.
+  ⚠ **And the `git checkout` trap bit again, one step past the charter's entry.** The rule is
+  *commit the gate before you falsify it*; the addition is that **a product fix written AFTER that
+  commit is uncommitted too**, and a file-scoped `git checkout` that reverts the neuter takes it.
+  The tell is the charter's own: `git status --short` after the revert did not list a file I knew I
+  had edited. Restore by inverse edit.
+
 ## The recovery console (L1 BIOS)
 
 - **THE BIOS IS THE STRICTEST CASE OF D23, NOT AN EXCEPTION TO IT.** `index.html`'s System
@@ -6096,3 +6242,14 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   at a registry directory looks under the wrong peer-id and calls a clean tree unverifiable.
   **Whoever owns the identity owns the verification.**
 
+- ⚠ **`i18n::t_plural` PICKS THE FORM; IT DOES NOT FILL THE SLOT (2026-09-18).** Called as
+  `t_plural(key, n, &[])` it selects the right plural category and renders `{n}` as **empty** —
+  on screen, the bidi isolation marks around nothing: *"⁨⁩ posts"*. The count goes in **twice**,
+  once to choose the rule and once as the value: `t_plural(key, n, &[("n", &n.to_string())])`.
+  **Invisible to every native gate** (the caller is under `src/dom/`, which is `cfg(wasm32)`) and
+  to `i18n-callsite-check`, which verifies the key and its slots against the catalog and cannot see
+  what a caller passed. Found by **reading a browser gate's failure dump for an unrelated neuter**
+  — the string was sitting in the window text nobody had asserted on.
+  ⇒ **assert the RENDERED line, not only the `data-` attribute beside it**: `data-count` was
+  perfectly correct while the sentence carried no number. Same *decision vs effect* split as
+  `data-shown`, one surface over.

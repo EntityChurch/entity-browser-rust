@@ -80,6 +80,10 @@ pub struct Open {
     pub bind_peer: String,
     /// The **subject**: what the window is opened at.
     pub target: crate::entity_ref::EntityRef,
+    /// Catalog key for the control's caption — [`crate::open_target::Viewer`]'s,
+    /// because the act differs per viewer and one of them writes a durable
+    /// follow. See that field's doc.
+    pub open_key: &'static str,
 }
 
 /// One in-flight or finished operation, so the surface can distinguish "nothing
@@ -175,6 +179,7 @@ pub fn opens(
                 window_type: viewer.window_type,
                 bind_peer: local_peer.to_string(),
                 target: crate::open_target::directory(&target.peer_id, viewer),
+                open_key: viewer.open_key,
             })
         })
         .collect()

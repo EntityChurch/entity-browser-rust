@@ -79,6 +79,17 @@ pub struct Viewer {
     /// convention that moves its subtree reds here instead of silently routing
     /// nothing.
     pub segment: &'static str,
+    /// ⭐ **The catalog key for the control that opens this viewer — because
+    /// the act is not the same act for every one of them.**
+    ///
+    /// Pressing the Site Browser's control registers an origin and shows you a
+    /// publisher's sites. Pressing the Feed's **adds them to your feed** — a
+    /// durable row in your own tree — and a button that writes one while saying
+    /// only *"Open"* is a button that does more than it says. The key lives on
+    /// the row rather than in the renderer for this module's whole reason: a
+    /// per-viewer literal at the call site is what `open_target` exists to
+    /// retire.
+    pub open_key: &'static str,
     /// Why this viewer claims that segment — read by nobody, which is the point:
     /// a row that cannot say what it is for is a row nobody can audit.
     pub why: &'static str,
@@ -143,12 +154,18 @@ pub fn viewers() -> &'static [Viewer] {
             window_type: SITE_BROWSER,
             entry: EntryPoint::Prefix(SITES_ENTRY_PREFIX),
             segment: SITES_SEGMENT,
+            // "Open in {viewer}" — it shows you something and writes no list.
+            open_key: "registry.open_in",
             why: "APP-CONVENTION-SEMANTIC-CONTENT-SITE — /{peer}/sites/{site}/pages/{page}",
         },
         Viewer {
             window_type: FEED,
             entry: EntryPoint::Key(FEED_ENTRY_KEY),
             segment: FEED_SEGMENT,
+            // "Add to my feed" — it writes a durable follow, carrying the name
+            // that was resolved. Saying only *"Open"* over that would be the
+            // button doing more than it says.
+            open_key: "registry.add_to_feed",
             why: "APP-CONVENTION-FEED §4.2 — /{peer}/app/feed/index and what hangs under it",
         },
     ]
@@ -424,6 +441,38 @@ mod tests {
             payload(&directory("PEER", feed_v), FEED_SEGMENT),
             Some(""),
             "the Feed window's aim reads a payload, and a bare segment must give it the empty one"
+        );
+    }
+
+    /// ⭐ **Every row names its own control, and no two rows share one.**
+    ///
+    /// The Site Browser's press shows you something; the Feed's writes a
+    /// durable follow into your own tree. A shared caption is how the second one
+    /// ends up wearing the first one's promise — so the keys are asserted
+    /// distinct, asserted to resolve (a key with no entry renders as the key
+    /// itself, in thirty locales), and the count is asserted so a third viewer
+    /// has to answer *what does pressing this do* rather than inherit an answer.
+    #[test]
+    fn every_viewer_names_its_own_control_and_the_control_says_what_it_does() {
+        let keys: std::collections::BTreeSet<&str> =
+            viewers().iter().map(|v| v.open_key).collect();
+        assert_eq!(
+            keys.len(),
+            viewers().len(),
+            "two viewers share one control caption: {keys:?}"
+        );
+        for key in &keys {
+            assert!(crate::i18n::catalog_has("en", key), "{key} is not in the EN base");
+        }
+        // The Feed's press follows — the caption has to be about that act, not
+        // about opening a window. Asserted on the EN base only; a translator is
+        // told the same thing in the catalog comment.
+        let feed = viewers().iter().find(|v| v.window_type == FEED).unwrap();
+        let caption = crate::i18n::t(feed.open_key, &[]);
+        assert!(
+            !caption.to_lowercase().contains("open"),
+            "the Feed control writes a follow; a caption promising only to open \
+             is a button that does more than it says: {caption}"
         );
     }
 

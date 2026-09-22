@@ -587,13 +587,34 @@ pub struct AppWindow {
     /// an in-memory render input owns its own dirty signal, or the panel shows
     /// a stale answer until something unrelated repaints it (AP21).
     saves_ui: std::rc::Rc<std::cell::RefCell<SavesUi>>,
-    /// Whether a write under the save/backup prefixes may rebuild this window.
-    /// Closed for exactly as long as a player is mounted: a running app writes
-    /// its own save every few seconds, and a rebuild replaces its `<iframe>`,
-    /// which restarts it at the start screen. Set in [`Self::render_dom`] — the
-    /// one place that knows which of the three views is up. See
-    /// [`crate::window_watch::RebuildGate`].
-    saves_gate: crate::window_watch::RebuildGate,
+    /// Whether a write under a prefix this window watches **for the launcher's
+    /// sake** may rebuild it. Closed for exactly as long as a player is
+    /// mounted, because a rebuild replaces the player's `<iframe>` and restarts
+    /// the running app at its start screen.
+    ///
+    /// Two prefix families, one condition, so one gate — and they were closed a
+    /// week apart because the second is only reachable from *another* window:
+    ///
+    ///  - **saves / backups.** This window is their writer as well as their
+    ///    reader: a running app persists every few seconds, and marking dirty on
+    ///    that write restarted it about a second after every move.
+    ///  - **catalog / bundles.** Watched so the grid notices new app code
+    ///    (`launcher_watch_prefixes`). Every Apps window watches the same
+    ///    prefixes, so a catalog or bundle fetch performed by *one* of them —
+    ///    another window opening, a retry, a republish — rebuilt **all** of
+    ///    them, including any holding a mounted player. Reported as: start a VM,
+    ///    open another app, and the VM is back at its boot screen.
+    ///
+    /// Neither is a suppression of something the window needs: while a player is
+    /// up the launcher grid is not drawn, so there is nothing on screen for a
+    /// catalog change to update, and coming back to the grid writes this
+    /// window's own view state — which is *not* gated and rebuilds against the
+    /// current store. The subscriptions stay live either way, so the Worker
+    /// arm's cache mirror keeps filling.
+    ///
+    /// Set in [`Self::render_dom`] — the one place that knows which of the three
+    /// views is up. See [`crate::window_watch::RebuildGate`].
+    player_gate: crate::window_watch::RebuildGate,
     /// The host `message` listener for the current frame, owned for its
     /// lifetime; removed on rebuild / window drop so listeners don't stack.
     #[cfg(target_arch = "wasm32")]
@@ -641,7 +662,7 @@ impl AppWindow {
             peer_id,
             watch: WindowWatch::new(),
             saves_ui: std::rc::Rc::new(std::cell::RefCell::new(SavesUi::default())),
-            saves_gate: crate::window_watch::RebuildGate::open(),
+            player_gate: crate::window_watch::RebuildGate::open(),
             #[cfg(target_arch = "wasm32")]
             listener: std::cell::RefCell::new(None),
             #[cfg(target_arch = "wasm32")]
@@ -1270,9 +1291,21 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
     // The catalog and bundles, not the whole set prefix: the player writes
     // asset indexes under it, and a rebuild would restart the running app
     // (`paths::launcher_watch_prefixes`).
+    //
+    // **Gated on the player**, and narrowing the prefix was not enough. Every
+    // Apps window watches these same two prefixes, so a fetch performed by any
+    // ONE of them rebuilt all of them — and the fetch is ordinary traffic:
+    // opening a second Apps window refreshes each catalog once, and launching an
+    // app fetches its bundle. A window holding a mounted player was torn down by
+    // another window's download. See [`AppWindow::player_gate`].
     for set in paths::APP_SETS {
         for prefix in paths::launcher_watch_prefixes(&window.peer_id, set) {
-            pm.watch_prefix(&mut window.watch, &window.peer_id, prefix);
+            pm.watch_prefix_gated(
+                &mut window.watch,
+                &window.peer_id,
+                prefix,
+                Some(window.player_gate.clone()),
+            );
         }
     }
     pm.watch_prefix(
@@ -1302,13 +1335,13 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
             &mut window.watch,
             &window.peer_id,
             crate::app_paths::app_saves_prefix(crate::app_paths::APP_ID, &window.peer_id, set),
-            Some(window.saves_gate.clone()),
+            Some(window.player_gate.clone()),
         );
         pm.watch_prefix_gated(
             &mut window.watch,
             &window.peer_id,
             crate::app_paths::app_backups_prefix(crate::app_paths::APP_ID, &window.peer_id, set),
-            Some(window.saves_gate.clone()),
+            Some(window.player_gate.clone()),
         );
     }
     // Live consumer: apps published under a registered origin land in MY store at
@@ -1322,7 +1355,12 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
         }
         for set in paths::APP_SETS {
             for prefix in paths::launcher_watch_prefixes(&foreign, set) {
-                pm.watch_prefix(&mut window.watch, &window.peer_id, prefix);
+                pm.watch_prefix_gated(
+                    &mut window.watch,
+                    &window.peer_id,
+                    prefix,
+                    Some(window.player_gate.clone()),
+                );
             }
         }
     }
@@ -1469,13 +1507,13 @@ impl WindowView for AppWindow {
         self.running.replace(None);
         self.running_key.replace(None);
 
-        // No player is mounted from here until one is, so save writes may
+        // No player is mounted from here until one is, so the gated prefixes may
         // rebuild again. Opening it BEFORE the listener drops is deliberate:
         // dropping the listener flushes any pending save, and that write should
         // reach whichever view we are about to render (the grid, or the Saves
         // panel that is about to list it). Re-closed at the bottom if this
         // render mounts a player.
-        self.saves_gate.set_open(true);
+        self.player_gate.set_open(true);
 
         // Drop any stale listener before (re)building the section.
         if let Some(old) = self.listener.borrow_mut().take() {
@@ -1641,10 +1679,10 @@ impl WindowView for AppWindow {
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;
 
-        // A player is live: from here the save prefix is write-only to this
-        // window, and a rebuild would replace the iframe we just mounted. The
-        // running app's own saves must not do that.
-        self.saves_gate.set_open(false);
+        // A player is live: a rebuild from here replaces the iframe we just
+        // mounted and restarts the app. Neither this window's own save writes
+        // nor another Apps window's catalog/bundle download may do that.
+        self.player_gate.set_open(false);
     }
 }
 

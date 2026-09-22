@@ -43,6 +43,16 @@ use entity_wasm_worker_proxy::{SubHandle, WebTransport};
 /// The general shape: a subscription does two jobs — mirror the data and
 /// trigger the rebuild — and a window that needs the first without the second
 /// has no way to say it otherwise.
+///
+/// **And the writer need not be this window.** The second family gated here is
+/// the launcher's own catalog/bundle prefixes, where every Apps window watches
+/// what every *other* Apps window downloads — so the teardown arrived from a
+/// window the user had just opened rather than from the running app itself
+/// (`a_running_app_survives_another_window_opening`). Both are the same
+/// condition (*a player is mounted*) and so share one gate; what differs is
+/// only who performs the write, which is precisely why the second one was not
+/// found when the first was fixed. When you close a gate, name the condition —
+/// not the writer you happened to be looking at.
 #[derive(Clone)]
 pub struct RebuildGate {
     open: Arc<AtomicBool>,
