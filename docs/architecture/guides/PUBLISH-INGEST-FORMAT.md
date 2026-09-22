@@ -1,5 +1,7 @@
 # Publish ingest format — the tool-agnostic site contract
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](../specs/REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers the on-disk ingest format; it does not restate the model.
+
 **Read this when** you want to publish a content site **without** the papers
 `render/` engine — by hand, from a script, or from any other generator — or when
 you are planning the release-time removal of the papers-specific wiring.

@@ -1,5 +1,7 @@
 # Republish & Incremental Update Guide
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](../specs/REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers republish and incremental emission; it does not restate the model.
+
 **Audience:** anyone re-running `publish` against a live deployment (DevOps,
 content/site authors, the deploy tool). **Scope:** what a *re*-publish into an
 existing `dist/` actually changes — per edit / add / delete / identity change —

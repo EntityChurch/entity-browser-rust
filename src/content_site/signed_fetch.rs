@@ -936,6 +936,7 @@ mod tests {
                 ("other".into(), SitePage::markdown("Other", "# a different authored page")),
             ],
             assets: vec![],
+            content: Vec::new(),
         };
         emit_owned_sites(dir, std::slice::from_ref(&site), "", Some(&mut root)).unwrap();
         root.finish(dir).unwrap();
@@ -1275,6 +1276,7 @@ mod tests {
                 ("other".into(), SitePage::markdown("Other", "# a different authored page")),
             ],
             assets: vec![],
+            content: Vec::new(),
         }
     }
 

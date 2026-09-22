@@ -68,6 +68,7 @@ use entity_store::{ContentStore, MemoryContentStore};
 
 use crate::app_paths::{offer_path, offers_prefix, APP_ID};
 use crate::dispatch_handle::DispatchHandle;
+use crate::remote_read::{empty_params, remote_execute, resource_opts};
 
 /// Entity type of an offer manifest — our namespace, our shape
 /// (`AGENTS.md`: path namespaces stay app-tier, not SDK).
@@ -193,83 +194,12 @@ pub fn namespace_resource(peer_id: &str) -> String {
     format!("/{peer_id}/system/content/{NAMESPACE}")
 }
 
-/// `ExecuteOptions` naming one path/prefix in the resource. Both content ops
-/// **require** it (v3.5 tightening: no resource ⇒ 400 `path_required`).
-fn resource_opts(target: &str) -> ExecuteOptions {
-    ExecuteOptions {
-        resource: Some(ResourceTarget {
-            targets: vec![target.to_string()],
-            exclude: vec![],
-        }),
-        ..Default::default()
-    }
-}
-
-fn empty_params() -> Entity {
-    Entity::new("system/empty", to_ecf(&Value::Null)).expect("system/empty Null is well-formed")
-}
-
-/// How many times a **remote** dispatch is retried while a path is still being
-/// established, and how long to wait between tries. See [`remote_execute`].
-const ESTABLISH_TRIES: usize = 10;
-const ESTABLISH_GAP_MS: u32 = 1_000;
-
-/// One remote dispatch, retried while the transport error looks like "there is
-/// no path *yet*".
-///
-/// **This is not defensive padding — it is the caller's half of §7.2.1.** The
-/// §6.5 establisher runs exactly ONE negotiation per consultation and never
-/// retries it (`caller_owns_retry`, structural in `main_thread_establish.rs`),
-/// so a first cross-peer dispatch between two peers that have only ever met by
-/// name reliably arrives before any channel exists: the ladder consults, the
-/// negotiation loses the race (`no live path … sdp_exchange=INCOMPLETE`), and a
-/// one-shot caller reports "no transport profile for peer" — which reads like
-/// the peer is unreachable when the truth is "ask again in a second".
-///
-/// Chat never had to think about this because its 5 Hz delivery poll *is* the
-/// retry (the A3 finding: the poll is load-bearing). The transfer verbs were
-/// the first genuinely one-shot §10.3 caller here, and they failed on exactly
-/// that — measured, in `e2e-webrtc-file`, before this existed.
-///
-/// Bounded on purpose, and bounded *here* rather than by adding app-tier "how
-/// many times has §6.5 failed" state: the per-peer consultation backoff lives
-/// one layer down in `core/peer` and is keyed correctly; a second counter in
-/// the app is how `connection_health` happened. Ten tries at a second apart is
-/// well inside the free-consultation window a healthy meet uses.
-///
-/// A returned `HandlerResult` — including a 403 or 404 — is an **answer** and
-/// is never retried; only a transport `Err` is.
-async fn remote_execute(
-    dispatch: &DispatchHandle,
-    handler_uri: String,
-    operation: String,
-    params: Entity,
-    opts: ExecuteOptions,
-) -> Result<entity_handler::HandlerResult, String> {
-    let mut last = String::new();
-    for attempt in 0..ESTABLISH_TRIES {
-        if attempt > 0 {
-            crate::dispatch_handle::delay_ms(ESTABLISH_GAP_MS).await;
-        }
-        match dispatch
-            .execute(handler_uri.clone(), operation.clone(), params.clone(), opts.clone())
-            .await
-        {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                tracing::debug!(
-                    "transfer: {handler_uri} {operation} attempt {} failed: {e}",
-                    attempt + 1
-                );
-                last = e;
-            }
-        }
-    }
-    Err(format!(
-        "{last} (gave up after {ESTABLISH_TRIES} attempts — no path to the peer was \
-         established; if you met by name, check both sides installed an establisher)"
-    ))
-}
+// `resource_opts`, `empty_params` and `remote_execute` used to live here, and
+// every line of them was about a **remote read** rather than about a file. They
+// moved to [`crate::remote_read`] the moment a second consumer appeared
+// (`feed_peer`, reading a followed publisher's feed off their live tree) — C15's
+// rule, applied at the point a second caller proved the boundary rather than as
+// a standalone rename.
 
 /// An entity in the inline `core/entity` shape the content handler decodes
 /// (`{type, data}`). The handler re-encodes `data` through ECF and re-hashes,

@@ -27,6 +27,8 @@ use std::collections::BTreeMap;
 
 use entity_entity::Entity;
 
+use crate::embed::{EmbedPayload, PayloadError};
+
 /// Entity type for a site manifest (the site's cover — identity + the
 /// optional human nav menu). `app/site-*` per the locked convention §4.
 pub const SITE_MANIFEST_TYPE: &str = "app/site-manifest";
@@ -315,22 +317,310 @@ impl SitePage {
     }
 }
 
-/// A site asset — raw resource bytes + media type. The renderer resolves an
-/// embed `ref` to one of these and builds a `data:` URL from `(media_type,
-/// bytes)`; the publish/cache closure carries them as content-addressed blobs.
+/// The inline-payload ceiling — `APP-CONVENTION-EMBED` §3's
+/// `inline-payload = { tag: "inline", bytes: bstr .size (1..16384) }`.
+///
+/// **Re-exported, not defined here.** §3.1 says the bound is *"a property of
+/// the payload and not of the addressing"*, so it lives with the union in
+/// [`crate::embed`] and every carrier reads the one constant. This alias stays
+/// because the site's own callers and vectors name it, and because C15's rule
+/// is one *expression*, not one spelling.
+///
+/// **Bytes at or below this go inline; bytes above it MUST take the pointer
+/// arm** (content-site §4's `[MUST]`). Note which side of the boundary each
+/// belongs to: 16,384 is the last inline size, 16,385 the first pointer size.
+/// `F-5`'s lesson applies — a bound asserted from one side passes for a
+/// producer that only ever looked one way, so
+/// [`the_inline_ceiling_is_asserted_from_both_sides`] pins both.
+///
+/// [`the_inline_ceiling_is_asserted_from_both_sides`]: self::tests
+pub use crate::embed::INLINE_PAYLOAD_MAX;
+
+/// The canonical v1 publisher chunk size — content-site §6.1's
+/// `[LOCKED — G-PIN-4]` default: **1 MiB FastCDC average** (min/avg/max =
+/// 256 KiB / 1 MiB / 2 MiB, the shipped params).
+///
+/// **This constant is the whole reason the pointer arm is a conformance
+/// concern rather than a size preference.** *"Same image → same site root"*
+/// depends on every v1 publisher chunking identically; bytes that never enter
+/// the content store never meet that rule, so an all-inline asset path does
+/// not *fail* §6.1, it makes it **unreachable** — which is why our G-PIN-4
+/// asset row was incomparable rather than merely large.
+pub const CANONICAL_CHUNK_SIZE: usize = 1024 * 1024;
+
+/// An asset's payload — `APP-CONVENTION-EMBED` §3's **tagged** union, reused
+/// rather than restated (the content-site CDDL says so in as many words:
+/// *"NOT a second payload union; the embed one, reused"*).
+///
+/// **The union itself now lives in [`crate::embed`], and this enum is the
+/// SITE layer's reading of it.** Until phase 2a the sentence above was true of
+/// the comment and false of the code: the union was implemented here, private
+/// to a codec named for assets, which is why it could not be carried by
+/// anything else. The split is the one the conventions already draw —
+/// [`EmbedPayload`] is *what the wire admits*, this enum is *what this field
+/// admits plus how each refusal is attributed*.
+///
+/// Two arms of the embed union are reachable for a site asset: `inline` for
+/// bounded bytes and `pointer` for a content-store blob. `child` is not — see
+/// [`InvalidForType`](Self::InvalidForType).
+///
+/// **The tag is load-bearing and a decoder MUST reject an untagged payload**
+/// (EMBED §3's normative note — it is the silent-divergence risk `G-PIN-2`
+/// closes). We refuse by returning `None` from [`AssetPayload::from_value`],
+/// which surfaces as a defaulted [`SiteAsset`] rather than a guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetPayload {
+    /// `{ tag: "inline", bytes: bstr .size (1..16384) }` — in-tree bytes.
+    Inline(Vec<u8>),
+    /// `{ tag: "pointer", hash: content-hash }` — a `system/content/blob` in
+    /// the resolving peer's own content store, chunked at
+    /// [`CANONICAL_CHUNK_SIZE`]. Same-peer by design (EMBED §3.4's
+    /// implied-authority form), so it carries no authority term.
+    Pointer(entity_hash::Hash),
+    /// **NOT A WIRE ARM.** The decoder found no payload it could read: no
+    /// `payload` key and no retired top-level `bytes`, or a `payload` that is
+    /// untagged / carries an unknown tag (which EMBED §3 requires us to
+    /// reject).
+    ///
+    /// **This variant exists because its absence was a shipped defect.** The
+    /// default used to be `Inline(Vec::new())`, so an asset whose payload we
+    /// could not read decoded as *an asset with zero bytes* and
+    /// [`super::asset_store::resolve`] returned **`Ok(vec![])`** — a success
+    /// carrying nothing, which no caller could tell from a publisher shipping
+    /// an empty file. Measured on a real 30,778-byte published asset:
+    /// `Inline(0 bytes)`, `Ok(0)`, and a renderer emitting
+    /// `data:image/png;base64,` with no data. AP40 in the most literal form —
+    /// two facts arriving as one value — and it is worse than the usual case
+    /// because the collapsed value is on the *success* side.
+    ///
+    /// **`Inline(Vec::new())` is not even representable on the wire**:
+    /// `inline-payload`'s `bstr .size (1..16384)` excludes zero, so the old
+    /// default was an illegal state used as the safe one.
+    Unreadable,
+    /// **A tagged arm of `embed-payload` this build does not implement.**
+    ///
+    /// **Not `Unreadable`, and the difference is the same one this enum
+    /// already exists to keep:** *"this entity is malformed"* and *"this
+    /// publisher used a form we have not built"* license different sentences,
+    /// and only the second is our gap rather than their defect.
+    ///
+    /// **`child` is NO LONGER this variant** — see
+    /// [`InvalidForType`](Self::InvalidForType). This arm is now reachable
+    /// only by a payload tag EMBED §3 does not yet define, i.e. a genuinely
+    /// newer producer against an older reader. That is the case where naming
+    /// our own gap is the correct attribution.
+    Unsupported { tag: String },
+    /// **A well-formed, correctly-tagged arm of `embed-payload` that
+    /// `app/site-asset` does not admit** — today exactly `child`.
+    ///
+    /// **A-30, ruled 2026-09-10; `APP-CONVENTION-SEMANTIC-CONTENT-SITE`
+    /// v0.5.1 §4 narrows the field to `inline-payload / pointer-payload` and
+    /// makes the refusal a `[MUST]`** — *"a reader that decodes one MUST
+    /// refuse the entity as invalid for its type, and MUST NOT report it as a
+    /// malformed or untagged payload."*
+    ///
+    /// **The reason the arm is excluded is worth carrying, because it is not
+    /// the one we argued.** We reasoned from §4's preamble — an asset is bytes
+    /// with a name — and flagged it as an inference from prose. The argument
+    /// that does not rest on prose is inside EMBED: `child-payload.ref`
+    /// resolves to a sibling `Embed`, and **an `Embed`'s dispatch key IS its
+    /// type tag** (`app/embed/{media_type}`), which is exactly why EMBED §3
+    /// carries no `data.media_type` — *"a redundant second source of truth."*
+    /// A site asset carries `media_type` in `data`. **So a `child`-payload
+    /// asset holds two media types that can disagree**, with nothing to say
+    /// which wins.
+    ///
+    /// **THIS VARIANT EXISTS BECAUSE THE OBVIOUS FIX WAS WRONG.** Our own
+    /// plan said a "no" on A-30 would move `child` from
+    /// [`Unsupported`](Self::Unsupported) to the untagged refusal and *"nothing
+    /// else changes"*. That collapses two facts and mis-attributes one: EMBED
+    /// §3's rule governs a payload with **no discriminator**, while a `child`
+    /// payload here is correctly tagged, well-formed and unambiguous. Calling
+    /// it malformed tells an operator the publisher emitted a corrupt byte
+    /// when they emitted a **deliberate schema violation** — and those route
+    /// to different people. We had drawn this exact distinction one convention
+    /// over, for `SHARE-8`, in the same packet that proposed the collapse.
+    ///
+    /// So there are **four** outcomes and each names whose defect it is:
+    /// resolved · our gap ([`Unsupported`](Self::Unsupported)) · **their
+    /// schema violation (this)** · their malformed byte
+    /// ([`Unreadable`](Self::Unreadable)).
+    InvalidForType { tag: String },
+}
+
+impl Default for AssetPayload {
+    /// [`AssetPayload::Unreadable`] — see that variant for why this is not
+    /// an empty inline payload.
+    fn default() -> Self {
+        AssetPayload::Unreadable
+    }
+}
+
+impl AssetPayload {
+    /// Encode to the tagged CBOR map, or `None` for
+    /// [`Unreadable`](AssetPayload::Unreadable) — which is not a wire arm and
+    /// must not be fabricated into one.
+    ///
+    /// A re-encoded unreadable asset therefore carries **no `payload` key** and
+    /// decodes back to `Unreadable`. That is deliberate: the alternative is
+    /// emitting an empty inline payload, which is both non-conformant
+    /// (`.size (1..16384)`) and the exact lie this variant exists to stop.
+    fn to_value(&self) -> Option<entity_ecf::Value> {
+        let shared = match self {
+            AssetPayload::Inline(bytes) => EmbedPayload::Inline(bytes.clone()),
+            AssetPayload::Pointer(hash) => EmbedPayload::Pointer(*hash),
+            // None of these is a wire arm we may author. `Unsupported` and
+            // `InvalidForType` in particular must NOT be re-emitted as an
+            // absent payload and then treated as ours — the caller's job is to
+            // not write them through at all (see `resolver::persist_to_cache`).
+            AssetPayload::Unreadable
+            | AssetPayload::Unsupported { .. }
+            | AssetPayload::InvalidForType { .. } => return None,
+        };
+        Some(shared.to_value())
+    }
+
+    /// Decode from the tagged CBOR map. `None` for anything that is not a
+    /// well-formed tagged arm — **including an untagged map that happens to
+    /// carry `bytes`**, which is the pre-declaration shape this repo emitted
+    /// and exactly what EMBED §3 requires a decoder to refuse.
+    fn from_value(v: &ciborium::Value) -> Option<Self> {
+        match EmbedPayload::from_value(v) {
+            Ok(EmbedPayload::Inline(bytes)) => Some(AssetPayload::Inline(bytes)),
+            Ok(EmbedPayload::Pointer(hash)) => Some(AssetPayload::Pointer(hash)),
+            // A-30: `child` is a legal `embed-payload` arm and is NOT admitted
+            // by `app/site-asset` (SITE v0.5.1 §4, `[MUST NOT]`). It is their
+            // schema violation, not our gap and not a malformed byte, so it
+            // gets its own outcome — see `AssetPayload::InvalidForType`.
+            Ok(EmbedPayload::Child(_)) => {
+                Some(AssetPayload::InvalidForType { tag: "child".to_string() })
+            }
+            // **A `child` whose reference is itself broken is still the excluded
+            // arm.** The field refuses `child` whatever its `ref` says, and this
+            // layer never resolves one — adjudicating an atom we would not
+            // follow would report the publisher's smaller mistake and hide the
+            // one that decides the outcome.
+            Err(PayloadError::BadRef { .. }) => {
+                Some(AssetPayload::InvalidForType { tag: "child".to_string() })
+            }
+            // A tag we do not implement is carried, not discarded.
+            Err(PayloadError::UnknownTag { tag }) => Some(AssetPayload::Unsupported { tag }),
+            // An UNTAGGED payload is `None` — EMBED §3's MUST — and so is a
+            // malformed arm. The two are different from *unsupported* and stay
+            // different; they are the same to this decoder because both mean
+            // *we hold no payload*, which is what `Unreadable` says.
+            Err(PayloadError::Untagged) | Err(PayloadError::Malformed { .. }) => None,
+        }
+    }
+}
+
+/// A site asset — a named, site-local binary resource (image, font,
+/// stylesheet). The renderer resolves an embed `ref` to one of these and
+/// builds a `data:` URL from `(media_type, bytes)`.
+///
+/// **The bytes are not necessarily here.** `payload` is EMBED §3's tagged
+/// union: bounded bytes inline, anything larger as a `pointer` into the
+/// content store. Reading an asset's bytes is therefore a *resolution*, not a
+/// field access — [`SiteAsset::resolve`] is the one place that knows how, and
+/// it takes the content lookup as an argument so every arm (publisher store,
+/// browser store, HTTP origin) uses the same decision.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SiteAsset {
-    /// IANA media type (`image/png`, `image/svg+xml`, …).
+    /// IANA media type (`image/png`, `image/svg+xml`, …) — an asset has no
+    /// dispatch tag of its own, so the media type is a field here rather than
+    /// riding the entity type the way `app/embed/{media_type}` does.
     pub media_type: String,
-    /// The raw resource bytes.
-    pub bytes: Vec<u8>,
+    /// Inline bytes or a content-store pointer. See [`AssetPayload`].
+    pub payload: AssetPayload,
+    /// **Decode provenance, never emitted.** `true` when the payload was
+    /// recovered from the retired top-level `bytes` key rather than from
+    /// `payload` — see [`SiteAsset::from_entity`]'s legacy arm.
+    ///
+    /// It is here because a concession with no instrument behind it is one
+    /// nobody can ever retire: without this, *"is the legacy arm still
+    /// load-bearing?"* has no answer short of grepping every origin. Reported
+    /// at the one-shot boundaries (an ingest read, an HTTP fetch), **never in
+    /// the render loop** — a papers page has twenty figures and would emit
+    /// twenty warnings a frame, which is how a real signal gets muted.
+    ///
+    /// Excluded from the wire in both directions: [`Self::to_entity`] never
+    /// writes it, so a legacy asset re-encoded into the cache comes back out
+    /// in the declared shape and the flag falls to `false` — the cache heals
+    /// and says so.
+    pub from_legacy_encoding: bool,
 }
 
 impl SiteAsset {
-    pub fn new(media_type: impl Into<String>, bytes: Vec<u8>) -> Self {
-        Self { media_type: media_type.into(), bytes }
+    /// An asset whose bytes are carried **inline**, unconditionally.
+    ///
+    /// Callers that may hand this bytes of any size want
+    /// [`SiteAsset::stage`] instead — this one does not consult the ceiling,
+    /// deliberately, so a fixture that means to build a specific arm can.
+    pub fn inline(media_type: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            payload: AssetPayload::Inline(bytes),
+            from_legacy_encoding: false,
+        }
     }
 
+    /// The asset's inline bytes, if it carries any. `None` for a pointer —
+    /// **not an empty slice**, because *"this asset holds no bytes"* and
+    /// *"this asset's bytes live elsewhere"* decide different things at every
+    /// call site that asked.
+    pub fn inline_bytes(&self) -> Option<&[u8]> {
+        match &self.payload {
+            AssetPayload::Inline(b) => Some(b),
+            AssetPayload::Pointer(_)
+            | AssetPayload::Unreadable
+            | AssetPayload::Unsupported { .. }
+            | AssetPayload::InvalidForType { .. } => None,
+        }
+    }
+
+    /// The blob hash this asset points at, if it is a pointer.
+    pub fn pointer(&self) -> Option<entity_hash::Hash> {
+        match &self.payload {
+            AssetPayload::Inline(_)
+            | AssetPayload::Unreadable
+            | AssetPayload::Unsupported { .. }
+            | AssetPayload::InvalidForType { .. } => None,
+            AssetPayload::Pointer(h) => Some(*h),
+        }
+    }
+
+    /// Decode an `app/site-asset`, **including the shape this repo emitted
+    /// before `A-27` declared the type.**
+    ///
+    /// ## The legacy arm, why it exists, and how to retire it
+    ///
+    /// Until 2026-09-10 we encoded `{media_type, bytes}` — our own invention,
+    /// declared nowhere, since `app/site-asset` was `implemented-undeclared`
+    /// the whole time. The declared shape is `{media_type, payload}`, and a
+    /// decoder that reads only the new key turns every already-published asset
+    /// into an empty one.
+    ///
+    /// **That is not a migration inconvenience, it is a live regression, and
+    /// the reason is the cache-arm ordering.** `MultiResolver::resolve_page`
+    /// tries the durable cache **first**, with no network — so a returning
+    /// visitor to any foreign site they have already viewed reads the
+    /// old-shape entity out of their own tree and never issues a fetch that
+    /// could heal it. Republishing the origin does not reach them. Measured
+    /// on a real published asset: a 30,778-byte figure decoded to
+    /// `Inline(0 bytes)` and rendered as `data:image/png;base64,`.
+    ///
+    /// **Deliberately narrow: the legacy arm fires only when `payload` is
+    /// ABSENT ENTIRELY**, never when it is present and unreadable. An open
+    /// type may grow a `bytes` field meaning something else, and this way the
+    /// only entities it can claim are ones carrying the retired shape exactly.
+    /// A present-but-untagged `payload` stays [`AssetPayload::Unreadable`],
+    /// which is what EMBED §3's MUST asks for.
+    ///
+    /// **It is a READ, never a write** — [`Self::to_entity`] emits only the
+    /// declared shape, so anything that re-encodes (the cache write-through)
+    /// heals as it goes — and it is reported via
+    /// [`Self::from_legacy_encoding`] so it can be shown to be dead before it
+    /// is deleted.
     pub fn from_entity(entity: &Entity) -> Self {
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
@@ -341,6 +631,8 @@ impl SiteAsset {
             None => return Self::default(),
         };
         let mut out = Self::default();
+        let mut saw_payload_key = false;
+        let mut legacy_bytes: Option<Vec<u8>> = None;
         for (k, v) in map {
             match k.as_text() {
                 Some("media_type") => {
@@ -348,22 +640,41 @@ impl SiteAsset {
                         out.media_type = s.to_string();
                     }
                 }
-                Some("bytes") => {
-                    if let Some(b) = v.as_bytes() {
-                        out.bytes = b.clone();
+                Some("payload") => {
+                    saw_payload_key = true;
+                    if let Some(p) = AssetPayload::from_value(v) {
+                        out.payload = p;
                     }
                 }
+                Some("bytes") => legacy_bytes = v.as_bytes().cloned(),
                 _ => {}
+            }
+        }
+        if !saw_payload_key {
+            if let Some(b) = legacy_bytes {
+                out.payload = AssetPayload::Inline(b);
+                out.from_legacy_encoding = true;
             }
         }
         out
     }
 
+    /// Encode to the **declared** shape only — `{media_type, payload}`.
+    ///
+    /// Never the retired top-level `bytes`, even for an asset that was decoded
+    /// from it: reading a legacy encoding is a concession, re-emitting one
+    /// would be a second producer of it. And an
+    /// [`Unreadable`](AssetPayload::Unreadable) payload emits **no `payload`
+    /// key** rather than an empty inline one, which is both non-conformant and
+    /// the collapse that variant exists to prevent.
     pub fn to_entity(&self) -> Entity {
-        let pairs = vec![
-            (entity_ecf::Value::Text("media_type".into()), entity_ecf::text(&self.media_type)),
-            (entity_ecf::Value::Text("bytes".into()), entity_ecf::Value::Bytes(self.bytes.clone())),
-        ];
+        let mut pairs = vec![(
+            entity_ecf::Value::Text("media_type".into()),
+            entity_ecf::text(&self.media_type),
+        )];
+        if let Some(p) = self.payload.to_value() {
+            pairs.push((entity_ecf::Value::Text("payload".into()), p));
+        }
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs));
         Entity::new(SITE_ASSET_TYPE, data).unwrap()
     }
@@ -545,7 +856,7 @@ mod tests {
 
     #[test]
     fn asset_round_trips_through_entity() {
-        let a = SiteAsset::new("image/png", vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a]);
+        let a = SiteAsset::inline("image/png", vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a]);
         let a2 = SiteAsset::from_entity(&a.to_entity());
         assert_eq!(a2, a);
         assert_eq!(a.to_entity().entity_type, SITE_ASSET_TYPE);
@@ -556,8 +867,8 @@ mod tests {
         // Content-addressing dedup property: two assets with the same
         // (media_type, bytes) encode to byte-identical entity data, so the
         // store collapses them to one blob regardless of which site refs them.
-        let a = SiteAsset::new("image/svg+xml", b"<svg/>".to_vec());
-        let b = SiteAsset::new("image/svg+xml", b"<svg/>".to_vec());
+        let a = SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec());
+        let b = SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec());
         assert_eq!(a.to_entity().data, b.to_entity().data);
     }
 

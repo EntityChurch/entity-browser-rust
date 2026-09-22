@@ -1224,6 +1224,7 @@ pub const EN: &[(&str, Message)] = &[
     ("window.path_tap", Message::Simple("Path Tap")),
     ("window.wire_recorder", Message::Simple("Wire Recorder")),
     ("window.content_stream", Message::Simple("Content Stream")),
+    ("window.feed", Message::Simple("Feed")),
     ("window.site_browser", Message::Simple("Site Browser")),
     ("window.registry_browser", Message::Simple("Registry Browser")),
     ("window.storage", Message::Simple("Storage")),
@@ -1678,6 +1679,79 @@ pub const EN: &[(&str, Message)] = &[
             "(no dispatch facts yet — trigger an exec, query, put, etc. on \
              this peer)",
         ),
+    ),
+    (
+        "feed.hint",
+        Message::Simple(
+            "Follow a publisher by peer id. Every post is checked against that \
+             publisher's own key, and one that cannot be checked says so.",
+        ),
+    ),
+    ("feed.peer_placeholder", Message::Simple("peer id")),
+    ("feed.follow", Message::Simple("Follow")),
+    ("feed.unfollow", Message::Simple("Unfollow")),
+    ("feed.following", Message::Simple("Following")),
+    (
+        "feed.no_follows",
+        Message::Simple("You are not following anyone yet."),
+    ),
+    (
+        "feed.nobody_selected",
+        Message::Simple("Choose a publisher above to read their feed."),
+    ),
+    (
+        "feed.no_route",
+        Message::Simple(
+            "This deployment does not know where this publisher is hosted, so \
+             there is nowhere to ask.",
+        ),
+    ),
+    ("feed.loading", Message::Simple("Reading this feed…")),
+    (
+        "feed.no_posts",
+        Message::Simple("This publisher has not posted anything."),
+    ),
+    (
+        "feed.failed",
+        Message::Simple("This feed could not be read."),
+    ),
+    ("feed.notice.followed", Message::Simple("Following.")),
+    (
+        "feed.notice.already",
+        Message::Simple("You already follow this publisher."),
+    ),
+    (
+        "feed.notice.thats_you",
+        Message::Simple("That is your own peer id."),
+    ),
+    (
+        "feed.notice.not_a_peer_id",
+        Message::Simple("That is not a peer id."),
+    ),
+    ("feed.attr.signed", Message::Simple("verified")),
+    (
+        "feed.attr.no_signature",
+        Message::Simple("unsigned — nobody is named for this post"),
+    ),
+    (
+        "feed.attr.cannot_check",
+        Message::Simple("could not be checked — this peer id carries no key"),
+    ),
+    (
+        "feed.attr.unreadable",
+        Message::Simple("unsigned — the signature could not be read"),
+    ),
+    (
+        "feed.attr.wrong_target",
+        Message::Simple("unsigned — the signature covers a different post"),
+    ),
+    (
+        "feed.attr.not_the_author",
+        Message::Simple("unsigned — signed by someone other than the author"),
+    ),
+    (
+        "feed.attr.bad_signature",
+        Message::Simple("unsigned — the signature does not verify"),
     ),
     (
         "contentstream.hint",
@@ -2722,6 +2796,16 @@ fn embedded_map() -> &'static HashMap<&'static str, HashMap<&'static str, &'stat
 /// `en` base. `en` itself and the pseudo-locale have no overlay → straight to
 /// `en`. Never returns `None` for a key present in `en` — the D13 "always
 /// render, never a raw key" guarantee rides on the `en` completeness.
+/// Whether `locale_id`'s catalog defines `key`.
+///
+/// **For gates that assert a surface's keys exist**, which is worth having:
+/// `t()` renders a missing key as the key itself, so a typo ships as
+/// `feed.attr.signed` on screen rather than as a compile error or a red test.
+/// A surface that enumerates its own keys can assert them here instead.
+pub fn catalog_has(locale_id: &str, key: &str) -> bool {
+    catalog_entry(locale_id, key).is_some()
+}
+
 fn catalog_entry(locale_id: &str, key: &str) -> Option<&'static Message> {
     if let Some(overlay) = embedded_map().get(locale_id) {
         if let Some(msg) = overlay.get(key) {

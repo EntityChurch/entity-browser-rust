@@ -1,5 +1,7 @@
 # ⭐ REFERENCE — The Content Site App
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](./REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers the content-site application itself; it does not restate the model.
+
 **Status: authoritative closeout reference.** This is the single place to start
 when you return to the Content Site app — what it is, how it works, why it works
 the way it does, what we decided and why, the code surface, the UX, and what is

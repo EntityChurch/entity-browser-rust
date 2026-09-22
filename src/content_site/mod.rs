@@ -24,6 +24,10 @@
 //! P0 = this spine + its tests (no DOM). Consumers (the
 //! `views/content_site` window + `dom/content_site` renderer) land in P1.
 
+/// Bytes ⇄ [`format::SiteAsset`] across EMBED §3's payload union — the
+/// inline ceiling, the canonical chunker, and the resolution every consumer
+/// arm shares.
+pub mod asset_store;
 pub mod cache;
 pub mod discovery;
 pub mod doc_css;

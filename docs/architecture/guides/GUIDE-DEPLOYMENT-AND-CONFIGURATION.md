@@ -1,5 +1,7 @@
 # Deployment & Configuration Guide
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](../specs/REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers per-domain deployment configuration; it does not restate the model.
+
 **Audience:** anyone deploying Entity Browser to a domain (DevOps, the deploy
 tool, content/site authors). **Scope:** how a published deployment is shaped —
 peer identity, the per-domain config file, the startup surface & posture, the

@@ -17,6 +17,7 @@ use crate::views::{
     content_stream::ContentStreamWindow,
     entity_tree::EntityTreeWindow,
     event_log::EventLogWindow,
+    feed::FeedWindow,
     execute_console::ExecuteConsoleWindow,
     file_transfer::FileTransferWindow,
     games::AppWindow,
@@ -60,6 +61,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         RegistryBrowserWindow::window_type(),
         SettingsWindow::window_type(),
         EventLogWindow::window_type(),
+        FeedWindow::window_type(),
         PeerManagementWindow::window_type(),
         ShellWindow::window_type(),
         crate::views::chat::ChatWindow::window_type(),
@@ -106,7 +108,20 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
             // its own banner reads as a whole area of the product, when what it
             // is is a second launcher. Keeping it here, directly after Apps,
             // says "another thing you can run" without the promotion.
-            vec!["Apps", "Programs", "Chat", "Site Browser", "Site Creator", "Knowledge Base"],
+            // "Feed" sits between Chat and Site Browser because that is what it
+            // is between: Chat is people you are talking to, Site Browser is
+            // things you went looking for, and a feed is somebody you decided to
+            // keep reading. It is `WindowScope::Peer` — a follow list is a
+            // property of the peer whose tree holds it.
+            vec![
+                "Apps",
+                "Programs",
+                "Chat",
+                "Feed",
+                "Site Browser",
+                "Site Creator",
+                "Knowledge Base",
+            ],
         ),
         (
             System,
@@ -180,7 +195,9 @@ mod tests {
         // 25 → 24: Games and Apps merged into one launcher with category chips.
         // 24 → 25: the Registry Browser — the naming chain's product surface,
         // where before it was reachable only from the Shell's `name` verb.
-        assert_eq!(meta.len(), 25, "the standard roster is 25 windows");
+        // 25 → 26: Feed — the first product surface over APP-CONVENTION-FEED,
+        // and the first consumer of `feed_read` / `feed_fetch` / `feed_follows`.
+        assert_eq!(meta.len(), 26, "the standard roster is 26 windows");
         // **System-scoped, and it was already so while it sat in the Apps &
         // Content menu.** A registry pin is deployment infrastructure read from
         // the durable `SessionConfig`, not a property of whichever peer a window

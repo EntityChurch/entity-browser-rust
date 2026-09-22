@@ -81,7 +81,9 @@ not" below before comparing anything here:**
 1. Read `source/` with your own source-directory ingest.
 2. Compare against `EXPECTED-INGEST.json`'s `entities` — manifest fields, and per page the `slug`,
    `format`, `frontmatter` and `body`. **Field by field, before any hash.**
-3. Compare `site_root_pages`. Leave `site_root_full` until the asset question above is settled.
+3. Compare `site_root_pages`. Leave `site_root_full` until you model `app/site-asset` — see the asset
+   section below, which changed on 2026-09-10: the row is now reproducible on our side, and what is
+   still missing is a counterpart to compare it to.
 
 **A divergence in link 1 is routed, not corrected** — it is a disagreement about what a source
 directory means, and neither side's reading is privileged. Two we already expect you to hit:
@@ -98,26 +100,48 @@ directory means, and neither side's reading is privileged. Two we already expect
 Nothing above needs a shared keypair, an agreed tree path, a network, or a pinned clock. See below
 for why each of those drops out.
 
-## The asset row is known-incomparable today — read this before adding one
+## The asset row: REPRODUCIBLE as of 2026-09-10, not yet COMPARABLE
 
-`entity-workbench-go` measured that **nothing in either tree exercises chunking** and recommended the
-joint fixture carry an asset above 16 KiB. The diagnosis is right; the recommendation does not reach
-§6.1 from here, and the reason is worth knowing before anyone builds against it.
+> **This section said the opposite until 2026-09-10, and the correction is the useful part.**
+> It read *"the asset row is known-incomparable"* because **our own representation was
+> unreproducible**: `app/site-asset` put the raw bytes inline at any size, so there was no chunker on
+> the path to disagree about parameters with, and §6.1's canonical `chunk_size` MUST was **bypassed**
+> rather than untested. `entity-workbench-go` had diagnosed the symptom (*"nothing in either tree
+> exercises chunking"*) and recommended an asset over 16 KiB; the diagnosis was right and the fixture
+> alone could not reach §6.1. **Arch made the reasoning normative** —
+> `APP-CONVENTION-SEMANTIC-CONTENT-SITE` §4 now carries a `[MUST]`: an asset whose bytes exceed
+> `inline-payload`'s `.size (1..16384)` ceiling MUST use a `pointer` payload, *"placing the bytes in
+> the content store where §6.1's canonical chunking governs them"*, with the note that on an
+> all-inline path the MUST *"is not failing, it is unreachable."*
 
-**`app/site-asset` puts the raw bytes inline in a single entity, at any size.** There is no chunker on
-this path to disagree about parameters with. Measured end-to-end through `make site`: a 208,046-byte
-source file became **one 208,109-byte entity** and three trie keys. So §6.1's canonical `chunk_size`
-MUST is **bypassed**, not merely untested — and an asset in the fixture measures a different thing
-than the one §6.1 is about.
+**We implement the pointer arm.** `assets/figures/big.svg` (32,047 bytes) now encodes as
+`{media_type, payload: {tag: "pointer", hash}}` — `APP-CONVENTION-EMBED` §3's tagged union, reused
+rather than restated — and its bytes live in the content store as a `system/content/blob` plus chunks,
+chunked at §6.1's locked default (**1 MiB-average FastCDC**, min/avg/max 256 KiB / 1 MiB / 2 MiB).
 
-What the asset row *does* make testable is the prior question: **do the two implementations agree
-about what a site asset IS?** Today they cannot — `entity-workbench-go` does not model
-`app/site-asset` at all (their `assets/{name}` is reserved for post-v1 passive-Embed work), so the row
-compares our inline entity against their absence.
+So `EXPECTED-INGEST.json`'s asset row now pins something a second implementation can reproduce
+**without seeing our code**: `payload.blob` is a function of the source bytes and the canonical
+chunker's parameters, and nothing else. Our own gate asserts exactly that equality rather than
+comparing our pipeline against itself.
 
-**That is why `EXPECTED-INGEST.json` carries two roots.** Compare **`site_root_pages`** — manifest and
-pages — until the asset representation is agreed. `site_root_full` is there so the divergence is
-measured rather than latent, not so it can be expected to match.
+**The two roots stay, for a different and weaker reason.** `entity-workbench-go` does not model
+`app/site-asset` at all (their `assets/{name}` is reserved for post-v1 passive-Embed work), so there
+is still nothing on the other side to compare the row *against*. What changed is which side the gap
+is on:
+
+| | before | now |
+|---|---|---|
+| our asset bytes reproducible by another impl | **no** — inline, chunker bypassed | **yes** — canonical FastCDC blob hash |
+| a second impl models `app/site-asset` | no | no |
+
+Compare **`site_root_pages`** until a second seat implements the type. Compare **`site_root_full`**
+the day one does — and note that it now *should* match, which is a claim the previous version of this
+section could not make.
+
+**If you are the seat implementing it:** the row you need to reproduce is the asset's
+`payload.blob`, and it needs only the source file and the canonical chunker. The `content` array in
+`EXPECTED-INGEST.json` lists the blob and chunk entities by hash so a mismatch names which one moved
+rather than only moving the root.
 
 ## Four things that make this comparable at all
 

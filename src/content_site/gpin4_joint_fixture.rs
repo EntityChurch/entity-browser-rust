@@ -337,19 +337,46 @@ fn an_absent_optional_is_not_an_empty_one() {
 /// to route, not a defect on either — which of the two readings is right is the
 /// question the fixture exists to raise.
 ///
-/// **Two roots, and the split is the finding.** `site_root_pages` covers the
-/// manifest and pages; `site_root_full` adds the asset. They are separate
-/// because the asset row is **known to be incomparable today** — see
-/// [`the_asset_is_one_inline_entity_at_any_size`]. A single root would make the
-/// whole gate red for a reason we already understand, which is the shape of a
-/// gate nobody runs.
+/// **Two roots, and the reason CHANGED on 2026-09-10 — read this before
+/// collapsing them.** `site_root_pages` covers the manifest and pages;
+/// `site_root_full` adds the asset.
+///
+/// They were split because *our own asset representation* was
+/// unreproducible: bytes inline at any size, never through a chunker, so
+/// §6.1's canonical `chunk_size` MUST was **bypassed** and no
+/// reproducible-publish check could observe the path (arch made exactly that
+/// argument normative in §4's `[MUST]`). That is fixed —
+/// [`the_asset_takes_the_pointer_arm_and_its_blob_is_canonically_chunked`] —
+/// and `site_root_full` is now a root a conforming publisher reproduces.
+///
+/// **They stay split anyway, for a different and weaker reason:**
+/// `entity-workbench-go` does not model `app/site-asset` at all. So the
+/// remaining incomparability is *the other seat has not implemented the
+/// type*, not *our bytes are unreproducible* — and that distinction is the
+/// whole value of keeping the pair. The plan that scheduled this work
+/// predicted the roots would collapse into one; they do not, and one root
+/// would delete the pages-only comparand that works today in exchange for a
+/// full root nobody can currently compare against.
 mod source_ingest {
     use super::*;
+    use crate::content_site::asset_store;
     use crate::content_site::format::SitePage;
     use crate::content_site::ingest;
+    use entity_store::ContentStore;
+    use std::sync::Arc;
 
     fn source_dir() -> PathBuf {
         fixture_dir().join("source")
+    }
+
+    /// Ingest the source fixture, returning the site and the store its
+    /// oversized assets were chunked into (the pointer arm needs both — the
+    /// asset names a blob and the blob lives here).
+    fn ingest_source() -> (ingest::IngestedSite, Arc<dyn ContentStore>) {
+        let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        let site = ingest::read_site_dir(&source_dir(), &store)
+            .expect("the source fixture ingests");
+        (site, store)
     }
 
     /// `(relative key → hash)` for the ingested site, site-subtree-scoped:
@@ -404,8 +431,49 @@ mod source_ingest {
             "assets": site.assets.iter().map(|(name, a)| serde_json::json!({
                 "name": name,
                 "media_type": a.media_type,
-                "source_bytes": a.bytes.len(),
-                "note": "ONE entity, bytes inline — this publisher does not chunk at any size",
+                // The payload arm and, for a pointer, the blob hash. **The
+                // blob hash is the new cross-impl comparand for an asset's
+                // bytes**: it is a function of the bytes and §6.1's canonical
+                // FastCDC parameters alone, so a conforming publisher on any
+                // core reproduces it. Recording only a byte count, as this
+                // did while the path was all-inline, pins nothing a second
+                // implementation could disagree with.
+                "payload": match &a.payload {
+                    crate::content_site::format::AssetPayload::Inline(b) => serde_json::json!({
+                        "tag": "inline",
+                        "bytes": b.len(),
+                    }),
+                    crate::content_site::format::AssetPayload::Pointer(h) => serde_json::json!({
+                        "tag": "pointer",
+                        "blob": h.to_hex(),
+                    }),
+                    // Not a wire arm. If it ever reaches the fixture our own
+                    // ingest failed to encode an asset it just read off disk,
+                    // and pinning that as an expected value would publish the
+                    // failure to the other seat as if it were a decision.
+                    crate::content_site::format::AssetPayload::Unsupported { tag } => panic!(
+                        "the ingest produced a `{tag}` payload for {name} — our own stager emits \
+                         only inline and pointer, so this cannot be a fixture value"
+                    ),
+                    crate::content_site::format::AssetPayload::InvalidForType { tag } => panic!(
+                        "the ingest produced a `{tag}` payload for {name} — SITE §4 forbids it on \
+                         an app/site-asset, so emitting one would publish a schema violation to \
+                         the other seat as a fixture value"
+                    ),
+                    crate::content_site::format::AssetPayload::Unreadable => panic!(
+                        "the ingest produced an unreadable payload for {name} — that is a defect \
+                         here, not a fixture value"
+                    ),
+                },
+            })).collect::<Vec<_>>(),
+            // The blob + chunk entities the pointer assets resolve through,
+            // by hash. Not trie keys — content-addressed, reached from inside
+            // the asset entity — so they are recorded here rather than in
+            // `bindings`, and a change in chunk boundaries shows up as a
+            // changed list rather than silently inside one opaque root.
+            "content": site.content.iter().map(|e| serde_json::json!({
+                "type": e.entity_type,
+                "hash": e.content_hash.to_hex(),
             })).collect::<Vec<_>>(),
         })
     }
@@ -422,7 +490,7 @@ mod source_ingest {
     /// `source/` edit is a wire event, not a test fix.**
     #[test]
     fn our_ingest_of_the_source_directory_is_pinned_field_by_field() {
-        let site = ingest::read_site_dir(&source_dir()).expect("the source fixture ingests");
+        let (site, _store) = ingest_source();
         let (pages, full) = bindings(&site);
         let (root_pages, root_full) = (root_of(&pages), root_of(&full));
 
@@ -435,10 +503,16 @@ mod source_ingest {
             "site_root_pages": root_pages.to_hex(),
             "site_root_full": root_full.to_hex(),
             "roots_are_split_because":
-                "the asset row is known-incomparable today: this publisher emits ONE inline \
-                 app/site-asset entity at any size and never enters a chunker, so §6.1's \
-                 chunk_size MUST is bypassed rather than exercised. Compare site_root_pages \
-                 until the asset representation is agreed.",
+                "the asset row is now REPRODUCIBLE but not yet COMPARABLE, and those are \
+                 different things. It was split because our asset was inline at any size, so \
+                 §6.1's canonical chunking was bypassed rather than exercised and no \
+                 reproducible-publish check could observe the path; that is fixed — the asset \
+                 takes APP-CONVENTION-EMBED §3's pointer arm and `payload.blob` is 1 MiB-average \
+                 FastCDC over the source bytes, which any conforming publisher reproduces. What \
+                 remains is that entity-workbench-go does not model app/site-asset at all, so \
+                 there is nothing on the other side to compare the row against. Compare \
+                 site_root_pages until a second seat implements the type; compare \
+                 site_root_full the day one does.",
             "entities": describe(&site),
             "bindings": full.iter().map(|(k, h)| (k.clone(), serde_json::Value::String(h.to_hex())))
                 .collect::<serde_json::Map<_, _>>(),
@@ -485,45 +559,76 @@ mod source_ingest {
         );
     }
 
-    /// **§6.1's chunker MUST is BYPASSED on this side, not merely unexercised —
-    /// and that is a sharper claim than the one it answers.**
+    /// **The fixture's asset is over the ceiling, so it is the case §4's
+    /// `[MUST]` governs — and this is the test that used to assert the
+    /// opposite.**
     ///
-    /// `entity-workbench-go` measured that *"nothing either seat holds exercises
-    /// chunking"* and recommended the joint fixture carry an asset above 16 KiB.
-    /// Correct diagnosis; the recommendation does not reach it here. `SiteAsset`
-    /// puts the raw bytes **inline in a single `app/site-asset` entity** at any
-    /// size — there is no chunker on this path to disagree about parameters
-    /// with. Measured end-to-end through `make site`: a 208,046-byte source file
-    /// became one 208,109-byte entity and three trie keys.
+    /// Its predecessor was `the_asset_is_one_inline_entity_at_any_size`, and
+    /// it was a correct measurement of a non-conformant path: `SiteAsset` put
+    /// the raw bytes inline at any size, so §6.1's canonical chunking was not
+    /// *failed* but **unreachable**, and no reproducible-publish check could
+    /// observe it. `entity-workbench-go` had diagnosed the symptom (*"nothing
+    /// either seat holds exercises chunking"*); arch made the reasoning
+    /// normative. **A test naming the behaviour we shipped is not evidence the
+    /// behaviour is right** — AP45 — and this one is the reason the whole
+    /// asset row was excluded from the comparison.
     ///
-    /// So the fixture's asset does not make §6.1 testable. What it makes
-    /// testable is **whether the two implementations agree about what an asset
-    /// IS**, which is the prior question and the one that has to be answered
-    /// first. Their side does not model `app/site-asset` at all (their
-    /// `assets/{name}` is reserved for post-v1 work), so today the row compares
-    /// our inline entity against their absence.
+    /// What it pins now: the arm, the ceiling on the *right* side of the
+    /// boundary, and the blob's reproducible identity. The byte-level
+    /// two-sided boundary check is `asset_store`'s, where the decision lives.
     #[test]
-    fn the_asset_is_one_inline_entity_at_any_size() {
-        let site = ingest::read_site_dir(&source_dir()).expect("the source fixture ingests");
+    fn the_asset_takes_the_pointer_arm_and_its_blob_is_canonically_chunked() {
+        let (site, store) = ingest_source();
         let (name, asset) = site.assets.first().expect("the fixture carries an asset");
 
+        let source_len = std::fs::metadata(source_dir().join("assets").join(name))
+            .expect("the fixture asset is on disk")
+            .len() as usize;
         assert!(
-            asset.bytes.len() > 16 * 1024,
-            "the fixture's asset must clear the 16 KiB inline threshold the other seat named, \
-             or this test measures nothing: {name} is {} bytes",
-            asset.bytes.len()
+            source_len > crate::content_site::format::INLINE_PAYLOAD_MAX,
+            "the fixture's asset must clear the 16 KiB ceiling or this test measures nothing: \
+             {name} is {source_len} bytes"
         );
 
-        // The whole payload is in ONE entity: its encoded body is the raw bytes
-        // plus ECF framing, not a pointer to a chunk list.
-        let entity = asset.to_entity();
-        let overhead = entity.data.len() as i64 - asset.bytes.len() as i64;
+        let blob = asset
+            .pointer()
+            .expect("an asset over the ceiling MUST use a pointer payload (content-site §4)");
         assert!(
-            (0..256).contains(&overhead),
-            "an inline asset entity is the bytes plus a little framing; {overhead} bytes of \
-             difference means something else is happening (a chunk list would be far smaller)"
+            asset.inline_bytes().is_none(),
+            "the pointer and inline arms are exclusive — carrying both would let two readers \
+             disagree about which is authoritative"
         );
-        assert_eq!(site.assets.len(), 1, "one source file became one entity — nothing was split");
+
+        // The bytes are in the content store, chunked at §6.1's canonical
+        // parameters, and come back byte-exact. **`create_blob_fastcdc` at
+        // CANONICAL_CHUNK_SIZE is re-derived here from the raw file rather
+        // than read off the asset**, so this compares our pipeline's answer
+        // against the spec's recipe instead of against itself.
+        let raw = std::fs::read(source_dir().join("assets").join(name)).expect("readable");
+        let recipe: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        let recipe_blob = entity_content::create_blob_fastcdc(
+            &recipe,
+            &raw,
+            crate::content_site::format::CANONICAL_CHUNK_SIZE,
+        )
+        .expect("the canonical chunker runs");
+        assert_eq!(
+            blob, recipe_blob,
+            "the published blob hash must equal 1 MiB-average FastCDC over the source bytes — \
+             that equality IS §6.1's 'same image → same site root' property, and it is what a \
+             second implementation reproduces without seeing our code"
+        );
+        assert_eq!(
+            asset_store::resolve_in(asset, &store).expect("resolves"),
+            raw,
+            "and it round-trips to the original bytes"
+        );
+
+        assert_eq!(site.assets.len(), 1, "anti-vacuity: one source file, one asset");
+        assert!(
+            !site.content.is_empty(),
+            "anti-vacuity: the ingest carried the blob closure out with it"
+        );
     }
 
     /// **A markdown page with no frontmatter stores `title: ""`; the HTML path
@@ -544,7 +649,7 @@ mod source_ingest {
     /// side is comparing against these bytes. Routed with the fixture.
     #[test]
     fn a_frontmatterless_markdown_page_keeps_an_empty_title_and_the_html_path_does_not() {
-        let site = ingest::read_site_dir(&source_dir()).expect("the source fixture ingests");
+        let (site, _store) = ingest_source();
         let by_slug: BTreeMap<&str, &SitePage> =
             site.pages.iter().map(|(s, p)| (s.as_str(), p)).collect();
 
@@ -585,7 +690,7 @@ mod source_ingest {
     /// that arm.
     #[test]
     fn no_nav_node_from_a_source_directory_lacks_a_target() {
-        let site = ingest::read_site_dir(&source_dir()).expect("the source fixture ingests");
+        let (site, _store) = ingest_source();
         fn walk(items: &[NavItem], out: &mut Vec<String>) {
             for i in items {
                 if i.target.is_empty() {

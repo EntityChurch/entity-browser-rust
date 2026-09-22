@@ -651,6 +651,7 @@ mod tests {
                 ("deep/one".into(), SitePage::markdown("Deep", "# Deep\n\nnested")),
             ],
             assets: vec![],
+            content: Vec::new(),
         }
     }
 

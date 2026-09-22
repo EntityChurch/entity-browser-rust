@@ -1224,6 +1224,7 @@ impl ContentSiteModel {
             manifest,
             page: SitePage::markdown(&title, notice),
             assets: Vec::new(),
+            content: Vec::new(),
         };
         // No sidebar — offline, the `.list` isn't available.
         Some(output_from_resolved(&rp, loc, can_go_back, Vec::new()))
@@ -1521,6 +1522,7 @@ mod tests {
             manifest,
             page: SitePage::markdown("Home", "# Welcome\n\nHello from the labs."),
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let out = output_from_resolved(&rp, &rp.location, false, vec![]);
         assert_eq!(out.site_title, "Bill's Labs");
@@ -1555,6 +1557,7 @@ mod tests {
             manifest: SiteManifest::new("labs", "Bill's Labs", "index", vec![]),
             page: SitePage::html("Paper", doc),
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let out = output_from_resolved(&rp, &rp.location, false, vec![]);
         assert!(
@@ -1641,6 +1644,7 @@ mod tests {
             manifest: m,
             page: SitePage::markdown("Home", "# Hi"),
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let out = output_from_resolved(&rp, &rp.location, false, vec![]);
         assert!(out.site_theme_css.is_some(), "output carries the container block");

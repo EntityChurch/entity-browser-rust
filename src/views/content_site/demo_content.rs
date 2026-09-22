@@ -354,7 +354,12 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
     peers.seed_write(
         peer_id,
         paths::asset_path(peer_id, DEMO_SITE_ID, "figures/demo.svg"),
-        SiteAsset::new("image/svg+xml", DEMO_FIGURE_SVG.as_bytes().to_vec()).to_entity(),
+        // Inline unconditionally: the figure is a few hundred bytes of
+        // hand-authored SVG, well under EMBED §3's 16 KiB ceiling, and the
+        // demo seed has no content store to point into. `inline` rather than
+        // `asset_store::stage` says that is a property of this artifact
+        // rather than a size we did not check.
+        SiteAsset::inline("image/svg+xml", DEMO_FIGURE_SVG.as_bytes().to_vec()).to_entity(),
     );
     for (slug, page) in pages {
         peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_SITE_ID, slug), page.to_entity());

@@ -626,6 +626,7 @@ mod tests {
                 SitePage::markdown(name, &format!("# {name}\n\nserved by {slug}")),
             )],
             assets: vec![],
+            content: Vec::new(),
         };
         emit_owned_sites(&dir, std::slice::from_ref(&site), "", Some(&mut projector)).unwrap();
         projector.finish(&dir).unwrap();

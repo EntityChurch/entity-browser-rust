@@ -30,15 +30,31 @@ use super::location::{self, LinkTarget};
 use super::paths::SITE_URL_PREFIX;
 use super::read::OwnedSite;
 
+/// An asset with its **bytes in hand** — what the static surface needs and
+/// all it needs.
+///
+/// The no-JS projection writes a plain file for a dumb server to serve, so it
+/// has no use for [`SiteAsset`]'s payload union: whether the publisher inlined
+/// the bytes or pointed at a content-store blob is a *wire* distinction, and
+/// by the time bytes reach a `<img src="assets/…">` on a static host it has
+/// been resolved and is gone. Taking the resolved form here keeps the union
+/// out of a module that would otherwise have to re-decide it per call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportAsset {
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
 /// One site to export: its identity, manifest, and `(slug, page)` bodies.
 pub struct ExportSite<'a> {
     pub peer_id: &'a str,
     pub site_id: &'a str,
     pub manifest: &'a SiteManifest,
     pub pages: &'a [(&'a str, SitePage)],
-    /// `(name, asset)` — the site's embedded assets, written next to the pages
-    /// so a dumb static server resolves `<img src="assets/…">` with no JS.
-    pub assets: &'a [(String, SiteAsset)],
+    /// `(name, asset)` — the site's embedded assets, **already resolved to
+    /// bytes** ([`ExportAsset`]), written next to the pages so a dumb static
+    /// server resolves `<img src="assets/…">` with no JS.
+    pub assets: &'a [(String, ExportAsset)],
 }
 
 /// A link whose target is **not in the export set** — the defect this audit
@@ -303,18 +319,50 @@ pub fn export_owned_sites(
         .iter()
         .map(|s| s.pages.iter().map(|(slug, page)| (slug.as_str(), page.clone())).collect())
         .collect();
+    let asset_vecs: Vec<Vec<(String, ExportAsset)>> =
+        sites.iter().map(resolve_export_assets).collect();
     let borrowed: Vec<ExportSite> = sites
         .iter()
         .zip(&page_vecs)
-        .map(|(s, pv)| ExportSite {
+        .zip(&asset_vecs)
+        .map(|((s, pv), av)| ExportSite {
             peer_id: &s.peer_id,
             site_id: &s.site_id,
             manifest: &s.manifest,
             pages: pv,
-            assets: &s.assets,
+            assets: av,
         })
         .collect();
     export_site_set(out_dir, &borrowed, prefix, live_base)
+}
+
+/// Resolve a site's assets to bytes for the static surface.
+///
+/// **An asset that does not resolve is dropped, with a warning, and the
+/// export continues.** The alternative — writing a zero-byte file — is worse
+/// in the way that matters here: a missing file is a broken image a reader
+/// and a link checker both see, while an empty one is a *served* asset that
+/// every tool reports as fine. Neither is silent, and only one of them lies.
+fn resolve_export_assets(site: &OwnedSite) -> Vec<(String, ExportAsset)> {
+    site.assets
+        .iter()
+        .filter_map(|(name, asset)| {
+            match super::asset_store::resolve_from(asset, &site.content) {
+                Ok(bytes) => {
+                    Some((name.clone(), ExportAsset { media_type: asset.media_type.clone(), bytes }))
+                }
+                Err(why) => {
+                    tracing::warn!(
+                        site = %site.site_id,
+                        asset = %name,
+                        %why,
+                        "static export: asset bytes unavailable — the file is not written"
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// Export **one** site at the domain root — the bare-root SSG mode ([F1]).
@@ -329,12 +377,13 @@ pub fn export_bare_root(
 ) -> std::io::Result<usize> {
     let pages: Vec<(&str, SitePage)> =
         site.pages.iter().map(|(slug, page)| (slug.as_str(), page.clone())).collect();
+    let assets = resolve_export_assets(site);
     let es = ExportSite {
         peer_id: &site.peer_id,
         site_id: &site.site_id,
         manifest: &site.manifest,
         pages: &pages,
-        assets: &site.assets,
+        assets: &assets,
     };
     let mut written = 0;
     // No audit: a single site has no set to be outside of, and its cross-site
@@ -1459,6 +1508,7 @@ mod tests {
                 ("guide/intro".into(), SitePage::markdown("Intro", "# Intro\n\nBack [home](../index).")),
             ],
             assets: Vec::new(),
+            content: Vec::new(),
         };
 
         let dir = std::env::temp_dir().join("entity-browser-bare-root-test");
@@ -1770,6 +1820,7 @@ mod tests {
             manifest: a,
             pages: vec![("index".into(), SitePage::markdown("A", "[X](site:elsewhere/index)"))],
             assets: vec![],
+            content: Vec::new(),
         };
         let dir = std::env::temp_dir().join("entity-browser-static-export-bareroot-audit-test");
         let _ = fs::remove_dir_all(&dir);

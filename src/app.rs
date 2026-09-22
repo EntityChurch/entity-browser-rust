@@ -4803,7 +4803,10 @@ impl EntityApp {
                     attempt.set_offered(&offer.name, offer.size);
                     wake(&watchers);
                     if let Some(writer) = share_writer {
-                        let share = crate::share::Share::from_file_offer(&offer);
+                        let share = crate::share::Share::from_file_offer(
+                            &offer,
+                            crate::share::now_epoch_ms(),
+                        );
                         if let Err(e) =
                             crate::share::publish_share(&writer, &share_pid, &share)
                         {

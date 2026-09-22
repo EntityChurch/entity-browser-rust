@@ -471,12 +471,51 @@ pub async fn resolve_closure_via(
     // the renderer's resolver reads them. Site-local refs only
     // (`asset_name_from_ref` gates external/escaping refs). Best-effort.
     let mut assets = Vec::new();
+    let mut content: Vec<Entity> = Vec::new();
+    let mut have: std::collections::BTreeSet<Hash> = std::collections::BTreeSet::new();
     for reference in super::embed::embed_refs(&page.body) {
         let Some(name) = super::paths::asset_name_from_ref(&reference) else {
             continue;
         };
         if let Ok(ent) = fetch_asset(src, origin, &pid, &loc.site_id, &name).await {
-            assets.push((name, super::format::SiteAsset::from_entity(&ent)));
+            let asset = super::format::SiteAsset::from_entity(&ent);
+            if asset.from_legacy_encoding {
+                // Reported at the FETCH, once per asset, never in the render
+                // loop — a papers page has twenty figures and would emit
+                // twenty lines a frame. This is the instrument behind the
+                // legacy read: without it, "is that arm still load-bearing?"
+                // has no answer short of grepping every origin.
+                tracing::info!(
+                    peer = %pid,
+                    site = %loc.site_id,
+                    asset = %name,
+                    "site asset served in the RETIRED pre-A-27 encoding — the origin has not \
+                     republished since the pointer arm landed"
+                );
+            }
+            // A pointer asset's bytes are a second fetch — the blob, then
+            // every chunk it names. Best-effort like the asset itself: a
+            // figure whose closure the origin cannot serve leaves the page
+            // rendering without it, which is what the `None` arm of
+            // `rewrite_images` already draws.
+            if let Some(blob) = asset.pointer() {
+                match fetch_blob_closure(src, origin, &blob).await {
+                    Ok(entities) => {
+                        for e in entities {
+                            if have.insert(e.content_hash) {
+                                content.push(e);
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        asset = %name,
+                        blob = %blob.to_hex(),
+                        error = %e,
+                        "asset pointer closure not served by the origin"
+                    ),
+                }
+            }
+            assets.push((name, asset));
         }
     }
 
@@ -485,7 +524,39 @@ pub async fn resolve_closure_via(
         manifest,
         page,
         assets,
+        content,
     })
+}
+
+/// Fetch a `system/content/blob` and every chunk it names, over the
+/// hash-addressed content route.
+///
+/// **This is `entity_content::ensure_closure`'s job done over HTTP.** That
+/// function takes a `&dyn Dispatcher` and speaks `system/content:get` to a
+/// peer; a published static origin is not a peer and answers only
+/// [`content_url`] GETs, so the walk is here. What is *not* re-implemented is
+/// the blob's wire shape — `asset_store::blob_closure_via` asks the kernel,
+/// which is why this function only supplies a lookup.
+///
+/// Every hop is `Freshness::Immutable`: each URL is its own content address,
+/// so a cached copy is correct by construction and a changed blob is a
+/// different URL.
+async fn fetch_blob_closure(
+    src: &dyn BinSource,
+    origin: &str,
+    blob: &Hash,
+) -> Result<Vec<Entity>, PollError> {
+    // `blob_closure_via` wants a synchronous lookup, and these are network
+    // reads — so fetch the blob first, ask what it names, then fetch those.
+    // Two awaited passes rather than one closure.
+    let blob_ent = fetch_content(src, origin, blob).await?;
+    let chunks = super::asset_store::chunk_hashes_of(&blob_ent).map_err(PollError::Decode)?;
+    let mut out = Vec::with_capacity(chunks.len() + 1);
+    out.push(blob_ent);
+    for ch in chunks {
+        out.push(fetch_content(src, origin, &ch).await?);
+    }
+    Ok(out)
 }
 
 /// Fetch one entity by its `.bin` leaf URL via the Amendment-6 two-hop:
@@ -940,7 +1011,7 @@ mod tests {
         // …and its asset, at the assets/ leaf.
         fx.publish(
             &format!("{peer}/sites/{site}/assets/figures/x.svg.bin"),
-            &SiteAsset::new("image/svg+xml", b"<svg/>".to_vec()).to_entity(),
+            &SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec()).to_entity(),
         );
 
         let src = FixtureBinSource(fx);
@@ -950,7 +1021,7 @@ mod tests {
         assert_eq!(rp.assets.len(), 1, "the page's one embed asset was fetched");
         assert_eq!(rp.assets[0].0, "figures/x.svg", "asset name = ref minus the assets/ prefix");
         assert_eq!(rp.assets[0].1.media_type, "image/svg+xml");
-        assert_eq!(rp.assets[0].1.bytes, b"<svg/>");
+        assert_eq!(rp.assets[0].1.inline_bytes(), Some(&b"<svg/>"[..]));
     }
 
     #[test]

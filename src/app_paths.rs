@@ -115,6 +115,33 @@ pub fn site_origin_path(app_id: &str, peer_id: &str, target_peer_id: &str) -> St
     format!("{}{}", site_origins_prefix(app_id, peer_id), target_peer_id)
 }
 
+/// Prefix for the **feed follow** registry — `subject peer id → an
+/// `app/feed/follow` record`. Flat, one level, the same shape as the
+/// site-origin registry above (so the same immediate-children listing read is
+/// correct for it).
+///
+/// ⚠ **App-scoped, NOT window-scoped, and that is a modelling decision rather
+/// than convenience.** Who a person follows is a property of their profile: two
+/// Feed windows open at once must agree, and closing one must not unfollow
+/// anybody. Putting it under `workspace/windows/{id}/state` would make the
+/// answer depend on which window you asked — and would inherit the reused-slot
+/// hazard (AP42) for state that has nothing to do with a slot.
+///
+/// `APP-CONVENTION-FEED` §2.4 makes a follow record **the reader's private
+/// data** that nothing publishes, so the path is ours to choose and no
+/// cross-impl consumer depends on it.
+/// e.g. `"/{pid}/app/entity-browser/feed-follows/"`
+pub fn feed_follows_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/feed-follows/", peer_id, app_id)
+}
+
+/// One follow record, keyed by the peer being followed.
+/// e.g. `feed_follow_path(APP_ID, pid, "PEERB")` →
+/// `"/{pid}/app/entity-browser/feed-follows/PEERB"`
+pub fn feed_follow_path(app_id: &str, peer_id: &str, subject_peer_id: &str) -> String {
+    format!("{}{}", feed_follows_prefix(app_id, peer_id), subject_peer_id)
+}
+
 /// Prefix for the peer-supersession registry — `retired_peer_id → the peer that
 /// replaced it`. Flat, one level, same shape as the site-origin registry (so the
 /// same `tree_listing_async` immediate-children read is correct for it).

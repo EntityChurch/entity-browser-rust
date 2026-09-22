@@ -1386,33 +1386,15 @@ fn query_param<'a>(query: &'a str, key: &str) -> Option<std::borrow::Cow<'a, str
 
 /// Decode `%XX` escapes. Borrows when there is nothing to decode, which is the
 /// common case (a Base58 peer-id needs no escaping).
+///
+/// **The mechanism lives in [`crate::percent`]; the policy lives here.** A
+/// malformed escape yields the original rather than an error: this feeds a
+/// fail-closed resolver, and handing it undecodable bytes is a better outcome
+/// than a panic on a URL somebody typed. The reference parser
+/// ([`crate::entity_ref`]) takes the opposite policy over the same decoder,
+/// because `REF-R20` owes a refusal where this owes a best effort.
 fn percent_decode(s: &str) -> std::borrow::Cow<'_, str> {
-    if !s.contains('%') {
-        return std::borrow::Cow::Borrowed(s);
-    }
-    let b = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(h), Some(l)) =
-                ((b[i + 1] as char).to_digit(16), (b[i + 2] as char).to_digit(16))
-            {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    // A malformed escape yields the original rather than an error: this feeds a
-    // fail-closed resolver, and handing it undecodable bytes is a better outcome
-    // than a panic on a URL somebody typed.
-    match String::from_utf8(out) {
-        Ok(decoded) => std::borrow::Cow::Owned(decoded),
-        Err(_) => std::borrow::Cow::Borrowed(s),
-    }
+    crate::percent::decode_lenient(s)
 }
 
 /// Runtime WebRTC provisioning from a URL query — the dev/showcase / e2e

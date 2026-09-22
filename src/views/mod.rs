@@ -7,6 +7,7 @@ pub mod content_site;
 pub mod content_stream;
 pub mod entity_tree;
 pub mod path_tap;
+pub mod feed;
 pub mod event_log;
 pub mod execute_console;
 pub mod file_transfer;

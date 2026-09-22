@@ -127,10 +127,24 @@ fn surface_sources() -> BTreeMap<String, String> {
     out
 }
 
-/// Strip `//`-comment tails so a doc comment naming a function does not read as
-/// a definition. Crude and deliberately so — it only has to stop the two false
-/// positives this census can actually produce (`hydrate_durable` and
-/// `initialize` are both discussed at length in doc comments here).
+/// Strip `//`-comment tails so a doc comment naming a symbol does not read as a
+/// definition. Crude and deliberately so.
+///
+/// ⚠ **This doc used to say "the two false positives this census can actually
+/// produce" and name them. A third arrived the next time somebody added a
+/// window** — `views/feed` mentions `window_state_path` twice in its module
+/// docs, both times to say it deliberately does *not* persist window state, and
+/// [`persisting_surfaces`] was the one caller that had not been routed through
+/// here. So the census demanded a hydration classification from a surface whose
+/// prose said it had no state to classify, which is AP29 (**a gate that counts
+/// prose**) in its expensive direction: a false positive that can only be
+/// silenced by lying to the table.
+///
+/// ***An enumeration of the false positives a check can produce is a claim about
+/// code nobody has written yet.*** The fix is not another name on the list; it is
+/// that every predicate over a surface's source reads code, and
+/// `a_surface_that_only_MENTIONS_the_path_in_prose_is_not_persisting` is what
+/// keeps it that way.
 fn code_only(body: &str) -> String {
     body.lines()
         .map(|l| match l.find("//") {
@@ -183,9 +197,17 @@ fn window_view_impls(body: &str) -> String {
 fn persisting_surfaces() -> BTreeSet<String> {
     surface_sources()
         .into_iter()
-        .filter(|(_, body)| body.contains("window_state_path"))
+        .filter(|(_, body)| persists(body))
         .map(|(name, _)| name)
         .collect()
+}
+
+/// Does this surface's **code** — never its prose — write per-window state?
+///
+/// Split out so it can be falsified directly; see [`code_only`] for the false
+/// positive that made the `code_only` call here load-bearing.
+fn persists(body: &str) -> bool {
+    code_only(body).contains("window_state_path")
 }
 
 #[test]
@@ -257,6 +279,43 @@ fn every_hydrating_surface_actually_overrides_the_hook() {
 /// `#[cfg(test)] pub async fn hydrate_durable` helper — which is exactly how
 /// the first version of this file went green on a genuinely broken tree.
 ///
+/// **The self-check for [`persists`], and it is a two-way falsifier.**
+///
+/// A surface that only *talks about* `window_state_path` — to say it does not
+/// use one — must not be counted as persisting, and a surface that actually
+/// writes to one must still be. Without the first half this census demands a
+/// hydration classification from a window with no state, which can only be
+/// satisfied by putting a false row in the table; without the second it stops
+/// being a census at all.
+///
+/// This exists because the real thing happened: `views/feed` was flagged on its
+/// own module documentation. See [`code_only`].
+#[test]
+fn a_surface_that_only_mentions_the_path_in_prose_is_not_persisting() {
+    let prose_only = r#"
+//! This window persists no state, and never touches `window_state_path`.
+/// Who you follow is app-scoped; see `window_state_path` for what this is not.
+fn render() {}
+"#;
+    assert!(
+        !persists(prose_only),
+        "a doc comment explaining that a surface has no window state is not window state"
+    );
+
+    let real = r#"
+fn persist(&self) {
+    let path = crate::app_paths::window_state_path(APP_ID, &self.peer_id, self.window_id);
+}
+"#;
+    assert!(persists(real), "and a surface that really writes one is still counted");
+
+    // The mixed case is the one that decides the predicate is not just
+    // "ignore anything after the first //": prose ABOVE real code must not
+    // hide the code.
+    let both = format!("{prose_only}\n{real}");
+    assert!(persists(&both), "prose must not mask a real write below it");
+}
+
 /// This asserts the narrowing does work: a synthetic source with the helper but
 /// no override must NOT read as overridden.
 #[test]

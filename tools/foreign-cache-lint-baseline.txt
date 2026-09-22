@@ -1,1 +1,2 @@
 src/content_site/publish_fixture.rs direct_foreign_fetch=4
+src/feed_publish.rs direct_foreign_fetch=2

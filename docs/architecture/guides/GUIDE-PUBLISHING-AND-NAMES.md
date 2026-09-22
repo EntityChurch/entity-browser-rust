@@ -1,5 +1,7 @@
 # Publishing & Names — the trust chain, end to end
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](../specs/REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers names and the registry; it does not restate the model.
+
 **Audience:** anyone publishing content or names to the entity network, and
 anyone implementing a consumer of it. **Scope:** the three things you can
 publish — a **site**, a **name registry**, and the **app** that reads them — how

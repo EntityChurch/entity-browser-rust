@@ -1368,8 +1368,10 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   grep for `publishable` finds a comment. Adding follows touches five mechanical per-axis sites
   (`resolve_publish_source`, the emit block, `run_plan`, the `warn_replaced_*`/`projected_*` pair,
   the `http_poll` URL builders) — AP44 reaching a third subsystem. **Fix it structurally WITH
-  follows, not speculatively before.** (`ForeignArtifact` staying a hand-edited closed enum is
-  **correct** — that is D24 forcing the currency question per kind.)
+  follows, not speculatively before.** ⇒ **DONE 2026-09-10 on exactly those terms —
+  `src/publish_axes.rs` is the list, and the feed is what paid for it.** See the axis entry below.
+  (`ForeignArtifact` staying a hand-edited closed enum is **correct** — that is D24 forcing the
+  currency question per kind.)
   **And the gap that is larger than it looks: `publish` cannot publish a peer's tree.**
   `resolve_publish_source` builds a **fresh in-memory peer** each run and seeds it (demo set, or
   `--ingest` of a `render/` dir); the *keypair* is durable, the *content* is assembled at publish
@@ -1424,7 +1426,50 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   entity)` is already generic over what the entities mean. So arch's *"publish a feed, follow feeds is
   easy"* is right **here** too, and F1's residue is a **reader plus an emitter** — the five mechanical
   call sites the review already scoped, best spent on the `(tree_prefix, reader)` registration table
-  (AP44) rather than a third arm.
+  (AP44) rather than a third arm — **which is what shipped** (`src/publish_axes.rs`, 2026-09-10).
+  **⚠ AND THAT PREFERENCE IS NOW A CONSTRAINT, MEASURED 2026-09-10: TWO PROJECTOR RUNS INTO ONE
+  DIRECTORY DO NOT COMPOSE, SO A STANDALONE `feed OUT_DIR` VERB IS THE WRONG SHAPE.**
+  `a_second_axis_signed_by_its_own_projector_un_names_the_first` — publish a site, then publish a feed
+  with its own `RootProjector`, and the site reads back **`Err("Absent")`** while the feed resolves.
+  `finish` builds the trie over **`self.bindings`**, the keys *that projector* recorded, which its own
+  doc already said: *"the root commits to the bytes we projected, not to the tree we read from."* The
+  second `finish` signs a root naming only its own axis. **The bytes are still on disk**, so it is an
+  un-naming rather than a delete, and the consumer says *the publisher withdrew this site* about a site
+  that is right there — AP54's wrong sentence from the opposite direction. The gate asserts the bytes
+  survive precisely so the report is legible as *wrong* rather than merely bad.
+  ⚠ **THE FIRST WRITE-UP OF THIS DREW THE WRONG CONCLUSION FROM IT, AND THE CORRECTION IS THE ENTRY.**
+  It called `publish` *"stateless per run and destructive"* and said a feed needed *"a source for
+  everything I have ever posted"*, which the operator rejected on sight — **and reading
+  `resolve_publish_source` says they were right.** The pipeline is already
+  **`ingest_path(disk) → tree → read_all_sites(tree) → project`**: publish **translates an input into
+  the tree and then projects the tree**. So the clean is not destruction, it is what a **snapshot**
+  means — *not* re-projecting is what leaves an output stale against the tree — and there is **no
+  "source of everything" problem special to feeds**, because the source is the tree and the tree is the
+  authority. `--ingest`'s `render/` dir is one workflow into it, not the model.
+  **So the finding is narrower and better than the alarm it was first written as.** What the
+  measurement rules out is *a second, independent writer putting bytes into a directory publish owns*.
+  The other order (`a_feeds_bytes_live_inside_the_subtree_a_site_publish_cleans`, feed at
+  `{base}/{peer}/app/feed/…` inside `clean.push(base.join(peer_id))`) is **not a defect at all under
+  the right model** — a re-projection carries what is in the tree it read, and a feed written behind
+  publish's back was never in it. It is kept as a **path fact** because it is the cheapest statement of
+  *why* the second writer is the mistake.
+  ⇒ **The shape is ONE projection over the tree, with a third axis read out of it** — a
+  `read_all_feeds` beside `read_all_sites` / `read_all_app_sets`, recorded through the same
+  `RootProjector`. **Built 2026-09-10; the reader is `read_owned_feed`, singular, because §4.2 pins
+  ONE index path per peer.** **No new durability model, no read-back, and `C-2`'s second-device bound is not
+  engaged**, because nothing recovers state from the out-dir. That is also exactly what the
+  registration table above is: *what publish reads out of the tree* is the policy, and the hardcoded
+  pair is the defect.
+  **`resolve_publish_source` building a FRESH in-memory peer is a real gap and it is F3, pre-existing
+  and not feed-shaped** — it is what *"publish cannot publish a peer's tree"* means, it applies to
+  sites identically, and it blocks *"Tori posts"* rather than blocking feeds.
+  ***Two transferable halves.*** (1) *Before building a verb that writes into an output directory
+  something else owns, publish the other thing there first and see what survives* — two orders, two
+  tests, twenty minutes. (2) ***A measurement is not its interpretation.*** The numbers here were right
+  the first time and the sentence around them was wrong, because *"a projection re-projects"* was read
+  as *"a publisher destroys"*. **When a measurement makes an existing, working pipeline look broken,
+  the pipeline is the thing to go and read** — one function (`resolve_publish_source`, 35 lines)
+  dissolved it.
   **And THE TREE IS A UNIVERSAL NAMESPACE: a foreign peer's entities live in MY tree under THAT peer's
   own segment**, at their natural path — `foreign_cache::store_path` → `paths::manifest_path(foreign,
   site)` = `/{foreign}/sites/…`, and `paths.rs:112` states it (*"the universal tree carries the
@@ -1558,17 +1603,19 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `ingest::read_site_dir` is pure now. *A link you cannot evaluate without standing up a peer is a link
   nobody evaluates* — and that is why the link both seats agreed was the whole risk was also the one
   neither had a fixture for.
-  **§6.1's CHUNKER MUST IS BYPASSED HERE, NOT UNEXERCISED — and the sharper claim came from checking
-  their recommendation rather than adopting it.** They measured *"nothing either seat holds exercises
-  chunking"* (right) and recommended an asset >16 KiB in the fixture. Measured through `make site`: a
-  208,046-byte source file becomes **ONE 208,109-byte `app/site-asset` entity**, 3 trie keys, no chunk
-  list. `SiteAsset` inlines at any size, so there is no chunker on this path to disagree about
-  parameters with, and a bigger file makes §6.1 no more tested. **What the asset row actually tests is
-  the prior question — do the two impls agree what an asset IS** — and today they cannot, since
-  workbench-go does not model `app/site-asset` at all. Hence **two roots** in `EXPECTED-INGEST.json`:
-  `site_root_pages` is comparable, `site_root_full` exists so the divergence is measured rather than
-  latent. **One root would make the whole gate red for a reason we already understand, which is the
-  shape of a gate nobody runs.**
+  **§6.1's CHUNKER MUST WAS BYPASSED HERE, NOT UNEXERCISED — and the sharper claim came from checking
+  their recommendation rather than adopting it. ⚠ CLOSED 2026-09-10; the pointer arm ships. Kept
+  because the reasoning is what arch made normative.** They measured *"nothing either seat holds
+  exercises chunking"* (right) and recommended an asset >16 KiB in the fixture. Measured through
+  `make site`: a 208,046-byte source file became **ONE 208,109-byte `app/site-asset` entity**, 3 trie
+  keys, no chunk list. `SiteAsset` inlined at any size, so there was no chunker on this path to
+  disagree about parameters with, and a bigger file made §6.1 no more tested. That argument is now
+  §4's `[MUST]` and the arm is built — see the `app/site-asset` entry below for what it cost and what
+  it did not move. **Two roots remain in `EXPECTED-INGEST.json`, for a WEAKER reason than this
+  paragraph gives:** our asset row is reproducible now, and what is still missing is that
+  workbench-go does not model `app/site-asset` at all, so there is nothing to compare it against.
+  **One root would still be wrong** — it would trade the pages-only comparand that works today for a
+  full root nobody can currently match, which is the shape of a gate nobody runs.
   **A markdown page with NO frontmatter stores `title: ""`; the `.html` path deliberately removes it**
   (`page_from_html`: *"an empty title would render as a blank breadcrumb, which reads as broken"*).
   Same absence, two encodings, one module — found by building the fixture, and **pinned rather than
@@ -1631,6 +1678,922 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   not* is the single most valuable thing this program can find, reported as a broken harness.
   It is **2** now — a manifest and one page, i.e. *did the fixture load* — and the key-set
   comparison carries the finding. **A floor guards the rig; it must not adjudicate the subject.**
+- **THE CARRIER IS ALREADY PAYLOAD-AGNOSTIC AND THE LEAK IS ONE FILE — measured 2026-09-10, against
+  the opposite hypothesis.** The operator asked whether we had over-built the content model and
+  under-built the payload-agnostic exchange. **The measurement inverts it.** Vocabulary references
+  (`site_id`/`SiteManifest`/`SitePage`/`SiteAsset`/`app_catalog`/`app_bundle`), comments stripped, split
+  at each file's `#[cfg(test)]` boundary: `signed_fetch` **0** in product (12 in tests, from line 830) ·
+  `signed_root` **0** (9 in tests, from 634) · `origins` **0** · `publish_layout` **0** ·
+  `foreign_cache` **2** (the `ForeignArtifact` URL dispatch, deliberate — D24) · **`http_poll` 29 in
+  product (26 more in tests, `cfg(test)` at line 594), and 13 of its 21 public fns name a vocabulary.**
+  So **4,395 lines of transfer layer whose public API names no payload type**, against **997 lines
+  holding all the coupling**.
+  **The `http_poll` cell was WRONG when first published and arch caught it — the correction is the
+  transferable half.** It read **55** under a column headed *product code*, which is the **file total**,
+  because the test-boundary split was run over three files and the raw count over the rest. **A table
+  where one cell is computed differently from the others is worse than a table that is uniformly
+  approximate**, and the tell was there to see: every other row had a `test=` figure beside it and that
+  one did not. **Re-measure the whole column with one command, never per-file.** The conclusion is
+  unchanged and the API-surface number — 13 of 21 public fns — was always the load-bearing one, because
+  it measures the *coupling surface* rather than how many lines mention it.
+  **The proof is not the API shape, it is the third consumer.** `registry_publish.rs` (1,545 lines)
+  publishes **registry bindings** through the same `RootProjector::record` / `record_hash` /
+  `sign_detached`, with zero site vocabulary in product code. Arch's `AT-1` records the ABI as shipped
+  **twice** (`sites`, `apps`) and holds the count as an observation — *"the durable claim is the coupling
+  rule, not the count."* **A third instance built for an unrelated purpose is the strongest evidence for
+  the rule and against the count**, and it is routed as such.
+  **Two consequences worth carrying.** (1) `http_poll`'s 13 vocabulary-named builders are **the exact
+  mirror of the emit-side enumeration** this file already records (`emit_owned_sites` + `for set in
+  app_sets`) — **one defect, both directions**, and a third vocabulary means editing both plus
+  `ForeignArtifact` plus `resolve_publish_source` plus `run_plan`. (2) **`registry_publish.rs` already
+  emits per-entity detached signatures** at the §5.2 invariant pointer — which is exactly what
+  `APP-CONVENTION-FEED` §1.1 makes a MUST for entries, so that requirement is **a loop, not a design**.
+  **Do not split the carrier as a standalone rename** — the charter rule stands, and FEED is the change
+  that proves the boundary. Plan: `docs/plans/PLAN-2026-09-10-…`; review: `docs/plans/REVIEW-2026-09-10-…`.
+- **`tools/vocab-lint.sh` IS THE APP TIER'S ONLY ORACLE, AND IT IS THE FIRST GATE HERE THAT READS
+  ANOTHER REPO.** Every other linter reads our own tree, because every other failure it looks for is
+  visible from inside one repo. **This one is not:** two application seats can be perfectly
+  wire-conformant and completely vocabulary-divergent **with no error anywhere** —
+  `APP-CONVENTION-SHARE` §2 states the shape, *a type-filtered query on the wrong tag returns a correct,
+  complete, EMPTY answer.* Nothing 404s, nothing mismatches, and every test on both sides stays green.
+  It wraps arch-tools' `spec vocab` (in `make lint`, baseline-ratcheted).
+  **Scoped to findings that NAME us, deliberately.** `spec vocab` reports the whole tier, most of which
+  we cannot fix — `app/feed/*` being declared-unimplemented is a roadmap fact, not our debt. **A gate
+  that fails on another party's board is a gate people learn to skip**, so it counts only
+  `implemented-undeclared` where we are a seat, `single-seat` where the seat is us, and
+  `divergent-family` where we appear. The rest prints and does not gate; the full board is arch's.
+  **The baseline carries NAMES, not a count** — this file already records the hole a count leaves
+  (*"a SWAP passes"*) in `net-lint` and `ecf-lint`, and here a swap is the dangerous case: retire
+  `app/site-asset`'s declaration debt while minting a new undeclared tag and the tier is no better off.
+  Set comparison, so it **fails both ways** — a baseline row that stops being reported is also a red,
+  because a baseline outliving its debt silently re-admits it.
+  **It SKIPS when it cannot look and says exactly what went unchecked.** Three sibling checkouts are
+  needed and a fresh clone must not fail its own lint — but a silent skip is the failure mode this repo
+  has been bitten by repeatedly, so the skip names the missing path *and* the class it did not measure.
+  **Falsified four ways:** mint an undeclared tag in product code → red naming it; add a baseline row
+  with no live finding → red; analyzer absent → loud skip, exit 0; analyzer present but returning
+  non-JSON → a *different* loud skip. Plus the positive control.
+  **Two bugs it cost, both invisible to reasoning.** (1) **A heredoc and a pipe cannot both own stdin** —
+  `printf '%s' "$RAW" | python3 - <<'PY'` gives python the *program* and leaves `json.load(sys.stdin)`
+  reading the empty remainder, so the gate degraded to a **skip that looked legitimate**. It reads the
+  JSON from the environment now. (2) **`seats` is a LIST, not a count** — `d.get("seats",0) >= 2` threw,
+  and the first run reported *"fewer than 2 application seats"* on a perfectly healthy pair. Both were
+  found by **running the script**, not by reading it, and both produced a green-or-skip rather than a
+  red — *the two failure modes a gate must never have.*
+  **IT EARNED ITS KEEP IN ONE DAY, AND ON THE EXACT CASE THE NAMES-NOT-COUNTS CHOICE WAS MADE FOR.**
+  Arch answered `A-27` by **declaring** `app/site-asset`, so the finding **reclassified** —
+  `implemented-undeclared` → `single-seat` — and the gate went **red on the reclassification**.
+  **A count-based baseline would have passed it silently: one row out, one row in, total unchanged.**
+  That is the same swap this file already records `net-lint` and `ecf-lint` as structurally unable to
+  see, caught here because the baseline is a set. **When a ratchet's subject can change CLASS rather
+  than only count, the baseline must name the class.**
+  **SECOND INSTANCE THE NEXT DAY, and it is the stronger one because the movement was net-DOWNWARD.**
+  Closing the SHARE divergence (2026-09-10) retired **two** rows — `divergent-family app/share/*` and
+  `implemented-undeclared app/share/manifest` — and added **one**, `single-seat
+  app/share/publication`, which is honest rather than debt we chose: arch minted the type the day
+  before and we are the first seat to implement it. **A count-based ratchet would have read 4 → 3,
+  passed, and never shown that the tier's only divergent family had closed** — the single most
+  important thing that run had to report, invisible to a number that moved in the right direction.
+  *A ratchet that only counts cannot tell you what got better.*
+- **WHEN A NORMATIVE FIELD'S TYPE HAS NO DEFINITION, GREP FOR THE PRODUCTION NAME — if it resolves
+  nowhere, THAT is the finding (2026-09-11).** We asked arch what an `app/feed/entry`'s `body` should
+  contain, reasoning that `body: embed-node` needed an `Embed` entity and **neither seat has one**. The
+  premise was a level below where either seat looked: **`embed-node` was defined nowhere.** One
+  occurrence in all of `specs/` and `guides/` — in `APP-CONVENTION-FEED` §2.3's own CDDL, *as the type
+  of the field*. EMBED defines `embed-data` and the `Embed` entity and **no production of that name**.
+  We were not blocked on an absent entity; **we were reading a dangling reference**, which is why the
+  question had no good answer and why every answer we reasoned toward was wrong in an interesting way.
+  **The near-miss is why it mattered.** The term's only descriptive use in the corpus points at
+  **`EmbedOutput`** — EMBED §4, the *output* contract — and a fixture built to that description would
+  have **published rendered output as the stored wire format**, breaking three `[LOCKED]` sections at
+  once and, worst, **§4.0 makes `EmbedOutput` a CLOSED vocabulary by design**, so the format could never
+  carry a content kind that vocabulary did not anticipate. The input surface is open on purpose. **One
+  fixture from publishing the closed half of the model as the tier's baseline**, against our own
+  *whatever publishes first is the baseline* rule.
+  **This is the third blocker in three days that dissolved on opening the corpus, and the shape is
+  new** — the first two were answers in a section nobody opened; this one was **a production that does
+  not exist**. Resolved as EMBED §3.1, the inline `(type, data)` form: *a node and an entity differ in
+  addressing only, and the dispatch key is carried rather than dropped.*
+- **`app/site-asset` TAKES EMBED §3's POINTER ARM ABOVE 16 KiB — shipped 2026-09-10
+  (`content_site/asset_store.rs`), and it was NOT a fixture-conformance item.**
+  `SiteAsset` was `{media_type, bytes}`, inline at any size; it is now `{media_type, payload}` over
+  EMBED §3's **tagged** union, reused rather than restated (the §4 CDDL says so: *"NOT a second
+  payload union; the embed one, reused"*). **We had the reasoning half-right and arch made it
+  normative:** inlining does not *fail* §6.1's canonical chunking MUST, it makes it **unreachable** —
+  *"no reproducible-publish check can observe it."*
+  **THE HANDOFF SCOPED THIS OFF THE FIXTURE'S 32 KB `big.svg`, AND THE FIXTURE IS THE SMALL HALF.**
+  Measured on a real published tree before touching anything: **629 of 1,346 site assets are over 16
+  KiB (47%)**, largest 476 KB — i.e. most figures in the papers sites. So a producer-only change was
+  never shippable; it would have blanked half the figures on the live sites. **Before pricing a
+  conformance fix, measure how much production traffic sits in the governed case** — the fixture is
+  where you *notice* the rule, not where its cost lives.
+  **`stage` RETURNS the blob closure rather than only writing it.** Chunking leaves every caller a
+  second obligation — the publisher must project the blob+chunks, the browser must persist them — and
+  a function that only wrote into the store it was handed would leave that to memory (AP44). A caller
+  that ignores the return gets an unused-variable warning, not a site whose figures 404. Same reason
+  `read::OwnedSite` and `resolver::ResolvedPage` grew a `content` field: the site travels whole.
+  **`--verify` WAS GREEN ON A TREE WHOSE FIGURE NOBODY COULD RESOLVE, AND THAT IS AUDIT F8 A SECOND
+  TIME.** Measured by hand, not reasoned: delete the asset's chunk from a published tree and verify
+  printed *"every pointer resolves and every body hashes to its address"*, exit 0, while the closure
+  count silently dropped 11 → 10. `trie_closure` finds a `payload.hash` fine — a 33-byte hash is a
+  33-byte hash wherever it sits — but it **filters on presence, so it cannot see absence**. The fix
+  was already written down *in that same function* by F8: *"A heuristic scan cannot close it…
+  Structure can."* An `app/site-asset` declares its blob and a `system/content/blob` declares its
+  chunks, so both are decoded now. **Worse than a missing trie node and that is why it got its own
+  gate** — a missing interior node makes a subtree unreadable and is loud; a missing asset closure
+  renders the page perfectly and drops only the image. Gate:
+  `a_pointer_assets_blob_closure_is_declared_so_verify_fails_when_it_is_missing`, **both arms
+  falsified separately** (drop the asset arm, drop the blob arm).
+  **THE WIRE EVENT, and what it did NOT move.** `EXPECTED-INGEST.json` was regenerated —
+  `site_root_full` and the asset binding moved; **`site_root_pages` did not**, and neither did
+  `EXPECTED.json`, so `make crossimpl-site` still reports **AGREED** and the comparand the other seat
+  actually runs against is untouched. **The plan predicted the two roots would collapse into one.
+  They do not, and collapsing them would have been a regression:** `entity-workbench-go` does not
+  model `app/site-asset` at all, so one root would trade the pages-only comparand that works today
+  for a full root nobody can compare against. What changed is *which side the gap is on* — our bytes
+  are now reproducible from the source file and the canonical chunker alone; the missing piece is a
+  counterpart implementation. **Say "reproducible" and "comparable" separately; they are not the same
+  claim.**
+  **The boundary is asserted from both sides** (`the_inline_ceiling_is_asserted_from_both_sides`):
+  16,384 is the *last* conformant inline size, 16,385 the first pointer size. `F-5`'s lesson — a
+  bound asserted from one side passes for an implementation that only ever went one way, and here
+  each direction has a different wrong implementation (pointer-everything vs the all-inline path this
+  change retires).
+  **Worker-arm bound, stated:** resolving a pointer needs a content-store read by hash, the renderer's
+  asset resolver is a **synchronous** closure inside a render pass, and the Worker/OPFS proxy has no
+  content verb — so `?worker=1` does not hold an oversized asset's bytes locally. Direct/IDB is the
+  shipped default. `WriterHandle::content_put`/`content_get` is the seam and it **logs** on Worker
+  rather than silently succeeding, for the reason that module's own history gives.
+  **Pre-existing Makefile defect found on the way, NOT fixed here:** `stage_publish_sources` is a
+  no-op when `VERIFY` is set (`$(if $(VERIFY),,…)`), so `make site INGEST=… VERIFY=1` publishes
+  **nothing** — `--ingest=.ingest-stage` names a directory that was never created, and the run exits 1
+  from verify complaining the tree is absent. Confirmed by neutering the whole change (`git stash`)
+  and reproducing identically: *if the symptom survives your change being gone, the symptom is not
+  yours.* Publish and verify as two invocations until someone fixes it.
+- **CHANGING A WIRE SHAPE IS A QUESTION ABOUT THE BYTES ALREADY PUBLISHED, AND THE POINTER ARM
+  SHIPPED WITHOUT ASKING IT — found in the audit of the commit that shipped it, 2026-09-10.**
+  `SiteAsset::from_entity` read only the new `payload` key, so **every already-published asset
+  decoded to `Inline(0 bytes)`**. Measured on a real 30,778-byte published figure:
+  `resolve()` → **`Ok(0)`**, rendered as `data:image/png;base64,` with no data. **All three gates
+  were green** — the suite, `crossimpl-site`, and `e2e-worker` 68/0 — because every fixture in every
+  one of them was written by the new encoder. *A test population you generated cannot contain the
+  shape you are migrating from.*
+  **What makes it a blocker rather than a migration note is the cache-arm ordering, and that is the
+  transferable half.** `MultiResolver::resolve_page` tries the durable cache **FIRST, with no
+  network**, so a returning visitor to any foreign site they have already viewed reads the old-shape
+  entity out of their own tree and **never issues the fetch that would heal it**. Republishing the
+  origin does not reach them. So the usual reassurance — *"it fixes itself on the next publish"* —
+  was false here, and checking *which arm serves the stale copy* is what turned a "we should
+  migrate" into "we cannot ship this".
+  **Two defects, one commit, and only one of them is about compatibility.**
+  **(1) The silent-empty default.** `AssetPayload::default()` was `Inline(Vec::new())`, so *"we
+  cannot read this"* and *"the publisher shipped an empty file"* were **the same value on the
+  SUCCESS path** — AP40 where no care at a call site can recover it. Sharper still:
+  `inline-payload` is `bstr .size (1..16384)`, so **`Inline(vec![])` is not representable on the
+  wire at all** — an illegal state was being used as the safe default. Now `AssetPayload::Unreadable`
+  + `ResolveError::NoPayload`. **When you pick a `Default` for a decoded wire type, check the CDDL
+  admits it.**
+  **(2) The legacy read**, deliberately narrow: it fires **only when `payload` is absent entirely**,
+  never when it is present and unreadable, so an open type growing a `bytes` key meaning something
+  else cannot be claimed by it. It is a **read, never a write** — `to_entity` emits only the declared
+  shape, so the cache write-through heals as it goes — and it is **reported** through
+  `SiteAsset::from_legacy_encoding` at the two one-shot boundaries (HTTP fetch, owned-tree read) and
+  **never in the render loop**, because a papers page has twenty figures and twenty warnings a frame
+  is how a real signal gets muted. *A concession with no instrument behind it can never be retired.*
+  **The same collapse a second time, found by reading the CDDL instead of our own comment.** Our
+  decoder mapped every unknown payload tag to `Unreadable`, i.e. *malformed*. But the site-asset
+  CDDL says `payload: embed-payload`, and that union is `inline / pointer / **child**` — so a
+  **conformant** producer can emit an arm we simply have not built, and calling their bytes corrupt
+  is the wrong attribution. Split into `AssetPayload::Unsupported { tag }` /
+  `ResolveError::UnsupportedPayload`. **An UNTAGGED payload is still refused** (EMBED §3's MUST) —
+  *unknown tag* and *no tag* are different facts and stay different.
+  **And the zero-byte edge, from the same re-read:** `stage` used `<= MAX`, so an empty file emitted
+  a non-conformant `.size (1..16384)` payload. The range is `1..=MAX` and **everything outside it —
+  above or below — takes the pointer arm**, which represents an empty blob exactly. *Read the bound
+  as a RANGE; a ceiling has two ends.*
+  **The consequence for the cache is a rule worth carrying:** `persist_to_cache` stores
+  `asset.to_entity()`, a **re-encode from the decoded struct, not the origin's bytes** — so an arm we
+  did not understand would be dropped on the way in and the cached copy would claim to be a complete
+  asset carrying nothing. It now **skips** any asset it could not use, leaving no entry so the next
+  visit re-fetches. **If your cache re-encodes rather than storing bytes, it can only cache what it
+  fully understands.**
+  Gates: `an_asset_published_before_the_pointer_arm_still_resolves_to_its_bytes`,
+  `an_unreadable_payload_is_an_error_and_never_an_empty_success` (three shapes, three *distinct*
+  answers — an earlier cut asserted one answer for all three and had to be corrected),
+  `a_present_but_unreadable_payload_does_not_fall_back_to_the_legacy_key`,
+  `re_encoding_a_legacy_asset_emits_the_declared_shape`,
+  `an_empty_asset_is_outside_the_inline_range_and_takes_the_pointer_arm`. Both neuters falsified and
+  they hit **different** test pairs, so the legacy read and the `Unreadable` default are separately
+  measured. **The audit moved no wire bytes** — `EXPECTED-INGEST.json` is byte-identical after it, so
+  the packet already routed to `entity-workbench-go` stayed accurate.
+  **Standing check, and it is the one this arc says to add:** *when you change a stored shape, decode
+  something a PREVIOUS BUILD wrote before you believe any gate.* A published tree is on disk in
+  `dist-*`; it costs one probe test. And ask which arm serves a stale copy — if a cache is consulted
+  before the network, "the next publish fixes it" is not true.
+- **A TAG CORRECTION IS A BODY QUESTION — the SHARE divergence, closed 2026-09-10 (`src/share.rs`).**
+  We emitted `app/share/manifest`; `APP-CONVENTION-SHARE` §2 has declared `app/share/record` since
+  v0.1. That was the application tier's **only** `divergent-family` — two seats, **zero tags in
+  common** — and the failure is the one §2 names: *a type-filtered query on the wrong tag returns a
+  correct, complete, **empty** answer.* Nothing 404s, nothing mismatches, every test on both sides
+  stays green. Ours was the wrong tag, so we moved.
+  **It read as a rename on every board that tracked it, including ours, and it was not.** The body
+  diverged on **four** axes at once: audience was a token string where §2.2 wants
+  `[* audience-entry]`, `target` was flat sibling `blob`/`prefix` keys with the variant **inferred
+  from which one was present** (§2.2's CDDL rules that out by hand — *"TAGGED — no untagged
+  ambiguity"*), the publisher was a self-declared `from` field, and `created_at` was absent while the
+  schema requires it. **Shipping the ruled tag over the old body is strictly worse than the honest
+  divergence**, because the failure moves from *"we cannot find your shares"* to *"your shares are
+  corrupt"* — entities that **claim** conformance and fail to decode at a conformant reader. The
+  other seat named this trap for us before we started (`WC-2`), which is the argument for stating a
+  correction you owe *before* you make it.
+  **INTEROPERABLE AND BYTE-STABLE ARE DIFFERENT CLAIMS, and the second is what decides extension
+  fields.** V7 §2.6 makes unknown fields MUST-ignore, so keeping our `kind`/`from`/`size` would have
+  interoperated perfectly — and **SHARE-1/SHARE-2 assert the record encoding is byte-stable
+  cross-impl**, which an encoder that always adds a key of its own can never satisfy. So the rule is
+  **emit the declared fields and nothing else**, and it is `G-PIN-4`'s lesson arriving one convention
+  early: whatever publishes first is the baseline. Sibling to *reproducible ≠ comparable* one entry up.
+  **DROPPING A PROVENANCE FIELD WAS A CORRECTNESS GAIN, NOT A COST — the general form is worth
+  carrying.** §4 requires a mirrored share to sit at `/{publisher}/…` verbatim, so the publisher is
+  **always in the path**. That makes the namespace a **fact** where a `from` field is *a stranger's
+  self-declared claim about their own identity* — the decoder takes the publisher as an argument and
+  a body that smuggles one back cannot override it (gated). **When the structure already carries a
+  fact, a field restating it is not redundancy, it is an untrusted second source** that a reader has
+  to decide between. This is D25's axis pointed the other way: there, a value needed provenance
+  added; here, provenance was already load-bearing in the path and the field was the weak copy.
+  **§2.6's MUST-IGNORE IS THE DEFAULT THAT FIGHTS THE CARVE-OUT — AP45's shape, second convention.**
+  SHARE-8 requires a `publication` carrying an `audience` to be **rejected as invalid**. Follow §2.6
+  and you skip it silently, laundering the one shape the type exists to exclude into an
+  ordinary-looking row, with nothing anywhere reporting it. Refused as its own outcome
+  (`InvalidForType`, kept apart from *malformed* — a deliberate schema violation is not a corrupt
+  byte). Same trap `GUIDE-ENTITY-WORKBENCH-APP` §5.4 rule 3 caught us on for two months: **when a
+  rule carves an exception out of a rule you satisfy, the exception needs its own handling and its
+  own test.** Two conventions now; a third makes it tier-wide rather than local.
+  **`Public` and *self-only* are SIBLING VARIANTS, not two values of one field**, because SHARE-7
+  exists precisely because reading an empty audience as public is the intuitive-and-wrong answer —
+  and a type that cannot express the confusion cannot ship it. `policy_key` → **`policy_keys`**
+  because §3 is plural (one `audience-entry` per member, each with its own minted token); the
+  singular version could only ever express one.
+  **Verified in the kernel rather than reasoned, and it corrected the reasoning:** a publication
+  still files under the `default` policy key. `default_connection_grants()` covers only
+  `system/type/*` + `system/handler/*` reads, `capability:request` and `observe-address` — **not
+  `system/content`** — and `assemble_inbound_grants` UNIONS the matched policy entry on top, so
+  `default` is *how* §2.5's *"none required, pull-only"* is delivered rather than a contradiction of
+  its *"no grant"*. **The same `default` key is a CEILING on the `request` path and a FLOOR on the
+  connection path** (the kernel says so in its own comment, and records that the collision cost a
+  13/13 → 7 P/6 F regression) — which is exactly why the sentence has two readings. Routed as `A-31`
+  with SHARE-9 as the deciding argument: a vector requiring a consumer with **no token** to be **not
+  refused** is unpassable under the literal reading.
+  Gates: 32 in `share.rs`, **four neuters, each landing on distinct tests** — tolerate an audience on
+  a publication (reds printing the laundered `audience: Public` on the *success* path) · read an
+  empty audience as public · emit `from` / trust the body's `from` (**red separately**, the second
+  showing `"SOMEONE-ELSE"` beating the real publisher) · a tolerant legacy read of the old tag (reds
+  with the asset regression's exact shape, `Ok(Share { title: "", target: Prefix("") })`).
+  **No legacy read, and the discriminating question is the entry above's:** *which arm serves the
+  stale copy?* **Here, none** — nothing in the product decodes a share entity yet, the live
+  file-transfer listing reads `file_offer`'s own untouched manifest, and `withdraw_share` is
+  path-based. So an old row is **inert**, not stale: refused as `NotAShare`, contributing no policy
+  key, never a silent empty success. A legacy read would also keep the retired tag in product code,
+  which is the debt the change exists to pay. **Gated anyway**, from a hand-built fixture in the old
+  encoder's literal layout — the asset regression's root cause was that every fixture in every gate
+  had been written by the *new* encoder, so a fixture produced by calling this module would rebuild
+  the hole.
+  **Stated bound: a blob share's size is no longer persisted.** Recoverable from the content store;
+  the surface that wants it looks it up.
+- **WE STATED A RULE AND PROPOSED BREAKING IT IN THE SAME PACKET — A-30b, caught by arch 2026-09-10.**
+  The SHARE work established, in as many words, that *a deliberate schema violation is not a corrupt
+  byte* and kept `InvalidForType` apart from *malformed* for SHARE-8. **Four sections later the same
+  document proposed that if arch answered "no" on A-30, `child` would move from
+  `UnsupportedPayload` into EMBED §3's untagged refusal and *"nothing else changes"*.** That is the
+  identical collapse, in the identical direction, against the identical rule — proposed by the author
+  of the rule, about a neighbouring convention, in one sitting.
+  **EMBED §3's refusal governs a payload with NO DISCRIMINATOR.** A `child` payload on an
+  `app/site-asset` is correctly tagged, well-formed and unambiguous; it is invalid *for its type*.
+  Reporting it as malformed tells an operator the publisher shipped a corrupt byte when they shipped a
+  schema violation — **and those route to different people.** There are **four** outcomes and each
+  names whose defect it is: resolved · *a tag we have not built* (**ours**) · *`child` on an asset*
+  (**theirs, a schema violation**) · *no tag at all* (**theirs, malformed**).
+  **The transferable half is not the rule — it is that having the rule did not help.** A principle
+  articulated about subsystem A does not fire when you are reasoning about subsystem B, even minutes
+  later, because the *shape* is what recurs and the shape is not what you indexed it under. **When you
+  write down a distinction, grep your own open proposals for the collapse it forbids** — the cost here
+  was zero only because a counterpart read both halves of one document.
+  **And the argument we used was the weaker one available.** We reasoned from SITE §4's preamble —
+  *an asset is bytes with a name* — and honestly flagged it as an inference from prose. The version
+  that does not rest on prose was one document over: `child-payload.ref` names a sibling `Embed`, and
+  **an `Embed`'s dispatch key IS its type tag**, which is precisely why EMBED §3 carries no
+  `data.media_type` (*"a redundant second source of truth"*). A site asset carries `media_type` in
+  `data`. **So a `child`-payload asset holds two media types that can disagree** — the exact redundancy
+  EMBED deleted by hand, reintroduced one convention over. *When your argument for a narrowing is
+  "the prose reads that way", go and look for the structural version in the document you are
+  importing from.* Gate: the four outcomes in
+  `an_unreadable_payload_is_an_error_and_never_an_empty_success`, which asserts the **discrimination**
+  (SITE §9's vector fails a run that reports `child` as malformed *or* as an unimplemented arm).
+  Falsified.
+  **Third instance of the carve-out rule, and it generalised rather than repeating.** The first two
+  (`GUIDE-ENTITY-WORKBENCH-APP` §5.4 rule 3, SHARE-8) are about **unknown fields**; this one has no
+  unknown field in it — `app/site-asset` **imports a union wider than the importing field admits**, so
+  a decoder reusing the imported type accepts the excluded arm and reports nothing. Same laundering,
+  different mechanism. It is now tier-wide in `GUIDE-APPLICATION-DEVELOPMENT` §3's binding table:
+  ***where your type carves an exception out of a rule you otherwise satisfy, the exception needs its
+  own refusal and its own named check.*** We predicted the promotion trigger (*"if a third appears it
+  is probably a tier-wide note"*) and then supplied the third ourselves, in the same packet pair.
+- **PHASE 2a IS BUILT — the reference atom, the embed node and four FEED types — AND BUILDING THREE
+  IMPORTED CONVENTIONS FOUND SIX THINGS READING THEM DID NOT (2026-09-10).** `src/entity_ref.rs`
+  (`APP-CONVENTION-REFERENCE` §2.1's `entity-ref` + §3's string form) · `src/embed.rs` (EMBED §3's
+  `embed-node`, `embed-data` and the payload union) · `src/feed.rs` (`app/feed/{entry, index-head,
+  index-page, follow}`) · `src/percent.rs`. **None of it is on the wire yet** — no type carrying an
+  atom ships, and the FEED types have no publisher until 2b.
+  **Order was reference → embed → feed and it is not arbitrary:** a convention that IMPORTS an atom
+  cannot be implemented before the atom has a home, and EMBED's `child` arm was literally unwritable
+  until `entity-ref` existed. **The handoff's own sizing (*"~600 lines by analogy with the site
+  vocabulary"*) did not hold, and the reason generalises: the site convention imports no atoms and
+  FEED imports two.** Count what a convention IMPORTS before you price it by the size of a sibling.
+  **THE ONE THAT COSTS SOMETHING IF IT IS MISSED: `REFERENCE` §4's `[MUST NOT]` binds *"a producer
+  **that emits the atom at all**"*, and we emit `entity://` in link positions today** (`content_site::
+  location`, the static export, the content-site output). We emit no atom, so we are conformant **now**
+  — and the clause engages the moment a type carrying one ships, which is the whole of 2b. The consumer
+  half is already right (§4's SHOULD keeps `entity://` resolving). **Routed as a scope question — what
+  is the granularity of *"a producer"*: the implementation, the document, or the link position? —
+  because the answer decides whether a published-corpus migration is owed.** *A conditional MUST NOT is
+  a tripwire with your own next commit on the other end; go and find yours before you trip it.*
+  **§3.2's losslessness `[MUST]` names no encoding for three of the four query/fragment terms, and for
+  two shapes it is unsatisfiable rather than merely unspecified.** Satisfying it *jointly* — the only
+  way it means anything — needs a spelling for `via`, for the `at` fragment and for the **parameter
+  order** (byte-identical re-serialization requires a canonical one). `hash`/`seen` we did **not**
+  invent: `Hash::to_hex` is V7 §3.5's invariant-pointer spelling, already published by this system —
+  *reach for the spelling the corpus already emits before you mint one.* And: `via: []` and
+  `at: {field: []}` have **no** string spelling (zero query occurrences *is* absent), and a
+  peer-relative `path` cannot survive a URI path component that always begins with `/`. We collapse the
+  first two **in the encoder as well as the decoder** so the wire cannot express what the string cannot,
+  and normalize the third on construction. Every choice is stated in the module doc and pinned by a
+  test, so a ruling moves one file.
+  **`RefError::ExcludedField` is the carve-out rule applied at the first opportunity after it went
+  tier-wide** — §3.1 refuses a *string* carrying both `hash` and a non-empty path while the *atom* form
+  is silent about a `"pin"` carrying `path`, and §2.6's MUST-ignore would launder the confusion §2.3
+  spends a paragraph excluding. Refused, kept apart from `Malformed`, **narrow** (the discriminator's
+  own two slots), and `an_ordinary_unknown_field_is_still_ignored` is the arm that measures the
+  narrowness — verified to stay **green** under the neuter that reds the refusal.
+  **EMBED §3's PAYLOAD UNION WAS ALREADY IMPLEMENTED, ONCE, IN THE WRONG PLACE — and its own comment
+  said so while the code did not.** It was `content_site::format::AssetPayload`: named for assets,
+  codec-private, carrying a union that belongs to EMBED — and the file's CDDL note read *"NOT a second
+  payload union; the embed one, reused"* over code that restated it. C15's shape, caught **before** the
+  second carrier rather than after. **A comment claiming a factoring is not the factoring**, and the
+  tell is cheap: ask which module would have to change if the shared thing changed. Moved with
+  `EXPECTED-INGEST.json` byte-identical and `make crossimpl-site` AGREED at the unchanged root as the
+  one-command proof.
+  **The move created a decode path that did not exist and it needed a row:** the shared decoder
+  *parses* the `child` reference, so a `child` now reaches the site layer as **`Ok(Child)`** and as
+  **`Err(BadRef)`**, where before there was one path. Both land on `InvalidForType` — the field refuses
+  the arm whatever its reference says, and adjudicating an atom we would never follow would report the
+  publisher's smaller mistake and hide the one that decides the outcome. **The existing vector's `child`
+  row carried a deliberately-too-short hash, so it exercised only the `BadRef` path**; the row with a
+  reference that *parses* is what reds under the `Ok(Child)` neuter. *When a refactor adds a second
+  route to an existing outcome, the old vector covers one of them.*
+  **⚠ EMBED §3 CARRIES A MUST WHOSE JUSTIFICATION NAMES THIS REPO, AND WE DO NOT SATISFY IT.** *"An
+  inline directive MUST lower to a `child` payload; it is sugar, not a parallel format
+  (workbench-go/entity-browser-rust round-trip pin: 'edit in entity-browser-rust, view in workbench'
+  requires the directive and the child entity be the same thing)."* **Ours lowers to nothing** —
+  `content_site::embed`'s directive carries a site-relative asset path resolved against
+  `app/site-asset`, we mint no `Embed` entity, so there is no `child` payload for it to *be*, and what
+  we ship is the parallel format that sentence excludes. It is the sharp form of `A-24`. **No gate can
+  see it: a MISSING emission is not a divergent tag**, so `vocab-lint` is silent by construction.
+  Recorded in both modules' docs; not repaired, because the repair is a design question about whether
+  SITE's asset model becomes `Embed` entities.
+  **FEED §2.4 AND §4.4 DECLARE TWO DIFFERENT CURSORS, AND THE DECLARED ONE CANNOT SATISFY `FEED-R14`.**
+  §2.4's CDDL is `? cursor: content-hash`; §4.4 says *"the cursor is `{page, applied}`"* and, in as many
+  words, *"this is why the cursor carries a number and not only a hash"*. A bare hash is exactly the
+  form §4.4 rules insufficient, so *resume from `page` when `applied` no longer resolves* has no field
+  to read `page` out of. **We implement the DECLARED field and route it** — `G-PIN-4`'s rule, one
+  convention early: whatever publishes first is the baseline, and inventing a `{page, applied}` map
+  would make us the baseline for a shape the spec does not declare. Bounded and stated: §2.4 makes a
+  follow record **the reader's private data** that nothing publishes, so where the page number lives for
+  our own resumption is a phase-3 local-state decision. **Pinned by a test, not only by prose**, so the
+  answer has a gate to change.
+  **An entry KEEPS `author` where a Share DROPPED `from`, and that looks like an inconsistency between
+  two conventions and is not.** A share is read in the publisher's tree, so §4 of SHARE makes the
+  namespace the fact and a `from` field a stranger's self-declared claim about their own identity — we
+  deleted it. **An entry TRAVELS** (§6's mirror), and one read out of a gatherer's tree has no namespace
+  to consult. `FEED-R1` keeps it honest and `from_entity` takes the namespace and refuses a mismatch.
+  ***Carry a fact the structure supplies only where the structure stops supplying it.***
+  **Two requirements are asserted as ABSENCES, which is the only way to assert them.** `FEED-R8` forbids
+  rejecting an entry for an implausible timestamp and `FEED-R12` forbids assuming any page size — both
+  are things we must NOT do, and *"we do not check X"* is exactly the claim a later author repairs into
+  a bug. `0`, `u64::MAX` and a 500-entry page are pinned.
+  **A NEUTER CAME BACK GREEN FROM THE THIRD CAUSE, AND THE SHAPE IS NEW.** The charter already records
+  two (the gate does not measure it; the neuter did not land) and a third (*the thing you neutered does
+  not do what you thought*). This is a fourth, inside the assertion: `an_empty_via_…` compared
+  `with_empties.to_value()` against `bare.to_value()` — **two atoms against each other** — so an encoder
+  emitting `via: []` for *both* satisfied it while the property the test's own name claimed was *absent*. It
+  asserts the key is **not in the encoded map** now and reds alone under the same neuter. ***When a test
+  asserts two things encode alike, ask whether the property you mean is "alike" or "absent"*** — an
+  equality between two outputs of the same defect is satisfied by the defect.
+  **`vocab-lint` WENT RED CORRECTLY (four honest `single-seat` rows — both seats measured at ZERO on
+  FEED and we are the first to implement any of it) AND CANNOT SEE A PARAMETRIC FAMILY BEING
+  IMPLEMENTED.** `spec vocab` reports `embed` as **3 declared / 0 implemented** while this repo now
+  ships an `app/embed/{media_type}` encoder. The mechanism is in the analyzer's own source and its rule
+  is individually correct — a literal ending in `/` is skipped, because `"app/share/records/"` is a tree
+  **prefix** and the first run of that analyzer reported a path as undeclared vocabulary. But
+  `"app/embed/"` is not a prefix, it is the parametric tag the convention declares, and the concrete
+  tags are **composed at runtime** and are literals nowhere. **The declaring side has `_DECL_PARAM` for
+  parametric families; the implementing side has no counterpart.** Direction matters: `_DECL_PARAM`'s
+  own comment says the expensive false direction is *accusing a conformant seat of inventing
+  vocabulary*, and **this is the quiet one — it under-reports in silence**, the same shape as a missing
+  emission not being a divergent tag. Routed as an analyzer observation; nothing for the baseline to
+  hold, because **the finding is an absence of findings**.
+  **Scope, stated so nobody reads it wider:** four of FEED's six types. `collection` (§5) and `mirror`
+  (§6) are **not** built — the mirror is phase 4 and needs the byte-fidelity republication path rather
+  than a codec, the collection has no consumer — and `FEED-R2`'s per-entry detached signature is **2b's
+  loop, not this module's** (the path builder is the kernel's `invariant_signature_path`, the emitter is
+  `registry_publish::sign_detached`). **There is no resolver**, so every `REFERENCE` requirement phrased
+  *"a reader that resolves…"* — `REF-R5`, `R6`, `R19`, `R21`, and vectors `REF-V7`/`V11` — is
+  **unmeasured**. Do not read these green tests as those being covered.
+- **PHASE 2b IS THE LOOP, NOT `FEED-R2` — `src/feed_publish.rs`, 2026-09-10, and closing it found
+  five things three phases of codec could not.** Publish entries + their detached signatures + the
+  §4 index through the **same `RootProjector` a site publish uses**, and read them back through the
+  **same `SignedSession` a site consumer uses**, with `FEED-R4`'s attribution attached. `make test`
+  1699 → **1713 / 0 / 19**, `make lint` green, `make crossimpl-site` **AGREED at the unchanged
+  root**. Native only. ⚠ **The "no CLI verb publishes a feed" half is RETIRED as of 2026-09-10** —
+  `publish --ingest-feed=<dir>` does, through the axis table.
+  **The handoff scoped 2b as "mint the signature entity", which is two dozen lines and would have
+  left THREE CONSECUTIVE PHASES OF CODEC WITH NO CONSUMER.** That is AP34/AP35's population problem
+  arriving by a different road: a module's own round-trip test cannot see anything that lives
+  *between* modules, and every finding below is in that gap. ***When a phase's deliverable is a
+  third codec, ask what would consume it and build that instead*** — the loop is what turns a
+  design into something that can be wrong.
+  **PAGES FILL OLDEST-FIRST AND ARE READ NEWEST-FIRST, and getting it backwards violates §4.3 rule 3
+  through the ordinary act of posting.** Rule 1 makes pages key-addressed so *"rewriting page 12
+  changes page 12's binding and nothing else"* — which only holds if a new entry lands on the **last**
+  page. Fill newest-first and every publish shifts every entry one slot, so the whole archive is
+  rewritten and every reader's cursor dies. **Measured, not argued:** the neuter reds
+  `posting_again_rewrites_only_the_last_page` with **page 0's content hash moving between two
+  publishes**. Within a page the order is the opposite (§4.5, newest-first, *authored* not derived),
+  so the two run against each other by design and a test that only checked the round trip would pass
+  with **both** reversed — which is why `pages_fill_oldest_first_and_read_newest_first_within_a_page`
+  pins the plan directly.
+  **`signer = author` IS FEED'S SHORTHAND FOR A FIELD IN SOMEBODY ELSE'S TYPE.** §1.1 says the
+  signature carries *"`target = entry_hash` and `signer = author`"*; `system/signature` is the
+  **kernel's** type and its `signer` is *"content hash of the signer's identity entity (**NOT**
+  peer_id string)"* — the kernel shouts that parenthesis. An implementer reading FEED alone puts a
+  peer id in a `bstr` slot that wants a hash and produces something no verifier can use. ***When a
+  convention assigns a field it did not define, open the defining document.***
+  **A CHECK WHOSE NEUTER ONLY MOVES THE ERROR LABEL IS A REPORTING CHECK — and the module doc said
+  otherwise until the neuter ran.** `attribute` cross-checks the signature's `signer` against the
+  author's rebuilt identity hash, and the doc claimed that refused a copied signature. It does not:
+  deleting it leaves a stranger's signature landing on `BadSignature`, because `verify_for_key_type`
+  against the author's key already refuses it. What the check actually buys is §1.1's `signer =
+  author` being enforced at all, and *"somebody else signed this"* staying apart from *"these bytes
+  are wrong"*. ***Describing a reporting check as a defence is the overclaim a security review then
+  has to unpick*** — and the neuter is what tells you which you built. Verification needs **no key
+  distribution and no second fetch**: a canonical Ed25519 peer id embeds its own public key, so a
+  peer id that does **not** (Ed448, the legacy SHA-256 form) is its own outcome —
+  *"we could not check"* must never render as *"this is not theirs"*.
+  **`vocab-lint` WENT RED ON A PATH, WHICH IS THE SECOND INSTANCE OF ITS PATH/TAG CONFUSION AND THE
+  FIRST IN THE EXPENSIVE DIRECTION.** `spec vocab` skips a would-be tag only when the literal ends in
+  `/` — the rule added after its first run reported `app/share/records/` as undeclared vocabulary.
+  `app/feed/index` is a **complete** path, so it carries no trailing slash, and the gate reported
+  `implemented-undeclared app/feed/index`: a type tag no spec declares and **we do not emit**.
+  `_DECL_PARAM`'s own note calls accusing a conformant seat of inventing vocabulary the costly false
+  positive, and this is it. Our keys are **derived from a leading-slash literal** now
+  (`feed::index_head_key`), which also collapsed two expressions of §4.2's pinned paths into one —
+  so the repair is C15's rule and the green gate is a side effect, **not** a fix to the analyzer.
+  The next bare `app/feed/…` key literal anywhere trips it again. Routed.
+  **§4.3 RULE 6's FALLBACK NAMES A PREFIX THE CONVENTION NEVER DEFINES, and for us it is not a slow
+  path but no path.** *"A reader that cannot fetch \[the index] falls back to enumerating the
+  prefix — slower, same answer."* FEED pins **two** paths, both index ones, and §2 says outright
+  *"the cross-impl contract is the type tag, not the path"* — so the fallback is a type-filtered
+  query, and **our foreign-tree consumer resolves a KEY with no type query at all.** `NoIndex` is
+  therefore terminal here where the convention says it should be recoverable. Routed rather than
+  papered over: synthesising a prefix walk would make us the seat that decided where entries live.
+  **THE FIRST CUT OF THE GATE HAND-DECODED THE PROJECTION, WHICH WOULD HAVE MEASURED NOTHING.** It
+  walked `{peer}/**.bin`, decoded the pointers itself and resolved the blobs — *a decoder written in
+  the same file as the encoder*, which is `make crossimpl-site`'s own lesson (**we consume their
+  types, we never model them**) pointed inward. It reads through `SignedSession` now, so the gate
+  covers the manifest, the root signature, the trie walk and the two-hop fetch. **And it carries an
+  anti-vacuity guard that is the whole difference between the two:** flip one byte of the published
+  root and the read must fail — *"the feed read back"* is otherwise true of any rig that reads files
+  out of a directory.
+  **⚠ `make wasm` WENT RED AND `make test` + `make lint` COULD NOT HAVE SEEN IT — first module in
+  this arc where that rule bit.** `feed_publish` imports `RootProjector` and `publish_fixture`, both
+  `cfg(not(wasm32))` (a publisher writes a directory; the browser has none), so the WASM build failed
+  on two unresolved imports while **1713 native tests and every linter stayed green**. The module is
+  `#![cfg(not(target_arch = "wasm32"))]` now. The near-miss is the lesson, not the fix: the gate list
+  was about to be written down without `wasm` **on the reasoning that the change was native-only**,
+  which is exactly the reasoning *"always run `make wasm` after changes"* exists to refuse — the
+  native suite cannot tell you what your imports cost the other target.
+  **Stated bounds.** `app/feed/entries/{hex}` is **our** key, not the convention's (§2 leaves it
+  local); it is content-addressed so a mutable key cannot move different bytes under a `via: path`
+  hint. `collection` and `mirror` are still unbuilt. There is still **no resolver**, so every
+  `REFERENCE` requirement phrased *"a reader that resolves…"* remains unmeasured. And nothing here
+  is reachable from the product: no window, no verb, no wire.
+- **THE FEED SURFACE SHIPPED, AND ADDING A WINDOW FOUND A DEFECT IN THE CENSUS THAT GUARDS WINDOWS
+  (2026-09-10).** `src/views/feed/` + `src/dom/feed.rs` — follow a publisher by peer id, read what
+  they posted, with `FEED-R4`'s verdict on every entry. The **first product surface** over
+  `APP-CONVENTION-FEED` and the first consumer of `feed_read` / `feed_fetch` / `feed_follows`.
+  **`tests/window_hydration_census.rs` FLAGGED IT FOR SAYING IT DOES NOT PERSIST WINDOW STATE.** The
+  census greps a surface's sources for `window_state_path`; `views/feed` names that path twice, both
+  times in module docs explaining that it deliberately keeps clear of it — so the gate demanded a
+  hydration classification from a window with no state to classify, which could only be satisfied by
+  putting a false row in the table. **AP29 (a gate that counts prose) in its expensive direction.**
+  The stripper already existed (`code_only`) and **`persisting_surfaces` was the one caller not
+  routed through it** — and `code_only`'s own doc said it *"only has to stop the two false positives
+  this census can actually produce"*, naming them. ***An enumeration of the false positives a check
+  can produce is a claim about code nobody has written yet.*** Fixed by making every source predicate
+  read code, with `a_surface_that_only_mentions_the_path_in_prose_is_not_persisting` as a **two-way**
+  falsifier — prose alone is not persistence, a real write still is, and prose *above* real code must
+  not mask it.
+  **`i18n-locale-check` CAUGHT C15 INSIDE THE CATALOG**, which is a use of that gate worth knowing
+  about: a fresh `feed.refresh` key rendered the English word *"Refresh"* differently from the
+  existing `btn.refresh` in **four** locales. The fix is not to unify four translations, it is that
+  **one English word gets one key** — a second key for a string the catalog already has is drift with
+  a translator on the other end of it. 22 keys × 30 locales; append to the locale files, never
+  re-serialize them (a `sort_keys=True` reformatted all 30 into a 3,368-line diff before it was
+  caught — *verify a scripted edit by reading the diff, not by the script reporting success*).
+  **Three modelling decisions worth not re-deriving.** (1) **Who you follow is APP-scoped, not
+  window-scoped** (`app_paths::feed_follows_prefix`): two Feed windows must agree and closing one must
+  not unfollow anybody, so it is a property of the profile. That is also what keeps this surface clear
+  of AP42's reused-slot hazard **by construction rather than by a guard**. (2) The **selection and the
+  notice are session-only** — which of your publishers you happen to be looking at is not a fact about
+  the profile, and a refusal that survived a reload would be a stale answer to a question nobody asked
+  twice. (3) `Peers::seed_remove` is new, mirroring `seed_write` on **the same arm rule**: a surface
+  that seeds through one and deletes through `dispatch_remove` is on two different arms for one
+  registry, so on Direct a row removed by a button reappears for a frame.
+  **The panel has four states and the middle two are the point:** *nobody selected* / *loading* /
+  *posted nothing* / *failed*. A walk in flight rendered as an empty feed tells somebody a publisher
+  has written nothing, which may be false and which they have no way to question — `FeedStep::Wait`
+  one layer down exists to stop exactly that, and this is where it becomes visible.
+  **AND THINKING ABOUT THE BROWSER GATE FOUND A DEFECT THE NATIVE GATES COULD NOT — the reader never
+  consulted the origins registry.** `OriginFeedSource` was constructed with
+  `PinnedPublisher::from_peer_id("", author)`, an **empty origin**, which makes every fetch relative
+  to the page: right for a publisher hosted at the app's own origin, and silently wrong for every
+  other one, producing a 404 that renders as *"this publisher has no feed"*. Every native gate passed
+  because they all point a directory-backed `BinSource` at a temp dir, where a relative URL is
+  correct. ***A test double that supplies the thing you forgot to ask for cannot notice that you
+  forgot.*** The origin is a parameter now, sourced from `origins::get_origin` — the accessor that
+  resolves supersession, so this surface is inside AP54's chokepoint rather than the eighth one
+  outside it — and **`FeedPanel::NoRoute` is its own state**: a publisher we have no route to is not
+  a publisher whose walk failed, and the two send a person to different places.
+  **`make e2e-worker T=the_feed_window` IS THE BROWSER GATE, AND ITS OWN ANTI-VACUITY GUARD WAS
+  VACUOUS.** The claim is *a pending question is never rendered as an empty feed*; the rows are the
+  body rendering, a fresh profile saying it follows nobody, a refused follow reaching the screen and
+  adding no row (**the whole draft → `Action::WindowEvent` → model → re-render loop**, which no native
+  test touches), and a followed publisher with no route saying so. **Three neuters, all falsified:**
+  collapse `NoRoute` into `NoPosts` → reds printing the production sentence verbatim (*"This publisher
+  has not posted anything"* for somebody nobody asked); drop the notice render → reds at the refusal
+  row; render nothing at all → reds VACUOUS.
+  ***That third neuter is the finding: row 1 originally asserted `text.contains("Feed")`, and the
+  window CHROME draws the title — so an empty body passed row 1 and was caught by row 2 instead.***
+  A guard that leans on the next assertion is not a guard, and it would have gone silent the day row
+  2's sentence changed. It asserts on the **hint**, which `dom::feed::render` draws and nothing else
+  does. **When a gate reads a whole window's text, ask which of the words come from the frame.**
+  **`CORE_RUST_REF` earned its keep mid-run**, which is its first use for this: the sibling broke
+  `bindings/sdk` while a neuter was in flight, and pinning to their last commit made the difference
+  between *"my neuter did something strange"* and *"their tree moved"* one flag wide.
+  **Stated bounds:** nothing durable of anybody else's is held (no offline read, D24 not engaged);
+  **the browser gate covers the reader surface and nothing under it** — the entry list, the seven
+  attribution verdicts and a successful walk are still native-only, because the rig registers no
+  origin and publishes no feed to one; and **the WINDOW cannot post** — `publish --ingest-feed`
+  is a CLI path, so authoring still happens on disk and never in the app.
+- **A LIVE PEER READ IS THE SAME READ, AND THE TWO THINGS THAT ARE NOT THE TRANSPORT ARE THE
+  ENTRY POINT AND THE PERMISSION — `src/feed_peer.rs` + `src/remote_read.rs`, 2026-09-11.**
+  Asked whether a connected peer could do *"these same operations"*, since *"the difference
+  should be pretty minor, it's just the transport"*. Right about the cost — `PeerFeedSource` is
+  ~40 lines and `read_feed` runs unchanged — and the measurement found two things under it.
+  Full review: `docs/plans/REVIEW-2026-09-11-…`; the surface census (who reads over which
+  transport) is its §1 and **the two halves of the product were disjoint**: chat and file
+  transfer live-only, sites/apps/feed origin-only, nothing crossing.
+  **⭐ THE INDEX IS A PUBLISH ARTIFACT, NOT A TREE ARTIFACT, AND NOTHING IN THE PRODUCT SAID SO.**
+  `index_head_path`/`index_page_path` — the absolute tree paths — are referenced by **nothing in
+  this crate but their own unit test**. `feed_ingest` binds entries at `app/feed/entries/{hex}`
+  and writes no index; `plan_index` builds head and pages **at publish time**, into the out-dir.
+  So a key-resolving live reader asks a peer with three posts for `app/feed/index`, gets a 404,
+  and reports they have no feed. **The transport was never the missing piece** — and this is
+  invisible from either side, because the publisher builds the index on the way out and the
+  reader had only ever read a published tree. ***When two paths share a key space, ask which of
+  them CREATES each key*** — identical addressing is not identical content.
+  Closed with §4.3 rule 6's own fallback (*"enumerating the prefix — slower, same answer"*),
+  which `entry_prefix`'s doc already said it existed for and which had had no consumer.
+  `FeedSource::list` is **defaulted** to `Ok(None)` = *this source cannot enumerate*, so the HTTP
+  arm is byte-identical and adopts it later by implementing one method (`SignedSession::enumerate`
+  exists and is bounded). **Three facts, not two**: cannot-enumerate / enumerated-and-empty /
+  could-not-look. Two bounds stated: the prefix is **ours** not the convention's (`A-38`), and the
+  **order is reconstructed** — §4.5 makes it authored and the index is what carries it, so the
+  fallback reuses `feed_tree::sort_key` and logs its arm rather than presenting the two as
+  interchangeable. **The better long-term answer is to write the index into the tree at ingest
+  and let the publish project it** — then §0.1's model holds with no exception and no fallback —
+  and it is a design question (`plan_index` takes a page size and a clock) rather than something
+  to smuggle in under a transport change.
+  **⭐⭐ A GATE WRITTEN TO ASSERT A REFUSAL FOUND THAT NOTHING REFUSES — AND MY READING OF THE
+  DEFAULT WAS ONE LAYER TOO LOW.** The module doc said a live read is 403 until shared, on
+  `default_connection_grants` (`system/tree:get` at `system/type/*` + `system/handler/*` and
+  nothing else). The two-peer gate asserting that **failed: an ungranted reader got the whole
+  feed.** Cause, measured with a three-path probe (app-private / granted / `system/peer/keys`)
+  that returned **no 403 at all**: `PeerManager::with_keypair_and_optional_connector`
+  (`bindings/sdk`) builds every peer with `debug_open_grants: true`, overriding
+  `PeerConfig::default()`'s `false`. **I read the kernel's default and concluded the posture** —
+  *a correct instrument one layer below where the value is set is a persuasive way to be wrong*,
+  and the probe that settled it cost four minutes. ⇒ **a peer you are connected to can read any
+  path in your tree.** Not new — `share.rs` has said *"enforcement is still off"* since the SHARE
+  work — but stated as a **write** there and as a **read** here, which is the direction it is a
+  *disclosure* rather than an inert grant, and the direction someone asking *"can I read my
+  friend's feed"* arrives from. ***When a doc says enforcement is off, ask what that means for
+  READS, not only for the grants you are authoring.***
+  **What it cost in gates is the transferable half, because the honest answer was not "assert it
+  anyway".** The refusal is **unreachable**, so: the 403 → `NotShared` mapping moved into a
+  **pure** `remote_read::classify` (a two-peer version of it is a test that cannot fail); the
+  positive read gate **does not author a share**, deliberately, because with open grants the read
+  is identical either way and sharing first would read as *"the grant is what made this work"*
+  while measuring nothing — a gate satisfied by its fallback; and
+  `the_live_read_needs_no_grant_today` **pins the posture at a path no share covers**, exists to
+  **go RED when enforcement flips**, and says in its own doc comment to invert it rather than
+  delete it. **Stated: that one has no falsifier** — flipping the flag means editing a sibling
+  repo — so it is an observation with a tripwire, not a proven property.
+  **`remote_read` is the extraction, made when the second caller proved the boundary.** Every
+  line of `file_offer`'s `remote_execute`/`resource_opts`/`empty_params` was about a **remote
+  read** and none about a file; `classify` also removed a four-arm match that `read_entity_at`
+  and `list_keys_at` had duplicated. Not a standalone rename — the charter's rule, and EMBED's
+  payload union is the precedent.
+  **What is NOT done:** the **window is unwired** (`FeedPoller::spawn_walk` still builds only an
+  `OriginFeedSource`) — which of live/published wins when both are available is a product
+  decision with a real trade (live is fresher; the origin works while they sleep) and is the
+  operator's. **No browser gate**: the live gates are native over the memory transport, so *"the
+  transport does not matter"* rests on `DispatchHandle` having no branch below it — a structural
+  argument, not a measurement. **Pointer bodies are not wired** (the blob walk is
+  `file_offer::pull_offer`'s, one consumer over; `system/content:get` resolves **by hash, not by
+  namespace** — the namespace is the capability scope).
+- **THE THIRD PUBLISH AXIS SHIPPED, AND `src/publish_axes.rs` IS NOW *THE* LIST OF WHAT ENTERS A
+  PROJECTION (2026-09-10).** `feed_tree::read_owned_feed` reads a peer's own feed off the tree,
+  `feed_ingest::ingest_path` writes an authored `posts/` dir into it, `publish --ingest-feed=<dir>`
+  is the front door, and the emit goes through the **same `RootProjector`** a site publish uses.
+  **The model is in `REFERENCE-PUBLISHING-PIPELINE.md` §0.1–§0.2, not here** — AP56's corollary: the
+  fix for *"the model was not where I looked"* is not to state it again where I looked.
+  **A fourth L5 convention is a row in `axes()` plus an `impl PublishAxis`**, and the compiler
+  enforces the four obligations. The residue that stays per-convention is tabulated in that module's
+  doc rather than left to be rediscovered.
+  **Four things closing the loop found that three phases of codec and every prior review did not** —
+  and every one lives *between* modules, which is the population argument for building the consumer:
+  **(1)** `publish_feed` wrote the entry and **not its body's blob**, so a post over EMBED §3's
+  16 KiB ceiling published a dangling reference. The inline arm is *refused* at that size, so the
+  pointer arm is the only conformant way to carry a long post — the closure is a requirement of that
+  arm, not a nicety. Every fixture in the module was all-inline: *a test population you generated
+  cannot contain the shape you are missing.*
+  **(2) `--verify` had AUDIT F8's hole again, one convention over.** A heuristic scan filters on
+  presence and therefore cannot see absence, which is why an `app/site-asset` is **decoded** rather
+  than scanned; an `app/feed/entry` declares the identical pointer and owed the same arm. Falsified:
+  without it, a tree whose post has no body exits **0** saying it is clean — and it is worse than the
+  asset case by the amount a post is more than a figure. ⇒ **every DECLARING type owes an arm in
+  `run_verify`, in the commit that introduces it.**
+  **(3) The head's clock is the CALLER's to supply, and `SystemTime::now()` would put a wall clock in
+  the trie** — the site root moving on every run, and `G-PIN-4`'s *one fixture, two publishers,
+  identical root* comparand unreachable for any tree carrying a feed. It is the feed's own high-water
+  mark (`publish_axes::head_clock`). Same defect `system/peer/published-root`'s `published_at`
+  already has. **`plan_index` is unchanged and still documents the head as "the publish instant" —
+  the parameter is right; who fills it is the decision.**
+  **(4) `publish_feed` takes no `prefix`** where the two emitters beside it do, so the axis joins the
+  prefixed base itself. Backwards, a whole archive lands outside the hosting scope its own signed
+  root is served from. Gated.
+  **`created_at` is REQUIRED and refused when absent** rather than read from the file's mtime, which
+  `git clone` rewrites — the same posts would otherwise hash differently on every machine, moving a
+  page boundary and rewriting the archive. Four spellings, **one parser** (`toml::value::Datetime`),
+  vectors from `date -u` and not from the code under test.
+  **A tie-break that changes no answer today is still worth having, and say so rather than gating it
+  falsely.** Entries sort by `(created_at, content_hash)`; the prefix scan already collects into a
+  `BTreeSet` of hex-keyed paths and `sort_by` is stable, so **through the reader the tie-break is
+  unfalsifiable** — it is gated against the *comparator* instead, where two input orders must give
+  one output. What it buys is that the total order is a property of the comparator rather than an
+  emergent consequence of a collection type and a stability guarantee. ***A test that cannot fail is
+  worse than no test; move it to the level where the property is real.***
+  **Stated bounds:** the **window** still cannot post (authoring is on disk); a **backdated** post
+  shifts every entry after it and rewrites the archive from there (appending touches only the last
+  page); the feed-and-no-site branch in `run()`'s emptiness check is **unreachable from the CLI
+  today** and is marked as such; and `run_plan`'s per-unit *naming* is still per-convention — every
+  axis owes a *term*, only the wording is bespoke.
+- **A TRAIT SHAPED BY ITS TEST DOUBLE RATHER THAN BY ITS PRODUCTION IMPLEMENTATION IS A SEAM THAT
+  FITS NOTHING — `FeedSource`, found on the first day anything tried to use it (2026-09-10).**
+  It was **synchronous**, and **every real source of a foreign entity in this repo is `async`** —
+  `SignedSession::resolve`, `http_poll::fetch_*`, `foreign_cache::ensure_current`, without exception
+  (one grep, and it was never run). That is not an inconvenience: the 2b gate bridged it with a
+  spin-loop `block_on` over a noop waker, which is fine against `std::future::ready` and, against a
+  `JsFuture`, **spins the main thread forever waiting on the event loop it is itself blocking.** The
+  reader could never have been wired to anything.
+  **What hid it is the interesting part: a `cfg` gate held for a GOOD reason, protecting a defect it
+  was not about.** `feed_publish` is `cfg(not(wasm32))` because a *publisher* writes a directory and
+  the browser has none — correct, and it also meant nothing that could expose the reader was able to
+  import it. ***Ask what a cfg gate is keeping OUT, not only what it is keeping in.*** The seam built
+  to make the reader testable had made it unshippable, and the gate that keeps the publisher honest
+  is what kept the reader out of sight.
+  **The repair copies `BinSource`'s spelling** — a boxed `!Send` future, no `Send` bound, owned key —
+  because the production implementation of the new trait *wraps* that one and a second expression of
+  *"an async source in this crate"* is C15's drift. **The friction is the proof:** a boxed future
+  cannot borrow `self`, so the test's own origin now holds an `Rc` and an owned `PathBuf`, which is
+  exactly what a `JsFuture`-backed implementation must do. The old trait let it hold borrows and
+  `block_on` inside the method, and that compiled and passed. The new gate is
+  `a_source_that_answers_later_is_still_a_source` — a source that returns `Pending` twice before it
+  is ready, which is the property a synchronous trait **cannot express at all**.
+  **And the render loop is the other half of the same fact: `render_dom` cannot await either.** So a
+  window needs a poll-shaped adapter (`src/feed_fetch.rs`), and it is `HttpPollResolver`'s
+  `Loading | Ready | Failed { retry_at_ms }` + `spawn_local` + repaint — the **third** expression of
+  *a foreign artifact behind a synchronous surface*, and deliberately not a third design. The
+  decision (`feed_step`, four outcomes) is **pure and takes the clock as an argument**, because the
+  pump is `cfg(wasm32)` and `now_ms()` answers **0.0** natively — a decision reading its own clock is
+  reachable only through Selenium. `Wait` is kept apart from `Serve` (conflating them renders an
+  in-flight walk as *"this author has posted nothing"*) and `Retry` from `Start`.
+  **A GREEN ANTI-VACUITY TEST WAS GREEN FOR THE WRONG REASON, AND ONLY MEASURING IT SAID SO.**
+  *"An origin cannot serve one author's tree as another's"* passed — on a **404**, because the
+  stranger's peer segment simply does not exist in that directory. A real property, and far weaker
+  than the docstring's claim that the pin refused it. It now **performs the substitution** (copies
+  the author's whole subtree under the stranger's peer id, so every path resolves and every hash
+  checks out and the only thing wrong is *whose they are*), and it **asserts the reason** —
+  `Verify("peer_id mismatch")`, with an explicit `!contains("404")` — because a regression that moved
+  the paths would otherwise look identical to a working pin. ***If nothing you opened contradicted
+  you, you did not run a check***, applied to a test's own passing.
+  **Stated bound: nothing here is durable, so D24 does not engage yet** — and the analysis for when
+  it does is in the module doc and is **not one answer for the whole feed**: the head and pages are
+  fixed-key and **mutable** (currency owed), an entry is keyed by **its own** content hash and cannot
+  go stale, and a signature is keyed by **the target's** hash and *looks* content-addressed while
+  being mutable — a publisher can re-sign and the key does not move. That third row is the one a
+  tidy implementation gets wrong.
+- **THE GATE HELD THE CLOCK STILL, SO THE PROPERTY IT NAMED WAS NEVER MEASURED — the page-stamp
+  defect, found reviewing 2b the same day it shipped (2026-09-10).** `posting_again_rewrites_only_the_last_page`
+  asserts FEED §4.3 rule 1's whole [MUST] property — *"rewriting page 12 changes page 12's binding
+  and nothing else — `O(tree depth)`, the same cost as posting"* — and it passed while
+  `plan_index` stamped **every** page with the instant of the publish. Publish tomorrow and page 0's
+  bytes move although it holds the same three entries it held yesterday: the archive is re-projected
+  in full, every cached page a reader holds is invalidated, and rule 1's cost argument is defeated by
+  **the ordinary act of posting** — the same sentence that module's own doc already used about the
+  *ordering* half, one variable over. It passed because the test publishes twice at one `NOW`, which
+  is **not a republish; it is one publish run twice.**
+  ***Ask what your gate's expected value depends on.*** The charter already carries that rule in two
+  shapes — a gate satisfied by its fallback, and a gate that DEPENDS on the defect — and this is a
+  third: **a gate whose rig holds a variable still that the property is about.** The tell is cheap
+  and general: *the test passes a constant where production passes a clock.* Grep your fixtures for
+  a frozen `NOW` and ask, for each assertion, whether the thing being asserted is a function of it.
+  **The fix is a WITNESS, not a prior-state read (AP44).** A page's `updated_at` is the newest
+  `created_at` it carries — *this page last changed when its newest entry was written* — so an
+  unchanged page reproduces its own stamp for free, forever, with nothing carried. The alternative,
+  carrying the previous publish's stamp forward for untouched pages, keeps *publish time* as the
+  meaning and holds **only as long as the publisher still has the out-dir that publish wrote**, which
+  `C-2` measured is exactly what a second device does not have. `max`, not `last`: §4.5 makes the
+  order **authored**, so a backdated post at the end of a page must not drag its stamp backwards. The
+  **head** keeps the publish clock — it is one small mutable pointer that genuinely changes every
+  publish, and it is what a reader polls.
+  **The deciding fact is that §4.2 gives `updated_at` NO SEMANTICS — three CDDL lines in the whole
+  convention and no prose** (exhaustive named search). So the reading is ours to make, the two
+  readings differ **observably on the wire**, and one of them silently defeats a [MUST]'s stated
+  property. Routed as `A-41`, implemented one way, pinned by a test at both levels (through the
+  projection and in the pure planner) so a ruling moves one file. Falsified: a **one-line** neuter
+  reds exactly those two and nothing else.
+  **Second finding, same review, smaller: `read_one` reported a failed ENTRY fetch as
+  `PageMissing { page: 0 }`** — rendering *"the head names page 0 and it does not resolve"* for a
+  fault in an entry, pointing whoever read it at the index. **AP40's cost is not the collapsed value,
+  it is the wrong sentence that comes out of it.** `EntryUnreachable { entry, detail }` now, and it
+  stays apart from a short view (`Ok(None)`, the publisher withdrew the post) because those are
+  opposite facts — shortening the feed on a fetch failure is D24's rule pointed at a reader, an
+  outage rendered as posts someone deleted.
+- **A RULE STATED IN A MODULE DOC IS NOT A RULE APPLIED TO EVERY INSTANCE IN THAT MODULE — the 2a
+  review, 2026-09-10, and all three findings were in code written the day before by the same seat.**
+  `make test` 1696 → 1699, `make crossimpl-site` **AGREED at the unchanged root**, `make lint` green:
+  the site path did not move.
+  **(1) `entity_ref` stated the collapse rule and left an instance.** The module doc's own sentence is
+  *"we collapse both to absent in the ENCODER as well as the decoder, so the wire cannot express what
+  the string cannot"* — it enumerated `via: []` and an empty anchor, and **`path: "/"` is the third**.
+  `from_value` refused `""` and admitted `"/"`, which is the same address; `to_uri` rendered it
+  `entity+ref://{peer}/`; `parse_uri` then correctly read that back as **`NoIdentityTerm`**, so a
+  representable atom could not survive the round trip §3.2 makes a `[MUST]` in both directions. One
+  predicate now (`is_addressable_path`), consulted by the decoder **and** the emitter, because the two
+  ends have different wrong implementations. **Falsified — seen red, printing the atom that decoded.**
+  ***When a module doc says "we do X to every Y", grep the module for Y*** — the doc is where a rule is
+  most persuasive and least enforced, and this is `A-30b`'s shape (*we stated a rule and proposed
+  breaking it in the same packet*) one layer in: the author of the rule is the one who misses the
+  instance, because they are reading the sentence rather than the set.
+  **(2) SECOND INSTANCE of the meaningful-default collapse, so it is no longer a one-off in the C9
+  entry.** `IndexHead::oldest` used `uint(..).unwrap_or(0)`, and FEED §4.2 makes `0` a **real** default
+  (*a publisher who has dropped nothing emits no key*) — so *absent* and *present-but-unreadable* were
+  the same value, exactly as `min_rollback_index` was, in an unrelated subsystem two weeks apart. The
+  direction is the costly one: an unreadable page floor read as 0 sends a reader walking back through
+  pages the publisher already dropped while the head says otherwise. `optional_uint` splits them;
+  absent stays a real zero. ***`unwrap_or(default)` on a decoded wire field is only safe when the
+  default is not itself a fact*** — and if it is, the guard belongs in the decoder, not at the readers.
+  **(3) AUTHORING AND TRANSCRIBING ARE DIFFERENT ACTS, and that is what decides where a producer bound
+  goes.** EMBED §3's `inline-payload` is `bstr .size (1..16384)` and the range was enforced in exactly
+  one place — `asset_store::stage` — while the union that *declares* it had moved to `embed.rs` as the
+  shared home. So a FEED entry body could carry an oversized inline payload with nothing to say so
+  (AP44: the rule lived at the importing carrier, not with the type).
+  **The obvious fix would have reproduced the asset regression.** Enforcing on `EmbedPayload::from_value`
+  looks equivalent and is not: the durable cache's write-through **re-encodes** a decoded foreign asset
+  (`SiteAsset::to_entity`), 47% of a real published tree is over 16 KiB, and every one of those is
+  *legacy*-encoded today — so a decode-side refusal would make each of them unreadable on the second
+  visit, which is the 09-10 audit's defect with a new cause. D24 says it outright: a cache that drops
+  what it cannot re-verify turns an outage into a missing figure — **and here we CAN verify it.**
+  So: `EmbedPayload::inline_is_conformant` is the one expression, `stage` consults it, and the
+  **decoder stays charitable on purpose.**
+  ⚠ **Stated bound, measured rather than reasoned, and it is a real non-conformance:** a legacy
+  oversized asset heals into the **declared shape** and a **size the CDDL excludes** — the cache
+  write-through emits `inline` payloads over 16 KiB into the reader's own tree today. Inert (nothing
+  but us reads that cache; the mirror is phase 4) and pinned by
+  `a_legacy_oversized_asset_heals_into_a_shape_that_is_declared_and_a_size_that_is_not`, whose job is
+  to be the **instrument for the concession, not its approval**. The repair is to re-`stage` through a
+  content store, which the Worker arm has no content verb for — so it is a scoped piece of work, not a
+  line to slip into a feed session. Do not describe the inline bound as enforced end-to-end.
+- **AUTHORING A `default` POLICY ENTRY NARROWS THE REQUEST PATH FOR EVERY UNLISTED PEER — SHARE-10,
+  and the withdrawal path is the same hazard at full strength (2026-09-10).**
+  `ENTITY-CORE-PROTOCOL` §6.2 makes the **same** `default` entry a **union term** at §4.4's
+  authenticate-response and a **per-peer ceiling** at `system/capability:request`. Both intended — and
+  §6.2 also says that with **no** entry, request-time *"works by skipping the policy ceiling: step 3
+  only enforces bounds that exist."* **So creating one where a deployment had none converts *no
+  request-time ceiling* into *this request-time ceiling*.** The failure is silent in the direction that
+  hides it: the publication becomes fetchable, so the change looks correct, while unrelated requests
+  start failing subset-validation — the 13/13 → 7 P/6 F shape the kernel's own comment records,
+  arriving **through the fix rather than through the ambiguity**.
+  **We reached for this and stopped one step short.** We routed the ceiling/floor collision as *why
+  §2.5 reads two ways*, which is true and is the smaller half; it is also **a live side effect of what
+  we shipped**. *When you find that one key means two things on two paths, ask what your own write to
+  it does on the path you were not thinking about.*
+  **The withdrawal path is sharper than the vector as written.** `SHARE-10` is about *creating* an
+  entry; `policy_writes_for` **empties** one when the last publication goes, and an empty grants array
+  is a ceiling that permits **nothing**. That is correct for a named peer — where an empty entry *is*
+  the revocation, and this module already had a test asserting it — and wrong for the fallback segment,
+  where *revoked* and *no ceiling* are different states and **only one of them is expressible by
+  writing**. `union_request_baseline` is the `[SHOULD]`: **if we write the fallback key at all, never
+  narrower than what the deployment already intends to allow.** Fallback key only — unioning into a
+  named peer's entry would *widen*, and the whole rule is about not narrowing.
+  **Stated bound, pinned in a test rather than recorded in prose:** with no baseline the last
+  withdrawal still writes an empty `default`. The correct end state is **no entry at all**, and
+  `system/capability:configure` has no removal verb — a convention question, routed rather than decided.
+  **Nothing supplies a baseline today and that is measured, not assumed:** `share::author_policy` is
+  the only writer of any policy entry on our own peer (`backend_auth` writes to a *backend* peer, keyed
+  by that peer's id, never `default`). **Do not describe SHARE-10 as discharged** — its vector needs
+  enforcement on and a request-path assertion, and enforcement here is `debug_open_grants`.
+- **READING OUR OWN TRACKERS IS NOT READING THE CORPUS (2026-09-09/10).** A status answer assembled
+  from `docs/status/TRACKER-*.md` reported *"`APP-CONVENTION-REFERENCE` landed, the blocker is gone"* as
+  if it were news; it had been folded by arch two days earlier and is a row in their design register.
+  **The trackers are our outbox** — what we sent and what came back — and they are structurally silent
+  about everything the counterpart did that was not addressed to us. **Before answering "where are we"
+  on anything cross-repo, read `entity-system-architecture`'s `docs/DESIGN-REGISTER.md`, the roadmaps and
+  the tier standard, not our record of the conversation.** The register in particular is built for this:
+  arch added it because *"the same conclusions were being re-derived from scratch, each time with a
+  weaker argument than the original"*, and it gates that **every** design document is either cited by a
+  row or marked as carrying no conclusion — **203 of 203, enforcing.** The tell that this went wrong is
+  cheap to check: *a two-day-old landing reported as a discovery.*
+  **AND ITS SIBLING, EARNED 2026-09-10: RECONCILE AGAINST THE COUNTERPART'S TRACKER, NOT A NAMED SEARCH
+  OF THEIR TREE.** `entity-workbench-go/docs/status/TRACKER-entity-browser-rust.md` did not exist at
+  `4f7e6a8`, which is where our tracker was last reconciled; it existed at `e44337b` twenty commits
+  later, carrying **four asks pointed at us**. **Three were already answered in our tree and nobody had
+  told them** — `B-5` (*"run our re-cut fixture through `DirFetcher::manifest()` and tell us where it
+  stops"*) has been **green in `make test` since before they filed it**, walking their vendored `d940ce0`
+  emission end to end. That is the `B-2c` delivery failure they had just named against their own board,
+  in the opposite direction, one day later. **A named search finds packets; it does not find the file
+  whose whole job is to say what they are waiting on** — and *"it did not exist last time we looked"* is
+  not a reason not to look again. **Mirror their ids unrenumbered** so one fact cannot acquire two.
+- **WHEN THE CLAIM IS ABOUT WHAT YOU *EMIT*, READ WHAT YOU *PUBLISHED* — `A-35` withdrawn 2026-09-10,
+  after being escalated in three consecutive packets on a premise nobody had measured.** `REFERENCE`
+  §4's `[MUST NOT]` binds *"a producer that emits the atom at all"* against emitting `entity://` **in a
+  link position**, and we told arch three times that *"we emit `entity://` in link positions today"*, so
+  the next slice that published a feed would make us non-conformant and owe a corpus migration.
+  **Measured: 0 occurrences across 364 published files** in `dist/` + `dist-site/` + `dist-federation/`,
+  **including all 102 published `.bin` entity bodies.** The claim was a `grep` count over `src/` (~30
+  hits) read as a conclusion, and the grep had collapsed **three families**: **dispatch URIs**, which
+  §4's own first sentence says is what the scheme *is* (*"following a link is not dispatching to a
+  handler"*); **one internal `navigate()` argument** that is never serialized; and the **static
+  exporter, which rewrites every entity-native link form and has asserted
+  `!demo_html.contains("entity://")` since long before the question existed**. The MUST NOT is
+  **conjunctive** and we fail the second conjunct under every reading of the first. ⇒ **the publish verb
+  is unblocked and no migration is owed.**
+  **Two things to carry.** (1) ***A count is not a claim.*** A grep tells you a token appears; the
+  clause governs a *position*, and no number of hits distinguishes them — enumerate the families before
+  the total means anything. (2) **This is the THIRD blocker in four days to dissolve on measurement, and
+  all three failed toward *more* coordination**: `G-PIN-4`'s placement/keypair/peer-id trio (answered by
+  one sentence of `EXTENSION-TREE` §3.2), FEED's `body: embed-node` (a production defined *nowhere*),
+  and this. The charter already says *a blocker that asks for more coordination is the one to re-read
+  the spec about*; **the cheap instrument this adds is the published corpus** — one `grep` over `dist-*`
+  costs four minutes and would have caught it on day one. **Unwithdrawn:** `A-35`'s EMBED §3 half (our
+  inline directive lowers to no `Embed` entity) is untouched, and **no gate can see it**, because a
+  *missing* emission is not a divergent tag.
+  **⭐ THE GENERAL FORM, EARNED THREE TIMES IN ONE SESSION AND AUDITED THE SAME DAY
+  (`AUDIT-THE-PUBLISHING-PIPELINE-AND-WHY-ITS-MODEL-IS-UNFINDABLE-2026-09-10.md`): NAME THE ARTIFACT
+  YOUR EVIDENCE CAME FROM, IN THE SENTENCE THAT MAKES THE CLAIM.** A grep count over `src/` reported as
+  a fact about the **published corpus**; a mental model reported as **`resolve_publish_source`**; a
+  build-time default (`ENTITY_STARTUP_SURFACE` = `chrome`) reported as the **publish flag**
+  (`--surface` = `window`, and the doc was right) — *the third one inside the audit of the first two,
+  in the section cataloguing other people's drift.* **The instrument was fine every time; what it
+  measured was misidentified.** *"0 in `src/`"* and *"0 in the published corpus"* are different claims.
+  **AP56 — a fact filed under the exception is not filed under the rule.** `AGENTS.md` **already
+  stated the publishing model**, correctly, at line 1481, since **2026-09-04** — in `a9bc377`, whose
+  subject is *"withdraw the invented blocker — a site and a feed are one mechanism."* **The entry that
+  exists because a feed blocker was invented and withdrawn contained the answer, and a different feed
+  blocker was invented six days later with it in context.** It is unfindable because it sits mid-entry
+  under a heading about something else, framed as a qualifier to *"the one genuinely absent verb"* — a
+  statement of a **limitation**, not of the **rule**. ***When you write down a limitation, ask whether
+  you have just written the only statement of the rule it limits.***
+  **And the corollary with a number on it: the fix for *"the model was not where I looked"* is almost
+  never *"state it again where I looked."*** On finding it absent from where I searched I added **28
+  lines** restating it — to a **3574-line** file that already held it, against `AGENTS-STANDARD`'s
+  *"keep it short … names the trigger and does not carry the content."* **The charter accumulates
+  restatements of facts it already holds, and each one makes the next lookup harder.**
+  ⇒ **Before adding a publishing fact here, `grep` `REFERENCE-PUBLISHING-PIPELINE.md` for it — and if
+  that file is wrong, fix that file instead.** It leads with the correct model and, measured
+  2026-09-10, is **17 days stale and records two SHIPPED capabilities as deferred** (static-export
+  images ship; the registry name layer ships), which is the expensive direction: *a shipped capability
+  recorded as deferred reads as work still owed.* Audit §9 has the sequenced repair; it is not landed.
 - **A FIX HAS TWO AXES — THE ONE IT WAS WRITTEN FOR AND THE ONE IT MOVES. RUN THE GATE THAT
   MEASURES THE COST, NOT ONLY THE GATE THAT MEASURES THE CURE (2026-09-09, found in a release
   audit).** The 09-08 connectivity arc's whole purpose is *fail now rather than at the 30 s

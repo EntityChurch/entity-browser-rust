@@ -48,6 +48,17 @@ pub struct ResolvedPage {
     /// nothing (it's part of `Eq`), but it's transient: written through once
     /// then the durable store is the source of truth.
     pub assets: Vec<(String, super::format::SiteAsset)>,
+    /// The `system/content` blob + chunk entities behind any **pointer**
+    /// asset in [`Self::assets`], fetched over the same origin.
+    ///
+    /// **Fetched here because this is the only arm that can.** Resolving a
+    /// pointer is a hash-addressed GET per closure member, and the renderer's
+    /// asset resolver is a synchronous closure inside a render pass — it
+    /// cannot await, so a pointer that has not been fetched by the time the
+    /// page renders is a figure that does not appear. Same write-through
+    /// contract as `assets`: land them in MY store once, then the durable
+    /// store answers.
+    pub content: Vec<entity_entity::Entity>,
 }
 
 /// Why a resolve failed.
@@ -195,6 +206,7 @@ fn resolve_local(peers: &Peers, loc: &Location) -> Result<ResolvedPage, ResolveE
         manifest,
         page,
         assets: Vec::new(), // local: assets already in the store (ingest)
+        content: Vec::new(), // ditto for their blob closures
     })
 }
 
@@ -385,7 +397,33 @@ impl MultiResolver {
         // `/{foreign}/sites/{site}/assets/{name}` path (in MY store);
         // content-addressed, so identical bytes dedup. Bounded: just the
         // current page's embeds, not the whole site.
+        // The closure first: an asset entity whose blob is not yet held
+        // resolves to nothing for as long as the gap lasts, and the renderer
+        // reads both in the same synchronous pass.
+        for entity in &rp.content {
+            peers.seed_content(me, entity.clone());
+        }
         for (name, asset) in &rp.assets {
+            // **Do not write through a payload we could not use.** The cache
+            // stores `asset.to_entity()` — a RE-ENCODE from the decoded
+            // struct, not the origin's bytes — so an arm we did not
+            // understand would be dropped on the way in and the cached copy
+            // would claim to be a complete asset carrying nothing. For a
+            // legacy asset that re-encode is the repair (it lands in the
+            // declared shape); for an unreadable or unimplemented one it is
+            // data loss wearing a cache's clothes.
+            //
+            // Skipping leaves the tree with no entry at that path, so the
+            // next visit re-fetches instead of resolving a lie from cache.
+            if asset.inline_bytes().is_none() && asset.pointer().is_none() {
+                tracing::warn!(
+                    site = %site,
+                    asset = %name,
+                    "asset payload not usable by this build — not cached, so the next visit \
+                     re-fetches rather than resolving a rewritten copy"
+                );
+                continue;
+            }
             peers.seed_write(me, paths::asset_path(foreign, site, name), asset.to_entity());
         }
 
@@ -445,6 +483,7 @@ fn resolve_from_my_store(
         manifest,
         page,
         assets: Vec::new(), // cached foreign: assets already written through to my store
+        content: Vec::new(), // ditto for their blob closures
     })
 }
 
@@ -917,6 +956,7 @@ mod tests {
             manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
             page: SitePage::markdown("Home", "# hi"),
             assets: Vec::new(),
+            content: Vec::new(),
         };
         mr.http.seed(loc.clone(), Ok(resolved));
         match mr.resolve_page(&peers, &loc) {
@@ -995,6 +1035,7 @@ mod tests {
                 manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
                 page: SitePage::markdown("Home", "# hi from labs"),
                 assets: Vec::new(),
+                content: Vec::new(),
             }),
         );
         assert!(matches!(mr.resolve_page(peers, &loc), ResolveOutcome::Ready(Ok(_))));
@@ -1089,8 +1130,9 @@ mod tests {
                 page: SitePage::markdown("Home", "# hi\n\n::embed[Fig]{ref=assets/figures/x.svg}"),
                 assets: vec![(
                     "figures/x.svg".into(),
-                    SiteAsset::new("image/svg+xml", b"<svg/>".to_vec()),
+                    SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec()),
                 )],
+                content: Vec::new(), // inline asset — no blob closure to carry
             }),
         );
         // Drive the resolve that fires the write-through.
@@ -1103,7 +1145,7 @@ mod tests {
             .expect("embed asset written through to my store");
         let asset = SiteAsset::from_entity(&cached);
         assert_eq!(asset.media_type, "image/svg+xml");
-        assert_eq!(asset.bytes, b"<svg/>");
+        assert_eq!(asset.inline_bytes(), Some(&b"<svg/>"[..]));
         // …even though the page body itself is ephemeral (manifest-pinned default).
         assert!(
             peers.get_entity(&me, &paths::page_path(&foreign, "labs", "index")).is_none(),
@@ -1130,6 +1172,7 @@ mod tests {
                 manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
                 page: SitePage::markdown("Home", "# hi"),
                 assets: Vec::new(),
+                content: Vec::new(),
             }),
         );
         // Drive several frames; the guard makes the persist a no-op after #1.
@@ -1161,6 +1204,7 @@ mod tests {
                 manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
                 page: SitePage::markdown("Home", "# hi"),
                 assets: Vec::new(),
+                content: Vec::new(),
             }),
         );
 

@@ -107,6 +107,7 @@ fn site(peer_id: &str, body: &str) -> OwnedSite {
             ("other".into(), SitePage::markdown("Other", "# a second authored page")),
         ],
         assets: vec![],
+        content: Vec::new(),
     }
 }
 

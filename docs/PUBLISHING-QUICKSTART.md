@@ -1,5 +1,7 @@
 # Publish a site — the quickstart
 
+> **The publishing model lives in one place:** [`REFERENCE-PUBLISHING-PIPELINE.md` §0.1](architecture/specs/REFERENCE-PUBLISHING-PIPELINE.md#01-the-model-in-one-screen--read-this-before-changing-anything-that-publishes) — *publish translates an input into the tree, then projects the tree.* This document covers operating the publish + deploy path; it does not restate the model.
+
 **Audience:** you have found this project, you want to put your own content on
 your own domain, and you want the commands. **Scope:** identity → content →
 build → verify → upload → check → republish, end to end, with the CDN

@@ -1,0 +1,111 @@
+# vocab-lint baseline — application-tier vocabulary debt that names entity-browser-rust.
+#
+# NAMES, NOT A COUNT. A count-based ratchet passes a swap (retire one, mint one,
+# total unchanged) and a swap is exactly the dangerous case here.
+#
+# Each row is `class<TAB>tag`. Lower this file in the same commit that pays the
+# debt down, with the reason — and note the gate fails BOTH ways: a row that
+# stops being reported must be removed, because a baseline that outlives its
+# debt silently re-admits it.
+#
+# Measured 2026-09-10 against entity-system-architecture @ 40d8737 and
+# entity-workbench-go @ 3755d48. The plan that pays each of these down is
+# docs/plans/PLAN-2026-09-10-THE-CARRIER-IS-ALREADY-GENERIC-AND-THE-STAGE-1-SEQUENCE.md.
+#
+# --- what each row is waiting on ---
+#
+# app/share/* divergence + app/share/manifest — ✅ PAID 2026-09-10, phase 0b.
+#   Both rows are gone from the report, so both are gone from here: the gate
+#   fails BOTH ways and a baseline that outlives its debt silently re-admits it.
+#   We now emit `app/share/record` + `app/share/audience-entry`, which the other
+#   seat also emits — the tier's only `divergent-family` is closed.
+#
+#   It was NOT a rename. The body diverged on four axes at once (tagged target,
+#   audience as an array of entries, `created_at` required, publisher read from
+#   the namespace), and shipping the new tag over the old body would have
+#   published entities that CLAIM to be `app/share/record` and fail to decode at
+#   a conformant reader — the `WC-2` trap, and strictly worse than the honest
+#   divergence it replaced.
+#
+# app/share/publication — ✅ CLEARED 2026-09-10, BY THE OTHER SEAT, EXACTLY AS
+#   THIS ROW PREDICTED. It read "it clears when workbench-go models it; there is
+#   nothing for us to fix" — and they did: `entitysdk/share.go:61`
+#   `TypeSharePublication = "app/share/publication"`, with `workbench/share_offer.go`
+#   reading BOTH it and `app/share/record`. Two seats, so it is no longer
+#   `single-seat` and the row comes out.
+#
+#   ⭐ THIRD INSTANCE OF THE NAMES-NOT-COUNTS PAYOFF IN THREE DAYS, AND THE FIRST
+#   WHERE THE ROW CLEARED BECAUSE THE COUNTERPART DID THE WORK. The first two
+#   were reclassifications inside our own tree (`app/site-asset`
+#   implemented-undeclared → single-seat; the SHARE family closing). This one is
+#   a debt we could not pay and did not have to: `A-5` is now implemented at both
+#   seats, so the SHARE convergence is COMPLETE — `record`, `audience-entry` and
+#   `publication` all two-seat.
+#
+#   And note HOW it surfaced: the gate went RED on a green event. A ratchet that
+#   only counts cannot tell you what got better, and one that fails only upward
+#   would have sat on this silently. Verified in their tree before the row was
+#   removed, per the standing rule — a baseline row is removed on evidence, never
+#   because the analyzer stopped mentioning it.
+#
+#   NOTE THE SHAPE, because it is the second time in two days: a class CHANGE,
+#   not a count change. Two rows left and one arrived — a count-based ratchet
+#   would have read 4 → 3 and passed the whole transition without ever showing
+#   that the family closed. Names caught it. Same lesson `app/site-asset`
+#   taught when A-27 reclassified it `implemented-undeclared` → `single-seat`.
+#
+# app/site-asset — ✅ A-27 ANSWERED 2026-09-11: arch DECLARED it, reusing EMBED's
+#   payload union. So it moved `implemented-undeclared` → `single-seat` on the
+#   very next run, and the gate RED on the reclassification. That is the design
+#   working: a count-based baseline would have passed it silently (one row out,
+#   one row in, total unchanged) — which is precisely the swap this file's
+#   header says a count cannot see. It clears when the other seat models the
+#   type; until then the row is honest.
+#   Note what arch made normative and why it is not a size argument: inlining at
+#   any size does not FAIL §6.1's chunking MUST, it makes it UNREACHABLE, so no
+#   reproducible-publish check can see the path. That is why the G-PIN-4 asset
+#   row is incomparable and the joint fixture carries two roots.
+#
+# app/feed/{entry,index-head,index-page,follow} — FOUR NEW ROWS, 2026-09-10,
+#   phase 2a. Honest rather than debt we chose: `APP-CONVENTION-FEED` declares
+#   six types, both seats measured at ZERO on 2026-09-10, and we are the first
+#   to implement any of them. They clear as workbench-go models them; there is
+#   nothing for us to fix.
+#
+#   `collection` and `mirror` are the two we did NOT build, so the family reads
+#   6 declared / 4 implemented. That gap is stage-1 scope, not an omission: the
+#   mirror is phase 4 and needs the byte-fidelity republication path rather than
+#   a codec, and the collection has no consumer yet.
+#
+# ⚠ THE ANALYZER CANNOT SEE A PARAMETRIC FAMILY BEING IMPLEMENTED, and this run
+#   is where that surfaced. `spec vocab` reports the `embed` family as
+#   **3 declared / 0 implemented** while this repo ships an
+#   `app/embed/{media_type}` encoder (`src/embed.rs`). The mechanism is in the
+#   analyzer's own source and its rule is individually correct: a literal ending
+#   in `/` is skipped, because `"app/share/records/"` is a tree PREFIX and
+#   "stripping the slash to make it look like a tag is how the first run of this
+#   analyzer reported a path as an undeclared vocabulary item."
+#
+#   But `"app/embed/"` is not a prefix — it is exactly the parametric tag the
+#   convention declares (`"app/embed/" .cat media-type`), and the concrete tags
+#   (`app/embed/image/png`) are COMPOSED AT RUNTIME and are literals nowhere.
+#   So the declaring side has `_DECL_PARAM` for parametric families and the
+#   implementing side has no counterpart, and a seat implementing one is
+#   invisible.
+#
+#   The direction matters: `_DECL_PARAM`'s own comment says "the false direction
+#   is the expensive one: it accuses a conformant seat of inventing vocabulary."
+#   THIS is the other direction — it under-reports, silently, which is the same
+#   shape as a missing emission not being a divergent tag. Routed to arch as an
+#   analyzer observation; nothing for this baseline to hold, because the finding
+#   is an absence of findings.
+#
+# app/user — single-seat, declared in EXTENSION-TYPE. Not app-tier convention
+#   work; carried so the row is visible rather than filtered out by hand.
+
+single-seat	app/feed/entry
+single-seat	app/feed/follow
+single-seat	app/feed/index-head
+single-seat	app/feed/index-page
+single-seat	app/site-asset
+single-seat	app/user

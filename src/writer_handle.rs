@@ -87,6 +87,62 @@ impl WriterHandle {
         }
     }
 
+    /// Store a **content-addressed entity with no tree binding** — a
+    /// `system/content/blob` or `system/content/chunk` behind a site asset's
+    /// `pointer` payload (content-site §4's `[MUST]`, EMBED §3's union).
+    ///
+    /// **Why there is no path.** A pointer names a blob by hash and nothing
+    /// else; giving it a tree key would invent a second address for a thing
+    /// that already has one, and a projection that then enumerated the tree
+    /// would publish it twice. The content store is where the content
+    /// extension's own entities live, and `ContentStore::put` is
+    /// content-addressed, so this is idempotent — the same figure across two
+    /// sites lands once.
+    ///
+    /// **Direct (IDB) arm only, and the bound is real, not a stub.** The
+    /// Worker/OPFS proxy has no content-put verb (the same gap
+    /// [`Self::content_remove`] records one method up), so a profile on
+    /// `?worker=1` cannot hold an oversized asset's bytes locally and its
+    /// pointers resolve over HTTP or not at all. Direct/IDB is the shipped
+    /// default; `?worker=1` is opt-in. This logs rather than silently
+    /// succeeding, because a no-op that returns `Ok` is exactly the
+    /// stub-shaped Worker arm this module's own history says bit us three
+    /// times in one session.
+    pub fn content_put(&self, entity: Entity) {
+        match self {
+            WriterHandle::Direct(shared) => {
+                if let Err(e) = shared.content_store.put(entity) {
+                    tracing::warn!(error = %e, "writer: content_put failed");
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            WriterHandle::Worker { .. } => {
+                tracing::debug!(
+                    hash = %entity.content_hash.to_hex(),
+                    "writer: content_put skipped on Worker arm (no proxy verb) — \
+                     a pointer asset's bytes are not held locally on this arm"
+                );
+            }
+        }
+    }
+
+    /// Read a content-addressed entity back by hash — the paired half of
+    /// [`Self::content_put`], and what a site asset's `pointer` payload is
+    /// resolved through.
+    ///
+    /// `None` on the Worker arm for the reason above, and `None` on Direct
+    /// when the blob simply is not held yet. **Those are the same value and
+    /// different facts**; the distinction is drawn one layer up, by
+    /// `asset_store::ResolveError`, which is where a caller has something to
+    /// say about it.
+    pub fn content_get(&self, hash: &entity_hash::Hash) -> Option<Entity> {
+        match self {
+            WriterHandle::Direct(shared) => shared.content_store.get(hash),
+            #[cfg(target_arch = "wasm32")]
+            WriterHandle::Worker { .. } => None,
+        }
+    }
+
     /// Binding-safe content-store reclaim: drop the blob `hash` **iff** no
     /// live path still binds it (`entity_sdk::content_remove_if_unbound` —
     /// GUIDE-GC pitfall #1). Fire-and-forget; used by app-level retention

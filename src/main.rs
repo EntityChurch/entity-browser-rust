@@ -56,7 +56,63 @@ mod event_log_writer;
 // its consumers, so the offer/pull entry points have no caller yet.
 #[allow(dead_code)]
 mod file_offer;
+// Reading something out of ANOTHER peer's tree, over whatever transport reaches
+// them. Extracted from `file_offer` — where every line of it was about a remote
+// read and none about a file — when `feed_peer` became the second consumer.
+// Owns the four-outcome split that keeps a 403 from arriving as an absence.
+mod remote_read;
 mod share;
+// The applications domain's foundational atom (`APP-CONVENTION-REFERENCE`) and
+// the percent-encoding both it and `session_config` read. `entity_ref` mints no
+// entity type and reaches no published surface until a type that carries one
+// ships — it is here because every FEED field is a reference.
+mod entity_ref;
+// `APP-CONVENTION-EMBED` §3's input surface. Distinct from
+// `content_site::embed`, which is the SITE convention's inline-directive
+// grammar — §3 says that grammar belongs to the consuming convention.
+mod embed;
+// `APP-CONVENTION-FEED` — the entry, the index and the subscription record.
+// Four of its six types; `collection` and `mirror` are not stage 1's.
+mod feed;
+// Phase 2b — entries, their FEED-R2 detached signatures and the §4 index,
+// projected through the same `RootProjector` a site publish uses. Native only,
+// because a publisher writes a directory and the browser has none; no CLI verb
+// publishes a feed yet.
+mod feed_publish;
+// The third publish axis's reader — a peer's OWN feed, read off the live tree
+// the way `content_site::read` reads their sites. Distinct from `feed_read`
+// below, which walks somebody ELSE's signed origin asynchronously.
+mod feed_tree;
+// …and its inverse: a directory of authored posts written into the tree, the
+// feed's `content_site::ingest`. Native-only for the same two reasons.
+mod feed_ingest;
+// THE list of what enters a publish's projection. Replaces the hardcoded
+// two-convention enumeration inside `run_projection`; a fourth convention is a
+// row plus an `impl`, and the compiler enforces the obligations.
+#[cfg_attr(target_arch = "wasm32", allow(unused))]
+mod publish_axes;
+// The consumer half — an author's index walked, their entries fetched, and
+// FEED-R4's attribution attached to each one separately. **Not** native-only:
+// it split out of `feed_publish` precisely because that gate was hiding a
+// synchronous `FeedSource` in a codebase where every real source is async.
+mod feed_read;
+// The poll-shaped adapter between `feed_read`'s async walk and a synchronous
+// `render_dom` — `HttpPollResolver`'s Loading/Ready/Failed shape, reused rather
+// than re-designed. Holds nothing durable, so D24 does not engage yet; the
+// module doc carries the three-way analysis for when it does.
+mod feed_fetch;
+// Who this profile follows — `app/feed/follow` in a flat, APP-scoped registry.
+// App-scoped and not window-scoped on purpose: two Feed windows must agree, and
+// closing one must not unfollow anybody.
+mod feed_follows;
+// The live-transport twin of `feed_fetch`'s origin source: the same `read_feed`
+// walk against the peer whose feed it is, over whatever connection reaches them.
+// Its module doc carries the measurement that says what "it is just the
+// transport" does and does not cover — the short version is that the key space
+// really is identical, and the index is a publish artifact the live tree does
+// not have, which is why this module implements §4.3 rule 6's fallback.
+mod feed_peer;
+mod percent;
 mod format;
 #[cfg(feature = "measurement")]
 mod frame_counters;

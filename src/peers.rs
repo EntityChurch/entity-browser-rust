@@ -1644,6 +1644,62 @@ impl Peers {
         }
     }
 
+    /// [`seed_write`](Self::seed_write)'s twin for a **removal**, on exactly the
+    /// same arm rule and for the same reason.
+    ///
+    /// A surface that seeds through `seed_write` and deletes through
+    /// `dispatch_remove` is on two different arms for one registry: on Direct
+    /// the write lands in the same render pass and the delete does not, so a row
+    /// removed by a button reappears for a frame. Keeping the pair symmetric is
+    /// what makes *"follow then unfollow"* behave the same way round as
+    /// *"unfollow then follow"*.
+    pub fn seed_remove(&self, peer_id: &str, path: impl Into<String>) {
+        let path = path.into();
+        match self
+            .sdk_for(peer_id)
+            .ok()
+            .and_then(|sdk| sdk.direct_peer_context(peer_id).ok())
+        {
+            Some(ctx) => {
+                // L0 `remove` answers a bool — *was there anything there* — and
+                // it is deliberately not consulted: removing what is absent
+                // reaches the state the caller asked for. Same reason
+                // `unname_withdrawn_origins` asserts the LISTING rather than
+                // what the removal returned.
+                ctx.store().remove(&path);
+            }
+            None => self.dispatch_remove(peer_id, path),
+        }
+    }
+
+    /// Seed a **content-addressed entity with no tree binding** into
+    /// `peer_id`'s content store — a site asset's blob and chunks
+    /// (content-site §4's pointer `[MUST]`).
+    ///
+    /// Routed through [`WriterHandle::content_put`] rather than open-coded,
+    /// so both arms are answered in one place and the Worker gap is stated
+    /// once. See that method for what the Worker arm does and does not do.
+    pub fn seed_content(&self, peer_id: &str, entity: Entity) {
+        match self.writer_handle_for(peer_id) {
+            Some(w) => w.content_put(entity),
+            None => tracing::warn!(peer = %peer_id, "seed_content dropped — unrouted peer"),
+        }
+    }
+
+    /// Read a content-addressed entity back by hash from `peer_id`'s content
+    /// store — the read half of [`Self::seed_content`], and how a site
+    /// asset's `pointer` payload resolves.
+    ///
+    /// **Sync, and therefore Direct-arm only.** This is the same axis
+    /// `make_asset_resolver` already sits on: a render pass cannot await, and
+    /// the Worker arm's mirror is fed by tree-prefix subscriptions, which a
+    /// content-addressed entity has no path to appear under. `None` here is
+    /// *"not held on this arm"*, never *"the asset is empty"* — the caller
+    /// keeps those apart through `asset_store::ResolveError`.
+    pub fn content_by_hash(&self, peer_id: &str, hash: &entity_hash::Hash) -> Option<Entity> {
+        self.writer_handle_for(peer_id).and_then(|w| w.content_get(hash))
+    }
+
     pub fn dispatch_remove(&self, peer_id: &str, path: impl Into<String>) {
         match self.sdk_for(peer_id) {
             Ok(sdk) => sdk.dispatch_remove(peer_id, path),
@@ -2937,12 +2993,12 @@ fn publishing_transport_profile(
 // Native-only — `MemoryConnector` is `#[cfg(not(target_arch = "wasm32"))]`.
 // =====================================================================
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod memory_transport_tests {
+pub(crate) mod memory_transport_tests {
     use super::*;
     use entity_peer::transport::{MemoryConnector, MemoryListener, MemoryTransportRegistry};
     use std::time::Duration;
 
-    fn spawn_peer_on_registry(
+    pub(crate) fn spawn_peer_on_registry(
         registry: std::sync::Arc<MemoryTransportRegistry>,
     ) -> (Peers, String, tokio::task::JoinHandle<()>) {
         let peers =

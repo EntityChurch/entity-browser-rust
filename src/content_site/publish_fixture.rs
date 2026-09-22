@@ -68,6 +68,7 @@ pub fn emit_owned_sites(
             &site.manifest,
             &pages,
             &assets,
+            &site.content,
             root.as_deref_mut(),
         )?;
     }
@@ -117,6 +118,7 @@ pub fn emit_site(
     manifest: &SiteManifest,
     pages: &[(&str, SitePage)],
     assets: &[(&str, SiteAsset)],
+    content: &[Entity],
     mut root: Option<&mut RootProjector>,
 ) -> std::io::Result<()> {
     write_entity(
@@ -135,10 +137,10 @@ pub fn emit_site(
             root.as_deref_mut(),
         )?;
     }
-    // Asset blobs (content-addressed) + their `system/hash` pointers, at the
-    // site's `assets/{name}` subgraph — the bytes an embed `ref` resolves to.
-    // Same two-hop shape as a page, so the HTTP consumer's `fetch_asset` reads
-    // them identically. Content-addressing dedups identical bytes across sites.
+    // Asset entities + their `system/hash` pointers, at the site's
+    // `assets/{name}` subgraph — what an embed `ref` resolves to. Same two-hop
+    // shape as a page, so the HTTP consumer's `fetch_asset` reads them
+    // identically. Content-addressing dedups identical bytes across sites.
     for (name, asset) in assets {
         write_entity(
             dir,
@@ -147,6 +149,27 @@ pub fn emit_site(
             &asset.to_entity(),
             root.as_deref_mut(),
         )?;
+    }
+    // The `system/content` closure behind every **pointer** asset above
+    // (content-site §4's `[MUST]` — anything over EMBED §3's 16 KiB ceiling).
+    //
+    // **Hash-addressed, so `put_only` and not `record`.** These have no tree
+    // key: a pointer names its blob by hash and binding it under a second
+    // address would make the root commit to something the consumer already
+    // reaches, and would publish the same bytes twice. `put_only` is the same
+    // door the publisher's identity entity goes through, for the same reason.
+    //
+    // **With no projector there is nowhere for them to go**, and an asset
+    // whose bytes are unreachable is worse than one that is merely large — so
+    // that case writes them as loose content blobs rather than dropping them
+    // (see [`write_content_blob`]).
+    for entity in content {
+        match root.as_deref_mut() {
+            Some(r) => {
+                r.put_only(entity);
+            }
+            None => write_content_blob(dir, entity)?,
+        }
     }
     // The static `pages.list` listing artifact (the "static-origin floor" the
     // remote `.list` consumer reads — `discovery::children_from_slugs`). A
@@ -249,6 +272,23 @@ pub(crate) fn write_entity(
         &entity_ecf::Value::Bytes(ent.content_hash.to_bytes()),
     );
     fs::write(bin_path, pointer)?;
+    Ok(())
+}
+
+/// Write a **hash-addressed body with no tree key** — the `content/{aa}/{bb}/
+/// {hex}` half of [`write_entity`] on its own.
+///
+/// This is what a site asset's `system/content` blob and chunks need: they are
+/// reached by hash from inside the asset entity's `pointer` payload, never by
+/// a path. With a [`RootProjector`] in hand `put_only` is the door (it also
+/// gets the entity into the publisher's store, where `finish` re-emits it);
+/// this is the projector-less fixture path, so the bytes still land where
+/// `http_poll::content_url` looks for them.
+pub(crate) fn write_content_blob(dir: &Path, ent: &Entity) -> std::io::Result<()> {
+    let hex = ent.content_hash.to_hex();
+    let blob_dir = dir.join("content").join(&hex[0..2]).join(&hex[2..4]);
+    fs::create_dir_all(&blob_dir)?;
+    fs::write(blob_dir.join(&hex), entity_ecf::ecf_for_hash(&ent.entity_type, &ent.data))?;
     Ok(())
 }
 
@@ -364,7 +404,8 @@ mod tests {
                 SitePage::markdown("Guide: Intro", "# Guide\n\nA nested remote page."),
             ),
         ];
-        emit_site(dir, crate::app::REMOTE_FIXTURE_PEER, "labs", &manifest, &pages, &[], None).unwrap();
+        emit_site(dir, crate::app::REMOTE_FIXTURE_PEER, "labs", &manifest, &pages, &[], &[], None)
+            .unwrap();
         eprintln!("emitted e2e fixture → {}", dir.display());
     }
 
@@ -385,6 +426,7 @@ mod tests {
                 ("guide/intro".into(), SitePage::markdown("Intro", "# Intro\n\nNested.")),
             ],
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let n = emit_owned_sites(&dir, std::slice::from_ref(&site), "", None).unwrap();
         assert_eq!(n, 1);
@@ -460,8 +502,9 @@ mod tests {
             )],
             assets: vec![(
                 "figures/d.svg".into(),
-                SiteAsset::new("image/svg+xml", b"<svg/>".to_vec()),
+                SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec()),
             )],
+            content: Vec::new(),
         };
         emit_owned_sites(&dir, std::slice::from_ref(&site), "", None).unwrap();
 
@@ -478,7 +521,7 @@ mod tests {
             .expect("asset two-hop resolves");
         let asset = SiteAsset::from_entity(&ent);
         assert_eq!(asset.media_type, "image/svg+xml");
-        assert_eq!(asset.bytes, b"<svg/>");
+        assert_eq!(asset.inline_bytes(), Some(&b"<svg/>"[..]));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -497,7 +540,7 @@ mod tests {
             ("guide/intro", SitePage::markdown("Intro", "# Intro")),
             ("guide/advanced/internals", SitePage::markdown("Internals", "# Deep")),
         ];
-        emit_site(&dir, "PEERB", "labs", &manifest, &pages, &[], None).unwrap();
+        emit_site(&dir, "PEERB", "labs", &manifest, &pages, &[], &[], None).unwrap();
 
         // The static listing exists alongside the manifest, sorted, one per line.
         let listing = fs::read_to_string(dir.join("PEERB/sites/labs/pages.list")).unwrap();
@@ -528,6 +571,7 @@ mod tests {
                 manifest: SiteManifest::new("labs-main", "Main", "index", vec![]),
                 pages: vec![("index".into(), SitePage::markdown("Home", "# Main"))],
                 assets: Vec::new(),
+                content: Vec::new(),
             },
             OwnedSite {
                 peer_id: "PEERC".into(),
@@ -535,6 +579,7 @@ mod tests {
                 manifest: SiteManifest::new("labs-research", "Research", "index", vec![]),
                 pages: vec![("index".into(), SitePage::markdown("Home", "# Research"))],
                 assets: Vec::new(),
+                content: Vec::new(),
             },
         ];
         emit_owned_sites(&dir, &sites, "", None).unwrap();
@@ -571,6 +616,7 @@ mod tests {
             manifest: SiteManifest::new("demo", "Owned Demo", "index", vec![NavItem::new("Home", "/index")]),
             pages: vec![("index".into(), SitePage::markdown("Home", "# Owned\n\nFrom the tree."))],
             assets: Vec::new(),
+            content: Vec::new(),
         };
         emit_owned_sites(&dir, std::slice::from_ref(&site), "hosted-peers/PEERX", None).unwrap();
 
@@ -611,7 +657,7 @@ mod tests {
             ("index", SitePage::markdown("Home", "# Bill's Labs\n\nA **remote** site over HTTP-poll.")),
             ("guide/intro", SitePage::markdown("Guide", "# Guide\n\nA nested page.")),
         ];
-        emit_site(&dir, peer, site, &manifest, &pages, &[], None).unwrap();
+        emit_site(&dir, peer, site, &manifest, &pages, &[], &[], None).unwrap();
 
         let origin = "http://localhost:8092/remote-fixture";
         let src = FsBinSource { root: dir.clone(), origin: origin.to_string() };

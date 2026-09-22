@@ -205,6 +205,14 @@ pub fn run(args: &[String]) -> ExitCode {
             .or_else(|| a.strip_prefix("--ingest-games="))
             .map(PathBuf::from)
     });
+    // `--ingest-feed=<dir>` is the third axis's front door: a directory of
+    // authored posts (`*.md` with a `+++` TOML block carrying `created_at`),
+    // ingested into the tree and then read back out of it like the other two.
+    // See `crate::feed_ingest` — the date is required, not taken from the
+    // filesystem, because mtime makes a publish irreproducible.
+    let ingest_feed: Option<PathBuf> = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--ingest-feed=").map(PathBuf::from));
     // `--prefix=<path>` is the per-peer hosting scope: everything (`.html`
     // projection, `.bin` content data, deployment-config origin) nests under
     // `{out}/{PREFIX}/…`. Empty (the default) = the domain root, byte-identical
@@ -319,17 +327,48 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // [A] Resolve the source peer + read all its sites AND app sets off the tree.
-    let (peer_id, sites, app_sets) =
-        match resolve_publish_source(keypair, ingest_dir.as_deref(), ingest_apps.as_deref()) {
-            Ok(triple) => triple,
-            Err(e) => {
-                eprintln!("publish --ingest: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    if sites.is_empty() {
-        eprintln!("publish: no sites found on peer {peer_id} — nothing to publish.");
+    // [A] Resolve the source peer + read every publish axis off the tree.
+    let PublishSource { peer_id, sites, app_sets, feed } = match resolve_publish_source(
+        keypair,
+        ingest_dir.as_deref(),
+        ingest_apps.as_deref(),
+        ingest_feed.as_deref(),
+    ) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("publish --ingest: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // **"No sites" stopped meaning "nothing to publish" when the third axis
+    // landed.** The two site-shaped modes still require one — `--bare-root`
+    // renders a single site AT the domain root and `--html-only` emits the
+    // legacy-web projection, which only sites have — but the ordinary `.bin`
+    // publish is a projection of the tree, and a tree carrying a feed and no
+    // site is a publishable tree. The emptiness question is asked of the axis
+    // table so a fourth convention answers it without editing this line.
+    //
+    // ⚠ **The feed-and-no-site case is UNREACHABLE from the CLI today and has
+    // no gate**, so this is not a tested branch: `resolve_publish_source` seeds
+    // the demo site set whenever `--ingest` is absent, and `--ingest` refuses a
+    // directory with no `site.manifest.json`. It becomes reachable the moment
+    // that function's stand-in body is replaced by *"open a persisted peer dir →
+    // read its real sites"*, which is the change its own doc comment describes.
+    // Stated rather than implied — a branch nobody can reach is not a branch
+    // anybody has checked.
+    let site_shaped = bare_root || html_only;
+    let carries_nothing = crate::publish_axes::axes(&peer_id, &sites, &app_sets, feed.as_ref())
+        .iter()
+        .all(|a| a.incoming() == 0);
+    if sites.is_empty() && (site_shaped || carries_nothing) {
+        if site_shaped {
+            eprintln!(
+                "publish: no sites found on peer {peer_id} — {} projects a site and there is none.",
+                if bare_root { "--bare-root" } else { "--html-only" }
+            );
+        } else {
+            eprintln!("publish: peer {peer_id} carries no sites, apps or posts — nothing to publish.");
+        }
         return ExitCode::FAILURE;
     }
 
@@ -353,7 +392,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // about real sites, not a guess) and before any clean — because the clean is
     // the destructive step and a plan that ran after it would be a report.
     if plan_only {
-        return run_plan(&out_dir, &peer_id, &sites, &prefix, bare_root, &app_sets, !html_only);
+        return run_plan(
+            &out_dir,
+            &peer_id,
+            &sites,
+            &prefix,
+            bare_root,
+            &app_sets,
+            feed.as_ref(),
+            !html_only,
+        );
     }
 
     if bare_root {
@@ -389,6 +437,7 @@ pub fn run(args: &[String]) -> ExitCode {
             !html_only,
             deploy_spec,
             &app_sets,
+            feed.as_ref(),
             publisher_key,
             strict_links,
         )
@@ -824,6 +873,29 @@ fn other_identity_hint(out_dir: &Path, prefix: &str, peer_id: &str) -> Option<St
             found.join(", ")
         )),
     }
+}
+
+/// How many feed posts are already projected under
+/// `{out}/{prefix}/{peer}/app/feed/entries/`.
+///
+/// The third axis's counterpart of [`projected_site_ids`] and
+/// [`projected_app_sets`], and it exists for the third time for the same reason
+/// — the clean removes `{base}/{peer}/` wholesale, so a publish invoked without
+/// `--ingest-feed` **deletes the whole archive**, which for a feed is the one
+/// thing that cannot be re-derived from anywhere else in the output tree.
+///
+/// Counted, not named: an entry's key is the hex of its own content hash, so
+/// listing them would print 32 hashes where *"14 post(s)"* is the fact an
+/// operator can act on.
+fn projected_feed_posts(out_dir: &Path, peer_id: &str, prefix: &str) -> usize {
+    let root = paths::prefixed_root(out_dir, prefix)
+        .join(peer_id)
+        .join(crate::feed::entry_prefix());
+    std::fs::read_dir(&root)
+        .map(|d| {
+            d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".bin")).count()
+        })
+        .unwrap_or(0)
 }
 
 /// The app sets already projected under `{out}/{prefix}/{peer}/apps/`, each
@@ -1453,6 +1525,121 @@ fn verify_signed_root(
         // the decoder is upstream and public, so "a publisher must not need to
         // know the HAMT encoding" (the old comment here) buys nothing and cost
         // us the guard.
+        // **A site asset DECLARES its blob, exactly as a trie node declares
+        // its children — so it gets the same structural treatment.**
+        //
+        // Since content-site §4's pointer `[MUST]`, an asset above EMBED §3's
+        // 16 KiB ceiling carries `payload: {tag: "pointer", hash}` and its
+        // bytes live in the content store as a `system/content/blob` plus
+        // chunks. The window scan above *does* find them — a 33-byte hash is a
+        // 33-byte hash wherever it sits — which is why this tree verified
+        // green the day the pointer arm landed. **And that green was the F8
+        // failure again, measured rather than reasoned:** delete the chunk and
+        // the closure count drops 11 → 10, `missing` stays 0, and verify
+        // reports *"every pointer resolves and every body hashes to its
+        // address"* about a site whose figure nobody can resolve. Presence
+        // filtering cannot see absence; only a declaration can.
+        //
+        // The consequence is the one this whole verb exists to prevent — a
+        // published tree that is broken and says it is clean — and it is worse
+        // for an asset than for an interior node, because the page still
+        // renders and only the image is gone.
+        if entity.entity_type == crate::content_site::format::SITE_ASSET_TYPE {
+            let asset = crate::content_site::format::SiteAsset::from_entity(&entity);
+            if let Some(blob) = asset.pointer() {
+                if fetcher.content(&blob).is_ok() {
+                    queue.push(blob);
+                } else if missing_hashes.insert(blob.to_hex()) {
+                    eprintln!(
+                        "publish --verify: BROKEN asset closure — blob {} is DECLARED by site \
+                         asset {} but not projected. The page renders and the image does not; a \
+                         consumer has no other way to reach those bytes.",
+                        blob.to_hex(),
+                        h.to_hex()
+                    );
+                }
+            }
+            continue;
+        }
+
+        // **An `app/feed/entry` declares its body's blob the same way, and this
+        // arm landed with the third publish axis rather than after it.** F8's
+        // lesson is that a heuristic scan filters on presence and therefore
+        // cannot see absence, so every DECLARING type owes an arm here — and a
+        // feed entry over EMBED §3's 16 KiB ceiling carries exactly the same
+        // `payload: {tag: "pointer", hash}` a site asset does.
+        //
+        // Worse than the asset case, by the amount that a post is more than a
+        // figure: an asset's absence drops an image out of a page that still
+        // reads, and an entry's absence is **the post itself**, rendering as an
+        // empty body with nothing anywhere saying why.
+        if entity.entity_type == crate::feed::FEED_ENTRY_TYPE {
+            match crate::feed::FeedEntry::from_entity(&entity, peer_id) {
+                Ok(feed_entry) => {
+                    for blob in crate::feed_tree::body_blob_hashes(&feed_entry.body) {
+                        if fetcher.content(&blob).is_ok() {
+                            queue.push(blob);
+                        } else if missing_hashes.insert(blob.to_hex()) {
+                            eprintln!(
+                                "publish --verify: BROKEN feed closure — blob {} is DECLARED by \
+                                 feed entry {} but not projected. The post appears in the index \
+                                 and its body is empty.",
+                                blob.to_hex(),
+                                h.to_hex()
+                            );
+                        }
+                    }
+                }
+                // An entry we cannot decode is reported, never skipped: a
+                // publisher's own tree carrying an undecodable entry under a
+                // signed root is a fault in the publish, and the whole point of
+                // this verb is that a broken tree does not say it is clean.
+                Err(why) => eprintln!(
+                    "publish --verify: feed entry {} did not decode ({why:?}) — its body's \
+                     closure could not be checked",
+                    h.to_hex()
+                ),
+            }
+            continue;
+        }
+
+        // A `system/content/blob` declares its chunks. Same rule one level
+        // down: without this, a projected blob whose chunks were dropped is a
+        // pointer to a chunk list nobody can follow, and the window scan
+        // reports it as clean.
+        if entity.entity_type == entity_types::TYPE_CONTENT_BLOB {
+            match crate::content_site::asset_store::chunk_hashes_of(&entity) {
+                Ok(chunks) => {
+                    for c in chunks {
+                        if fetcher.content(&c).is_ok() {
+                            queue.push(c);
+                        } else if missing_hashes.insert(c.to_hex()) {
+                            eprintln!(
+                                "publish --verify: BROKEN asset closure — chunk {} is DECLARED \
+                                 by blob {} but not projected. The blob resolves and reassembly \
+                                 stops here.",
+                                c.to_hex(),
+                                h.to_hex()
+                            );
+                        }
+                    }
+                }
+                Err(why) => {
+                    // Counted as missing, not merely logged: a blob we cannot
+                    // decode is a chunk list we cannot follow, which is the
+                    // same consumer outcome as chunks that are not there.
+                    if missing_hashes.insert(h.to_hex()) {
+                        eprintln!(
+                            "publish --verify: BROKEN asset closure — blob {} does not decode: \
+                             {why}",
+                            h.to_hex()
+                        );
+                    }
+                }
+            }
+            continue;
+        }
+
         if entity.entity_type != entity_tree::trie::TYPE_TREE_SNAPSHOT_NODE {
             continue;
         }
@@ -1573,6 +1760,7 @@ pub const PLAN_DESTRUCTIVE_EXIT: u8 = 2;
 /// one worse than having no gate at all.** If a future emitter adds a third
 /// subgraph under the peer prefix, it owes a term here in the same commit; the
 /// clean is wholesale, so anything it can delete is in scope by construction.
+#[allow(clippy::too_many_arguments)] // one parameter per publish axis, plus the modes
 fn run_plan(
     out_dir: &Path,
     peer_id: &str,
@@ -1580,6 +1768,7 @@ fn run_plan(
     prefix: &str,
     bare_root: bool,
     app_sets: &crate::apps::ingest::IngestedSets,
+    feed: Option<&crate::feed_tree::OwnedFeed>,
     emit_bin: bool,
 ) -> ExitCode {
     // Bare-root renders ONE site at the domain root and owns no `sites/{peer}/`
@@ -1645,7 +1834,27 @@ fn run_plan(
         Vec::new()
     };
 
-    if removed.is_empty() && app_removed.is_empty() {
+    // The feed axis. Same rule, third time: the clean covers
+    // `{peer}/app/feed/**`, and a publish carrying fewer posts than the tree
+    // already holds is an archive being truncated. `run_plan`'s own doc comment
+    // demands this term — *"if a future emitter adds a third subgraph under the
+    // peer prefix, it owes a term here in the same commit"* — and this is that
+    // commit.
+    let feed_removed: usize = if emit_bin {
+        let present = projected_feed_posts(out_dir, peer_id, prefix);
+        let incoming = feed.map_or(0, |f| f.entries.len());
+        if present > 0 || incoming > 0 {
+            eprintln!(
+                "publish --plan: {present} post(s) present, {incoming} incoming — {} REMOVED",
+                present.saturating_sub(incoming)
+            );
+        }
+        present.saturating_sub(incoming)
+    } else {
+        0
+    };
+
+    if removed.is_empty() && app_removed.is_empty() && feed_removed == 0 {
         eprintln!("publish --plan: nothing would be removed.");
         ExitCode::SUCCESS
     } else {
@@ -1666,6 +1875,12 @@ fn run_plan(
                 app_removed.len()
             );
         }
+        if feed_removed > 0 {
+            eprintln!(
+                "publish --plan: {feed_removed} feed post(s) would be REMOVED. The clean covers \
+                 {peer_id}/app/feed/** too — re-run with --ingest-feed=<dir> to carry them."
+            );
+        }
         eprintln!("publish --plan: (exit {PLAN_DESTRUCTIVE_EXIT})");
         ExitCode::from(PLAN_DESTRUCTIVE_EXIT)
     }
@@ -1681,6 +1896,7 @@ fn run_projection(
     emit_bin: bool,
     deploy_spec: Option<DeployConfigSpec>,
     app_sets: &crate::apps::ingest::IngestedSets,
+    feed: Option<&crate::feed_tree::OwnedFeed>,
     publisher_key: entity_crypto::Keypair,
     strict_links: bool,
 ) -> ExitCode {
@@ -1828,36 +2044,24 @@ fn run_projection(
                 return ExitCode::FAILURE;
             }
         }
-        if let Err(e) = crate::content_site::publish_fixture::emit_owned_sites(
-            out_dir,
-            sites,
-            prefix,
-            Some(&mut root),
-        ) {
-            eprintln!("publish: content-data (.bin) export failed: {e}");
-            return ExitCode::FAILURE;
-        }
-        // App sets (games, apps, …) ride along on the same `.bin` content data —
-        // emitted under the SAME publish peer, so the live window fetches
-        // `{peer}/apps/{set}/…` from the same origin as the sites. Read off the
-        // tree (every available app set), so EVERY publish carries every set, no
-        // flag required.
-        for (set, ing) in app_sets {
-            if ing.catalog.entries.is_empty() {
-                continue;
-            }
-            match crate::content_site::publish_fixture::emit_app_set(
-                out_dir,
-                peer_id,
-                set,
-                &ing.catalog,
-                &ing.bundles,
-                prefix,
-                Some(&mut root),
-            ) {
-                Ok(n) => println!("  apps[{set}]: {n} bundle(s) → {}/apps/{}/", peer_id, set),
+        // **Every axis, through the one list** (`crate::publish_axes`). This
+        // used to be `emit_owned_sites(sites)` followed by an inline
+        // `for set in app_sets` loop — the hardcoded two-convention enumeration
+        // `AGENTS.md` records as the defect, where a third L5 convention cost an
+        // edit in five places and a fourth would again. Each row reads its own
+        // subgraph out of the tree and records into **this** projector, which is
+        // what `a_second_axis_signed_by_its_own_projector_un_names_the_first`
+        // measured is the only composable shape: one projection, N axes.
+        //
+        // An axis with nothing to publish is not an error — most publishers use
+        // one convention — so a `None` report line is silence, not a skip that
+        // needs explaining.
+        for axis in crate::publish_axes::axes(peer_id, sites, app_sets, feed) {
+            match axis.project(out_dir, peer_id, prefix, &mut root) {
+                Ok(Some(line)) => println!("  {line}"),
+                Ok(None) => {}
                 Err(e) => {
-                    eprintln!("publish: app-set '{set}' (.bin) export failed: {e}");
+                    eprintln!("publish: {} (.bin) export failed: {e}", axis.name());
                     return ExitCode::FAILURE;
                 }
             }
@@ -2251,8 +2455,24 @@ pub(crate) fn resolve_registry_keypair(args: &[String]) -> Result<entity_crypto:
     }
 }
 
-/// Resolve which peer to publish and read all its sites. **The seam** (see
-/// the module docs): today it builds a Direct peer under the supplied
+/// Everything a publish reads out of the tree — one member per axis in
+/// [`crate::publish_axes::axes`].
+///
+/// A struct rather than a tuple since the third axis landed: a fourth would
+/// make it a five-tuple, and the members are not interchangeable.
+pub(crate) struct PublishSource {
+    pub peer_id: String,
+    pub sites: Vec<read::OwnedSite>,
+    pub app_sets: crate::apps::ingest::IngestedSets,
+    /// `None` when this peer has authored no posts — which is *not* an empty
+    /// feed. See [`crate::feed_tree`]'s module doc: publishing an empty head on
+    /// behalf of every site publisher who never used the convention would be
+    /// making a claim for them.
+    pub feed: Option<crate::feed_tree::OwnedFeed>,
+}
+
+/// Resolve which peer to publish and read every axis off its tree. **The seam**
+/// (see the module docs): today it builds a Direct peer under the supplied
 /// **publisher `keypair`** (durable by default; `--identity-seed` / `--demo-identity`
 /// override) and seeds the bundled demo site set, then reads it back off the
 /// tree — so publish is a faithful end-to-end exercise of the [A] reader on
@@ -2260,11 +2480,17 @@ pub(crate) fn resolve_registry_keypair(args: &[String]) -> Result<entity_crypto:
 /// Replace this body with "open a persisted peer dir → read its real sites"
 /// when the durable native peer-load path lands; nothing downstream changes,
 /// and the publisher identity becomes the loaded peer's own (still stable).
+///
+/// **The pipeline is `ingest(disk) → tree → read_all(tree) → project`**, and
+/// that is the whole publishing model: an input is translated into the tree, and
+/// the tree is what gets projected. Every `--ingest*` flag is one front door
+/// onto the same tree, never a parallel source.
 fn resolve_publish_source(
     keypair: entity_crypto::Keypair,
     ingest_dir: Option<&Path>,
     ingest_apps: Option<&Path>,
-) -> Result<(String, Vec<read::OwnedSite>, crate::apps::ingest::IngestedSets), String> {
+    ingest_feed: Option<&Path>,
+) -> Result<PublishSource, String> {
     let peers = Peers::new_direct_with_keypair(keypair);
     let peer_id = peers.primary_peer_id().to_string();
     match ingest_dir {
@@ -2292,9 +2518,17 @@ fn resolve_publish_source(
         let n = crate::apps::ingest::ingest_into(&peers, &peer_id, dir)?;
         eprintln!("publish --ingest-apps: ingested {n} app(s) from {}", dir.display());
     }
+    // The third axis. Opt-in like the apps one and for the same reason: without
+    // a source there is nothing to read, and a publish that invented an empty
+    // feed would claim every site publisher has one.
+    if let Some(dir) = ingest_feed {
+        let n = crate::feed_ingest::ingest_path(&peers, &peer_id, dir)?;
+        eprintln!("publish --ingest-feed: ingested {n} post(s) from {}", dir.display());
+    }
     let sites = read::read_all_sites(&peers, &peer_id);
     let app_sets = crate::apps::read::read_all_app_sets(&peers, &peer_id);
-    Ok((peer_id, sites, app_sets))
+    let feed = crate::feed_tree::read_owned_feed(&peers, &peer_id);
+    Ok(PublishSource { peer_id, sites, app_sets, feed })
 }
 
 /// Seed the demo **set** into `peer_id`'s tree: the bundled deep `demo` site
@@ -2390,20 +2624,20 @@ mod tests {
     #[test]
     fn publish_source_reads_the_seeded_demo_set() {
         let demo_kp = || entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let (peer_id, sites, app_sets) = resolve_publish_source(demo_kp(), None, None).unwrap();
+        let PublishSource { peer_id, sites, app_sets, .. } = resolve_publish_source(demo_kp(), None, None, None).unwrap();
         assert!(!peer_id.is_empty());
 
         // The publisher identity is STABLE across runs for a given seed — the
         // whole point (no more shifting peer-ids / broken permalinks).
-        let (peer_id_again, _, _) = resolve_publish_source(demo_kp(), None, None).unwrap();
+        let PublishSource { peer_id: peer_id_again, .. } = resolve_publish_source(demo_kp(), None, None, None).unwrap();
         assert_eq!(peer_id, peer_id_again, "publish peer-id must be reproducible");
 
         // A DIFFERENT system seed → a different (but still reproducible) peer-id,
         // so each deployment can publish under its own identity (`--identity-seed`).
         let other_kp = || entity_crypto::Keypair::from_seed(*b"different-publisher-seed-here!!!");
-        let (other_pid, _, _) = resolve_publish_source(other_kp(), None, None).unwrap();
+        let PublishSource { peer_id: other_pid, .. } = resolve_publish_source(other_kp(), None, None, None).unwrap();
         assert_ne!(peer_id, other_pid, "a custom seed must yield its own peer-id");
-        let (other_pid_again, _, _) = resolve_publish_source(other_kp(), None, None).unwrap();
+        let PublishSource { peer_id: other_pid_again, .. } = resolve_publish_source(other_kp(), None, None, None).unwrap();
         assert_eq!(other_pid, other_pid_again, "custom-seed peer-id must be reproducible");
 
         let ids: Vec<&str> = sites.iter().map(|s| s.site_id.as_str()).collect();
@@ -2506,6 +2740,7 @@ mod tests {
             manifest,
             pages,
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let mut dangling = dangling_nav_targets(&site);
         dangling.sort();
@@ -2534,6 +2769,7 @@ mod tests {
             manifest: SiteManifest::new(id, id, "index", Vec::new()),
             pages: vec![("index".to_string(), SitePage::markdown("I", "hi"))],
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let existing = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
 
@@ -2586,7 +2822,7 @@ mod tests {
         // real publish would delete it, and the plan must say so with the
         // destructive exit code rather than SUCCESS.
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let (pid, _sites, _apps) = resolve_publish_source(demo_kp, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
         let root = tmp.join(SITE_URL_PREFIX).join(&pid);
         std::fs::create_dir_all(root.join("a-site-nobody-is-publishing")).unwrap();
 
@@ -2600,6 +2836,303 @@ mod tests {
         // add/remove set — it must say so and NOT inherit the destructive code
         // from a projection it does not own.
         assert_eq!(plan(&["--plan", "--bare-root"]), ExitCode::SUCCESS);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // The third axis — `APP-CONVENTION-FEED` entering the projection.
+    // -----------------------------------------------------------------------
+
+    /// Write `n` authored posts into a fresh directory and hand back its path.
+    fn posts_dir(root: &Path, n: usize) -> std::path::PathBuf {
+        let dir = root.join("posts");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..n {
+            std::fs::write(
+                dir.join(format!("post-{i}.md")),
+                format!(
+                    "+++\ncreated_at = 2026-09-{:02}T09:00:00Z\ntitle = \"Post {i}\"\n+++\nbody {i}\n",
+                    i + 1
+                ),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    /// Resolve a peer-relative key out of a published tree **through the signed
+    /// root** — the manifest, the root signature and the trie walk, not a file
+    /// read. `Err("Absent")` is what an un-named key answers.
+    fn resolve_signed(out_dir: &Path, peer_id: &str, key: &str) -> Result<(), String> {
+        let pin = crate::content_site::signed_fetch::PinnedPublisher::from_peer_id("", peer_id)
+            .expect("a canonical peer-id carries its key");
+        let session = crate::content_site::signed_fetch::SignedSession::new(pin);
+        let src = crate::feed_publish::tests::Origin(out_dir.to_path_buf());
+        let k = key.to_string();
+        crate::feed_read::block_on(async move {
+            session.resolve(&src, &k).await.map(|_| ()).map_err(|e| format!("{e:?}"))
+        })
+    }
+
+    /// ⭐ **THE THIRD AXIS, AND THE POSITIVE HALF OF THE CONSTRAINT THAT SHAPED
+    /// IT.** `feed_publish`'s
+    /// `a_second_axis_signed_by_its_own_projector_un_names_the_first` measured
+    /// that two `RootProjector`s over one directory **do not compose** — the
+    /// second `finish` signs a root naming only its own axis, and the first
+    /// silently stops resolving. That is the whole argument against a standalone
+    /// `feed OUT_DIR` verb, and it is a statement about what does *not* work.
+    ///
+    /// This is the statement about what does: **one publish, one projector,
+    /// three axes, and every one of them still named.** The site manifest and
+    /// the feed head are asserted through the same signed root in the same
+    /// tree — which is the property `crate::publish_axes` exists to make
+    /// structural rather than remembered.
+    ///
+    /// Falsified — republishing the feed under its own `RootProjector` after
+    /// the shared root has been signed (the standalone-verb shape, spliced into
+    /// `run_projection`) reds the **site** assertion with `Err("Absent")`,
+    /// i.e. the consumer reporting *the publisher withdrew this site* about a
+    /// site that is right there on disk.
+    #[test]
+    fn one_publish_carries_every_axis_and_names_all_of_them_in_one_signed_root() {
+        let tmp = std::env::temp_dir().join(format!("entity-publish-feed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let posts = posts_dir(&tmp, 3);
+
+        let code = run(&[
+            "publish".into(),
+            out.to_string_lossy().to_string(),
+            "--demo-identity".into(),
+            format!("--ingest-feed={}", posts.display()),
+        ]);
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+        // The feed arrived…
+        assert_eq!(
+            resolve_signed(&out, &pid, crate::feed::index_head_key()),
+            Ok(()),
+            "the §4.2 head resolves through the signed root"
+        );
+        assert_eq!(
+            resolve_signed(&out, &pid, &crate::feed::index_page_key(0)),
+            Ok(()),
+            "and so does page 0"
+        );
+        // …and did NOT take the site's name with it. This is the assertion the
+        // whole design turns on.
+        assert_eq!(
+            resolve_signed(&out, &pid, &format!("sites/{}/manifest", crate::views::content_site::DEMO_SITE_ID)),
+            Ok(()),
+            "the site is still named by the root the feed publish signed — if this is \
+             `Absent`, the axes have stopped composing and a standalone verb has crept back in"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **A prefixed publish puts every axis INSIDE the prefix**, and the feed is
+    /// the one that can get this wrong: `emit_owned_sites` and `emit_app_set`
+    /// both take `prefix` and join it themselves, while `publish_feed` writes
+    /// `{dir}/{peer}/…` directly — so the axis has to hand it the prefixed base.
+    /// Get it backwards and the whole archive lands at the origin root, outside
+    /// the hosting scope its own signed root is served from, where no consumer
+    /// resolving `{origin}/{prefix}/…` will ever look.
+    #[test]
+    fn a_prefixed_publish_puts_every_axis_inside_the_prefix() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-feed-pfx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let posts = posts_dir(&tmp, 2);
+
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                "--prefix=scope".into(),
+                format!("--ingest-feed={}", posts.display()),
+            ]),
+            ExitCode::SUCCESS
+        );
+
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+        let head = format!("{}.bin", crate::feed::index_head_key());
+        assert!(
+            out.join("scope").join(&pid).join(&head).exists(),
+            "the feed head is under the hosting prefix"
+        );
+        assert!(
+            !out.join(&pid).join(&head).exists(),
+            "and NOT at the origin root, where the prefix's consumers cannot reach it"
+        );
+        // The control: the site axis lands under the prefix too, so this is a
+        // statement about the prefix and not about the feed being special.
+        assert!(out.join("scope").join(&pid).join("sites").is_dir());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **`run_plan` owes every axis a term, and this is the feed's.** Its own
+    /// doc comment states the rule — *"if a future emitter adds a third subgraph
+    /// under the peer prefix, it owes a term here in the same commit"* — and the
+    /// reason is the apps incident: the clean removes `{peer}/` wholesale, so a
+    /// republish that forgets `--ingest-feed` does not leave the archive alone,
+    /// it **deletes** it. For a feed that is the one thing in the output tree
+    /// that cannot be re-derived from anything else in it.
+    ///
+    /// The last step is what makes it a regression test rather than a
+    /// tautology: it proves the removal the plan predicts is real.
+    #[test]
+    fn a_plan_that_omits_the_feed_reports_the_posts_it_would_delete() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-plan-feed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let posts = posts_dir(&tmp, 4);
+        let with_feed = format!("--ingest-feed={}", posts.display());
+        let call = |extra: &[&str]| {
+            let mut args =
+                vec!["publish".to_string(), out.to_string_lossy().to_string(), "--demo-identity".into()];
+            args.extend(extra.iter().map(|s| s.to_string()));
+            run(&args)
+        };
+
+        // 1. Publish WITH the feed.
+        assert_eq!(call(&[&with_feed]), ExitCode::SUCCESS);
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+        assert_eq!(projected_feed_posts(&out, &pid, ""), 4, "precondition: four posts projected");
+
+        // 2. Plan the same publish WITHOUT it — the destructive exit code, not
+        //    "nothing would be removed".
+        assert_eq!(
+            call(&["--plan"]),
+            ExitCode::from(PLAN_DESTRUCTIVE_EXIT),
+            "a plan that omits the feed must not report a safe publish"
+        );
+        // …and the plan wrote nothing.
+        assert_eq!(projected_feed_posts(&out, &pid, ""), 4);
+
+        // 3. Run it, and confirm the deletion the plan predicted is real.
+        assert_eq!(call(&[]), ExitCode::SUCCESS);
+        assert_eq!(
+            projected_feed_posts(&out, &pid, ""),
+            0,
+            "a publish without --ingest-feed really does delete the archive — if this ever \
+             becomes 4, the clean stopped covering app/feed/** and the plan above is now \
+             a false alarm"
+        );
+
+        // Re-planning with the feed back is quiet again: the destructive code is
+        // about the omission, not about feeds existing.
+        assert_eq!(call(&["--plan", &with_feed]), ExitCode::SUCCESS);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **F8's hole, one convention over, closed in the commit that opened
+    /// it.** `--verify`'s heuristic window scan filters on *presence*, so it
+    /// cannot see *absence* — that is why an `app/site-asset` and a
+    /// `system/content/blob` are DECODED rather than scanned. A feed entry over
+    /// EMBED §3's ceiling carries the identical `payload: {tag: "pointer"}`, so
+    /// it owed the same arm, and the third publish axis is what made it
+    /// reachable.
+    ///
+    /// Worse than the asset case by the amount that a post is more than a
+    /// figure: an asset's absence drops an image out of a page that still reads;
+    /// an entry's absence is **the post**, which appears in the index and
+    /// renders empty.
+    ///
+    /// Both levels asserted separately, for the asset gate's reason: deleting
+    /// the chunk and deleting the blob take different arms, and a gate that
+    /// removed only one would pass for an implementation that wired the other.
+    #[test]
+    fn a_pointer_bodys_closure_is_declared_so_verify_fails_when_the_post_loses_its_bytes() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-feedclosure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let posts = tmp.join("posts");
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&posts).unwrap();
+
+        // Over the ceiling and non-uniform, so the chunker really splits it.
+        let long: String = (0..(crate::embed::INLINE_PAYLOAD_MAX as u32 + 4_000))
+            .map(|i| char::from(b'a' + ((i.wrapping_mul(2_654_435_761) >> 11) % 26) as u8))
+            .collect();
+        std::fs::write(
+            posts.join("long.md"),
+            format!("+++\ncreated_at = 2026-09-10T09:00:00Z\ntitle = \"Long\"\n+++\n{long}"),
+        )
+        .unwrap();
+
+        // The same staging the ingest performs, so we know exactly which blob
+        // and chunks the publish will emit — found by construction rather than
+        // by scanning the output for "the big one", which the demo sites the
+        // publish also carries would make ambiguous.
+        let scratch: std::sync::Arc<dyn entity_store::ContentStore> =
+            std::sync::Arc::new(entity_store::MemoryContentStore::new());
+        let staged = crate::content_site::asset_store::stage(
+            "text/markdown",
+            long.as_bytes().to_vec(),
+            &scratch,
+        )
+        .unwrap();
+        let blob_hash = staged.asset.pointer().expect("an oversized body chunks");
+        let chunk_hash = crate::content_site::asset_store::chunk_hashes_of(&staged.content[0])
+            .unwrap()
+            .first()
+            .copied()
+            .expect("the blob names at least one chunk");
+
+        let out_s = out.to_string_lossy().to_string();
+        let call = |extra: &[&str]| {
+            let mut args = vec!["publish".to_string(), out_s.clone(), "--demo-identity".into()];
+            args.extend(extra.iter().map(|s| s.to_string()));
+            run(&args)
+        };
+        assert_eq!(
+            call(&[&format!("--ingest-feed={}", posts.to_string_lossy())]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "the published tree is clean");
+
+        let at = |h: &entity_hash::Hash| {
+            let hex = h.to_hex();
+            out.join("content").join(&hex[0..2]).join(&hex[2..4]).join(&hex)
+        };
+
+        // Arm 1 — a chunk. The blob still resolves, so the chain is intact for
+        // one hop and stops at reassembly.
+        let chunk = at(&chunk_hash);
+        let chunk_bytes = std::fs::read(&chunk).expect("the chunk was projected");
+        std::fs::remove_file(&chunk).unwrap();
+        assert_eq!(
+            call(&["--verify"]),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a chunk the blob DECLARES is not projected — the post cannot be reassembled"
+        );
+        std::fs::write(&chunk, &chunk_bytes).unwrap();
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "restored tree is clean again");
+
+        // Arm 2 — the blob itself, reached from the ENTRY's body payload. This
+        // is the arm that did not exist before this commit.
+        let blob = at(&blob_hash);
+        let blob_bytes = std::fs::read(&blob).expect("the blob was projected");
+        std::fs::remove_file(&blob).unwrap();
+        assert_eq!(
+            call(&["--verify"]),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "the blob a feed entry DECLARES is not projected — verify must fail on the ENTRY \
+             arm, not only on the blob-declares-chunks one"
+        );
+        std::fs::write(&blob, &blob_bytes).unwrap();
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2648,7 +3181,7 @@ mod tests {
         };
 
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let (pid, _sites, _apps) = resolve_publish_source(demo_kp, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
 
         // 1. Publish WITH apps.
         assert_eq!(call(&[&ingest_apps]), ExitCode::SUCCESS);
@@ -2740,7 +3273,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
 
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let (pid, _sites, _apps) = resolve_publish_source(demo_kp, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
         // Seed an apps projection by hand — the shape a previous publish left.
         let bundles = tmp.join(&pid).join("apps").join("games").join("bundles");
         std::fs::create_dir_all(&bundles).unwrap();
@@ -3373,6 +3906,120 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// **A pointer asset's blob closure is DECLARED, so `--verify` must fail
+    /// when it is not projected — and before this gate it did not.**
+    ///
+    /// Measured by hand on a real `make site` tree the day the pointer arm
+    /// landed: delete the asset's chunk and verify printed *"every pointer
+    /// resolves and every body hashes to its address"*, exit 0, with the
+    /// closure count silently dropping 11 → 10. That is Audit F8's failure a
+    /// second time, in a new shape — the 33-byte window scan *does* find a
+    /// `payload.hash`, but it filters on presence, so **it cannot see
+    /// absence**. The comment F8 left in this very function says what to do
+    /// about it: *"A heuristic scan cannot close it… Structure can."* An
+    /// `app/site-asset` declares its blob and a `system/content/blob`
+    /// declares its chunks, so both get decoded rather than scanned.
+    ///
+    /// Worse here than for an interior trie node, which is why it needs its
+    /// own gate rather than riding the existing one: a missing trie node
+    /// makes the whole subtree unreadable and is loud, while a missing asset
+    /// closure renders the page perfectly and drops only the image.
+    ///
+    /// **Both levels are asserted separately.** Deleting the chunk and
+    /// deleting the blob take different arms, and a gate that only removed
+    /// one would pass for an implementation that wired the other.
+    #[test]
+    fn a_pointer_assets_blob_closure_is_declared_so_verify_fails_when_it_is_missing() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-assetclosure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        let out = tmp.join("out");
+        std::fs::create_dir_all(src.join("pages")).unwrap();
+        std::fs::create_dir_all(src.join("assets/figures")).unwrap();
+        std::fs::write(
+            src.join("site.manifest.json"),
+            br#"{"site_id":"ac","title":"Asset Closure","nav":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("pages/index.md"),
+            b"# Home\n\n::embed[Fig]{ref=assets/figures/big.png}\n",
+        )
+        .unwrap();
+        // Over the ceiling, and non-uniform: a constant buffer would make
+        // every chunker agree by accident.
+        let big: Vec<u8> = (0..(crate::content_site::format::INLINE_PAYLOAD_MAX as u32 + 4_000))
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        std::fs::write(src.join("assets/figures/big.png"), &big).unwrap();
+
+        let out_s = out.to_string_lossy().to_string();
+        let call = |extra: &[&str]| {
+            let mut args = vec!["publish".to_string(), out_s.clone(), "--demo-identity".into()];
+            args.extend(extra.iter().map(|s| s.to_string()));
+            run(&args)
+        };
+        assert_eq!(
+            call(&[&format!("--ingest={}", src.to_string_lossy())]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "the published tree is clean");
+
+        // Find the closure members by DECODED TYPE, never by size or sort
+        // position — the sizes overlap once the chunker splits and hash-keyed
+        // filenames have no stable order (the lesson
+        // `verify_proves_a_published_tree_and_catches_a_tampered_body` already
+        // paid for one test over).
+        let mut blobs = Vec::new();
+        collect_files(&out.join("content"), "", &mut blobs);
+        let typed = |want: &str| -> std::path::PathBuf {
+            blobs
+                .iter()
+                .find(|p| {
+                    std::fs::read(p)
+                        .ok()
+                        .and_then(|b| ciborium::from_reader::<ciborium::Value, _>(&b[..]).ok())
+                        .and_then(|v| {
+                            use entity_ecf::ValueExt;
+                            v.get("type").and_then(|t| t.as_str()).map(|t| t == want)
+                        })
+                        .unwrap_or(false)
+                })
+                .unwrap_or_else(|| panic!("the publish emitted a {want}"))
+                .clone()
+        };
+        let blob = typed(entity_types::TYPE_CONTENT_BLOB);
+        let chunk = typed(entity_types::TYPE_CONTENT_CHUNK);
+
+        // Arm 1 — the chunk. The blob still resolves, so the pointer chain is
+        // intact for one hop and stops at reassembly.
+        let chunk_bytes = std::fs::read(&chunk).unwrap();
+        std::fs::remove_file(&chunk).unwrap();
+        assert_eq!(
+            call(&["--verify"]),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a chunk the blob DECLARES is not projected — the image cannot be reassembled and \
+             verify must say so"
+        );
+        std::fs::write(&chunk, &chunk_bytes).unwrap();
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "restored tree is clean again");
+
+        // Arm 2 — the blob itself, reached from the asset entity's payload.
+        let blob_bytes = std::fs::read(&blob).unwrap();
+        std::fs::remove_file(&blob).unwrap();
+        assert_eq!(
+            call(&["--verify"]),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "the blob a site asset DECLARES is not projected — verify must fail on the asset arm, \
+             not only on the chunk one"
+        );
+        std::fs::write(&blob, &blob_bytes).unwrap();
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// An orphaned blob is reported but does **not** fail the tree: nothing
     /// links to it, so no reader can hit it, and a tree mid-cutover legitimately
     /// holds blobs its pointers have not adopted yet. Failing on this would make
@@ -3481,6 +4128,7 @@ mod tests {
             manifest: SiteManifest::new(id, id, "index", Vec::new()),
             pages: vec![("index".to_string(), SitePage::markdown("I", "hi"))],
             assets: Vec::new(),
+            content: Vec::new(),
         };
         let existing = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let incoming = [site("beta"), site("delta")];
@@ -3528,7 +4176,7 @@ mod tests {
     #[test]
     fn bundled_demo_set_has_no_dangling_nav_links() {
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let (_pid, sites, _apps) = resolve_publish_source(demo_kp, None, None).unwrap();
+        let PublishSource { peer_id: _pid, sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
         assert_eq!(
             warn_dangling_nav_links(&sites),
             0,
@@ -4186,8 +4834,13 @@ mod tests {
         use crate::deployment_config::DeploymentConfig;
 
         let dir = tempfile::tempdir().unwrap();
-        let (peer_id, sites, _games) =
-            resolve_publish_source(entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED), None, None)
+        let PublishSource { peer_id, sites, app_sets: _games, .. } =
+            resolve_publish_source(
+                entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+                None,
+                None,
+                None,
+            )
                 .unwrap();
         let spec = DeployConfigSpec {
             surface: "site".to_string(),
@@ -4281,8 +4934,13 @@ mod tests {
 
         // (c) Emitted, and read back by the consumer that has to act on it.
         let dir = tempfile::tempdir().unwrap();
-        let (peer_id, sites, _apps) =
-            resolve_publish_source(entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED), None, None)
+        let PublishSource { peer_id, sites, app_sets: _apps, .. } =
+            resolve_publish_source(
+                entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+                None,
+                None,
+                None,
+            )
                 .unwrap();
         let spec = DeployConfigSpec {
             surface: "site".to_string(),
@@ -4330,8 +4988,13 @@ mod tests {
         use crate::deployment_config::DeploymentConfig;
 
         let dir = tempfile::tempdir().unwrap();
-        let (peer_id, sites, _games) =
-            resolve_publish_source(entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED), None, None)
+        let PublishSource { peer_id, sites, app_sets: _games, .. } =
+            resolve_publish_source(
+                entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+                None,
+                None,
+                None,
+            )
                 .unwrap();
         let spec = DeployConfigSpec {
             surface: "window".to_string(),
@@ -4400,8 +5063,13 @@ mod tests {
     /// site is preferred over the first read; an unknown id yields None.
     #[test]
     fn pick_bare_site_prefers_explicit_then_demo() {
-        let (_pid, sites, _games) =
-            resolve_publish_source(entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED), None, None)
+        let PublishSource { peer_id: _pid, sites, app_sets: _games, .. } =
+            resolve_publish_source(
+                entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+                None,
+                None,
+                None,
+            )
                 .unwrap();
         // No filter → the demo site (even though entity-info may sort first).
         assert_eq!(pick_bare_site(&sites, None).map(|s| s.site_id.as_str()), Some("demo"));

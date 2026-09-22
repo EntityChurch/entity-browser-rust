@@ -829,6 +829,7 @@ mod tests {
             manifest: SiteManifest::new("home", "Home", "index", vec![NavItem::new("Home", "/index")]),
             pages: vec![("index".into(), SitePage::markdown("Home", "# named bytes"))],
             assets: vec![],
+            content: Vec::new(),
         };
         emit_owned_sites(dir, std::slice::from_ref(&site), "", Some(&mut root)).unwrap();
         root.finish(dir).unwrap();

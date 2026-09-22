@@ -58,9 +58,13 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use entity_entity::Entity;
+use entity_store::{ContentStore, MemoryContentStore};
 
 use super::format::{media_type_for_path, NavItem, SiteAsset, SiteManifest, SitePage};
-use super::{embed, paths};
+use super::{asset_store, embed, paths};
 use crate::peers::Peers;
 
 /// Ingest one or more sites from `path` into `peer_id`'s tree.
@@ -127,10 +131,33 @@ pub(crate) struct IngestedSite {
     pub pages: Vec<(String, SitePage)>,
     /// `(name, asset)` relative to `assets/`, name-sorted.
     pub assets: Vec<(String, SiteAsset)>,
+    /// The `system/content` blob + chunk entities every **pointer** asset
+    /// above depends on, content-addressed and deduped across the site.
+    ///
+    /// **These are not optional and not a detail of the store they were
+    /// chunked into.** An asset over EMBED §3's 16 KiB ceiling carries a
+    /// pointer, and a projection or a seed that writes the asset entity
+    /// without these emits a figure nothing can reach. They ride on the
+    /// ingest result for the reason `asset_store::stage` returns them at all:
+    /// a second obligation that lives in a caller's memory is the shape AP44
+    /// names.
+    pub content: Vec<Entity>,
 }
 
-/// Read one site directory into entities. Pure: touches no tree and no peer.
-pub(crate) fn read_site_dir(dir: &Path) -> Result<IngestedSite, String> {
+/// Read one site directory into entities. Pure with respect to the tree and
+/// the peer: it touches neither.
+///
+/// `store` is the content store **oversized assets are chunked into** — the
+/// pointer arm of content-site §4's `[MUST]`. It is a parameter rather than
+/// an internal detail because the caller then owns the produced blob/chunk
+/// entities ([`IngestedSite::content`]) and has to put them somewhere the
+/// asset's readers can reach. A scratch [`MemoryContentStore`] is a
+/// legitimate argument — the fixture uses one — since the entities come back
+/// by value.
+pub(crate) fn read_site_dir(
+    dir: &Path,
+    store: &Arc<dyn ContentStore>,
+) -> Result<IngestedSite, String> {
     let manifest_json = dir.join("site.manifest.json");
     let txt = std::fs::read_to_string(&manifest_json)
         .map_err(|e| format!("read {}: {e}", manifest_json.display()))?;
@@ -164,16 +191,24 @@ pub(crate) fn read_site_dir(dir: &Path) -> Result<IngestedSite, String> {
     // Stage the asset subgraph (images) before the pages, so a body's embed
     // ref has its bytes present in the same ingest. Content-addressed: the
     // store dedups identical bytes across sites.
-    let assets = collect_assets(&dir.join("assets"))?;
+    let (assets, content) = collect_assets(&dir.join("assets"), store)?;
 
-    Ok(IngestedSite { site_id, manifest, pages, assets })
+    Ok(IngestedSite { site_id, manifest, pages, assets, content })
 }
 
 /// Ingest a single site directory (one that contains `site.manifest.json`)
 /// into `peer_id`'s tree. The read half is [`read_site_dir`]; this is the
 /// write half, and the split is deliberate — see that type's doc.
 fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, String> {
-    let site = read_site_dir(dir)?;
+    // Chunk into a scratch store, then hand the produced blob/chunk entities
+    // to the peer. Chunking straight into the peer's own content store would
+    // read better and is not available: the app tier's content-put seam is
+    // `Peers::seed_content`, and `ContentStore` is not reachable as an `Arc`
+    // from here without the Direct-only L0 escape hatch. The scratch store is
+    // not a workaround — `stage` returns the entities by value precisely so
+    // the store it chunked into can be thrown away.
+    let scratch: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+    let site = read_site_dir(dir, &scratch)?;
     let site_id = site.site_id;
 
     peers.seed_write(
@@ -181,6 +216,12 @@ fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, S
         paths::manifest_path(peer_id, &site_id),
         site.manifest.to_entity(),
     );
+    // The asset closure before the assets that point at it: an asset entity
+    // whose blob is not yet held is resolvable by nothing, and the read-back
+    // in `read_owned_site` happens in the same pass.
+    for entity in &site.content {
+        peers.seed_content(peer_id, entity.clone());
+    }
     // Assets before pages, so a body's embed ref has its bytes present in the
     // same ingest.
     for (name, asset) in &site.assets {
@@ -204,27 +245,41 @@ fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, S
 /// Recursively read every file under `assets_dir` into `(name, SiteAsset)`,
 /// where `name` is the path relative to `assets_dir` (`figures/x.png`) — the
 /// suffix of the embed `ref` after the `assets/` prefix. Missing dir → empty
-/// (a site need not have assets). Bytes are read raw; the media type is
-/// inferred from the extension.
-fn collect_assets(assets_dir: &Path) -> Result<Vec<(String, SiteAsset)>, String> {
+/// (a site need not have assets). The media type is inferred from the
+/// extension; the bytes go through [`asset_store::stage`], so anything over
+/// EMBED §3's ceiling becomes a pointer and its blob closure comes back in
+/// the second element.
+///
+/// The content entities are **deduped by hash**: two sites embedding the same
+/// figure, or one site naming it twice, chunk to the same blob, and emitting
+/// it twice would inflate every projection that carries it.
+fn collect_assets(
+    assets_dir: &Path,
+    store: &Arc<dyn ContentStore>,
+) -> Result<(Vec<(String, SiteAsset)>, Vec<Entity>), String> {
     let mut out = Vec::new();
+    let mut content = Vec::new();
     if assets_dir.is_dir() {
-        walk_assets(assets_dir, assets_dir, &mut out)?;
+        walk_assets(assets_dir, assets_dir, store, &mut out, &mut content)?;
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
+    let mut seen = std::collections::BTreeSet::new();
+    content.retain(|e| seen.insert(e.content_hash));
+    Ok((out, content))
 }
 
 fn walk_assets(
     root: &Path,
     dir: &Path,
+    store: &Arc<dyn ContentStore>,
     out: &mut Vec<(String, SiteAsset)>,
+    content: &mut Vec<Entity>,
 ) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
     for entry in entries.filter_map(Result::ok) {
         let p = entry.path();
         if p.is_dir() {
-            walk_assets(root, &p, out)?;
+            walk_assets(root, &p, store, out, content)?;
             continue;
         }
         let rel = p.strip_prefix(root).map_err(|e| format!("strip prefix: {e}"))?;
@@ -235,7 +290,9 @@ fn walk_assets(
             continue;
         }
         let bytes = std::fs::read(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
-        out.push((name.clone(), SiteAsset::new(media_type_for_path(&name), bytes)));
+        let staged = asset_store::stage(media_type_for_path(&name), bytes, store)?;
+        content.extend(staged.content);
+        out.push((name.clone(), staged.asset));
     }
     Ok(())
 }
@@ -712,7 +769,7 @@ mod tests {
         assert_eq!(names, vec!["figures/landscape.svg", "figures/topology.png"], "assets: {names:?}");
         let svg = site.assets.iter().find(|(n, _)| n == "figures/landscape.svg").unwrap();
         assert_eq!(svg.1.media_type, "image/svg+xml");
-        assert!(svg.1.bytes.starts_with(b"<svg"));
+        assert!(svg.1.inline_bytes().expect("a small svg stays inline").starts_with(b"<svg"));
         let png = site.assets.iter().find(|(n, _)| n == "figures/topology.png").unwrap();
         assert_eq!(png.1.media_type, "image/png");
 

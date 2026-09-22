@@ -18,6 +18,30 @@
 //! (the bytes are content-addressed, so the same image dedups across sites).
 //! [`parse_embeds`] / [`embed_refs`] read the refs straight off the stored
 //! body for the closure walk (publish / cache).
+//!
+//! ## ⚠ This is the SITE convention's directive grammar, not `APP-CONVENTION-EMBED`
+//!
+//! [`crate::embed`] is that convention's §3 input surface — `embed-node`, the
+//! tagged payload union, `fallback`, `renditions`. **Two different things, and
+//! EMBED §3 puts each where it is:** *"the inline-directive grammar belongs to
+//! the consuming convention (e.g. the SITE convention), NOT to EMBED."* So this
+//! module's home is correct.
+//!
+//! **What is not correct is that the two never meet.** The same note carries a
+//! MUST, and its justification names this repo: *"an inline directive MUST
+//! lower to a `child` payload; it is sugar, not a parallel format
+//! (workbench-go/entity-browser-rust round-trip pin: 'edit in
+//! entity-browser-rust, view in workbench' requires the directive and the child
+//! entity be the same thing)."*
+//!
+//! Ours lowers to nothing. The directive's `ref` is a site-relative path
+//! resolved against `app/site-asset`; we mint no `Embed` entity, so there is no
+//! `child` payload for it to *be*, and what we ship is the parallel format that
+//! sentence excludes. It is the sharp form of `A-24` (every `ref` we ship is a
+//! third form `F-1` does not classify) and **no gate can see it** — a missing
+//! emission is not a divergent tag, so `vocab-lint` is silent by construction.
+//! Routed; not repaired here, because the repair is a design question about
+//! whether SITE's asset model becomes `Embed` entities.
 
 #![allow(dead_code)] // consumers (ingest normalize, render lower, closure walk) land alongside
 

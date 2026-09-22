@@ -41,7 +41,20 @@ pub struct OwnedSite {
     /// The site's embedded assets — `(name, asset)` where `name` is the path
     /// under `assets/` (`figures/x.png`). These are the closure an embed `ref`
     /// pulls in; carried so publish/cache emit the bytes alongside the pages.
+    ///
+    /// **An asset here may hold no bytes.** Above EMBED §3's 16 KiB ceiling it
+    /// carries a `pointer` and its bytes live in [`Self::content`].
     pub assets: Vec<(String, SiteAsset)>,
+    /// The `system/content` blob + chunk entities every pointer asset above
+    /// resolves through, deduped by hash.
+    ///
+    /// **This is what makes an `OwnedSite` self-contained**, and that is the
+    /// point: the two consumers want different halves of the same fact — the
+    /// projector needs the *entities* to emit beside the asset, the static
+    /// exporter needs the *bytes* to write to disk — and neither should have
+    /// to be handed a store to get them. It is not a second copy of anything;
+    /// a pointer asset's bytes exist here and nowhere else in this struct.
+    pub content: Vec<entity_entity::Entity>,
 }
 
 /// Read one site (manifest + every page) off `peer_id`'s tree. Returns
@@ -102,12 +115,54 @@ pub fn read_site(peers: &Peers, peer_id: &str, site_id: &str) -> Option<OwnedSit
         }
     }
 
+    // The pointer assets' blob closures, gathered from the peer's content
+    // store so the site travels whole. A pointer we cannot resolve is
+    // **skipped, not fatal**: the asset entity is still published (a consumer
+    // on a different origin may hold the blob), and refusing the whole site
+    // because one figure's closure is missing would turn a missing image into
+    // a missing site — the same direction D24 refuses for a cache.
+    let mut content: Vec<entity_entity::Entity> = Vec::new();
+    let mut seen = BTreeSet::new();
+    let legacy: Vec<&str> =
+        assets.iter().filter(|(_, a)| a.from_legacy_encoding).map(|(n, _)| n.as_str()).collect();
+    if !legacy.is_empty() {
+        // One line for the whole site rather than one per asset: a papers
+        // site has hundreds, and a report nobody can read is not a report.
+        tracing::info!(
+            site = %site_id,
+            count = legacy.len(),
+            first = %legacy[0],
+            "site assets are in the RETIRED pre-A-27 encoding — republishing this site \
+             re-emits them in the declared shape"
+        );
+    }
+    for (name, asset) in &assets {
+        let Some(blob) = asset.pointer() else { continue };
+        match super::asset_store::blob_closure_via(&blob, |h| peers.content_by_hash(peer_id, h)) {
+            Ok(entities) => {
+                for e in entities {
+                    if seen.insert(e.content_hash) {
+                        content.push(e);
+                    }
+                }
+            }
+            Err(why) => tracing::warn!(
+                site = %site_id,
+                asset = %name,
+                blob = %blob.to_hex(),
+                %why,
+                "site asset pointer could not be resolved from the local content store"
+            ),
+        }
+    }
+
     Some(OwnedSite {
         peer_id: peer_id.to_string(),
         site_id: site_id.to_string(),
         manifest,
         pages,
         assets,
+        content,
     })
 }
 

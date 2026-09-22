@@ -1,7 +1,7 @@
 {
   "_comment": "COMPUTED by entity-browser-rust's ingest from source/. Not hand-editable. This is OUR answer to G-PIN-4's first link, not the agreed one — a divergence here is routed, not corrected. See the module doc on src/content_site/gpin4_joint_fixture.rs.",
   "bindings": {
-    "assets/figures/big.svg": "00f0871742d5f80d4686a8782ece0bd452fbef9ee8fb74380bd96bf990352577be",
+    "assets/figures/big.svg": "00e0660d3283ac6f307b7c1b0a301120e9a78eb53165f16318226c757cbfbfbf98",
     "manifest": "0001924c4e9ab4a9a9cc190e924a5ff7753eadc7c6edaeb1d0ece9d453c3ee4bc0",
     "pages/glossary": "009d8f4fe08ace701b7bf66d062d066a8ad2a3b9e13a957feb245469a2db8db635",
     "pages/guide/advanced/internals": "0020069a583d4d77efea92510e1dd291a84397fa567f2bc8e0bb0cf537f276bd85",
@@ -16,8 +16,20 @@
       {
         "media_type": "image/svg+xml",
         "name": "figures/big.svg",
-        "note": "ONE entity, bytes inline — this publisher does not chunk at any size",
-        "source_bytes": 32047
+        "payload": {
+          "blob": "005652fea807d0f639af9e98f83d68b901e5fcfefce1b3f90889a11286d9db6c5a",
+          "tag": "pointer"
+        }
+      }
+    ],
+    "content": [
+      {
+        "hash": "005652fea807d0f639af9e98f83d68b901e5fcfefce1b3f90889a11286d9db6c5a",
+        "type": "system/content/blob"
+      },
+      {
+        "hash": "00825601eeb88c076f8559e4f1895d35fb0a18419b7e2874d3ba17784ca591a58f",
+        "type": "system/content/chunk"
       }
     ],
     "manifest": {
@@ -109,7 +121,7 @@
       }
     ]
   },
-  "roots_are_split_because": "the asset row is known-incomparable today: this publisher emits ONE inline app/site-asset entity at any size and never enters a chunker, so §6.1's chunk_size MUST is bypassed rather than exercised. Compare site_root_pages until the asset representation is agreed.",
-  "site_root_full": "00f0538888813dd020af4e1068bbb3f05a11ca03a592e1951f9f09aa574fbd4ced",
+  "roots_are_split_because": "the asset row is now REPRODUCIBLE but not yet COMPARABLE, and those are different things. It was split because our asset was inline at any size, so §6.1's canonical chunking was bypassed rather than exercised and no reproducible-publish check could observe the path; that is fixed — the asset takes APP-CONVENTION-EMBED §3's pointer arm and `payload.blob` is 1 MiB-average FastCDC over the source bytes, which any conforming publisher reproduces. What remains is that entity-workbench-go does not model app/site-asset at all, so there is nothing on the other side to compare the row against. Compare site_root_pages until a second seat implements the type; compare site_root_full the day one does.",
+  "site_root_full": "00831d598e9778469b1a5eebb8722ec03ede68208ec0e82beaaee89b93de118180",
   "site_root_pages": "00ce0a218eca26c0b7ede535e41fc262a1b0cf0603ace2dcc708a87c49c9ffb0f8"
 }

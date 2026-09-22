@@ -33,6 +33,84 @@ work?" → yes, because R2 and `python -m http.server` are interchangeable stati
 file servers, and the SPA fetches **same-origin-relative** (or from an explicit
 origin map — see §5).
 
+### 0.1 The model in one screen — read this before changing anything that publishes
+
+**⭐ THIS IS THE CANONICAL STATEMENT OF THE PUBLISHING MODEL.** If you are about
+to write it down somewhere else, link here instead. It is one function:
+
+```
+                    ┌───────────── src/content_site/publish.rs, resolve_publish_source ─────────────┐
+  an authored   ──► │   ingest::ingest_path(disk)                        read_all_sites             │
+  input             │   apps::ingest::ingest_into        ──► THE TREE ──► read_all_app_sets         │ ──► ONE projector
+  (render/ dir,     │   feed_ingest::ingest_path                         read_owned_feed            │      → project + sign
+   posts/ dir,      │   or seed_demo_site_set                                                       │
+   demo seed, …)    └──────────────────────────────────────────────────────────────────────────────┘
+                                                          the axes: src/publish_axes.rs
+```
+
+**Four consequences, each of which has been got wrong at least once:**
+
+1. **`publish` translates an input INTO the tree, then projects the TREE.** The
+   tree is the authority. An authored directory is *one workflow into it*, not
+   the model — several can coexist (a `render/` dir, an in-tree process, an
+   editor that saves and publishes).
+2. **The clean is snapshot semantics, not destruction.** `publish.rs` removes
+   `{base}/{peer_id}` (and `content/` only when no sibling publisher is present)
+   and re-projects. Re-projecting the current tree *is* the operation; **not**
+   re-projecting is what leaves an output stale against the tree it claims to
+   snapshot.
+3. **One projection, one `RootProjector`, one root.** `finish` builds the trie
+   over the bindings *that projector recorded*, so **two projector runs into one
+   directory do not compose** — the second signs a root naming only its own axis
+   and the first is silently un-named. Gated:
+   `feed_publish.rs::a_second_axis_signed_by_its_own_projector_un_names_the_first`.
+   ⇒ **anything that wants to be in the signed root has to be in the tree
+   `publish` projects.** A separate verb writing into the same out-dir is the
+   mistake.
+4. **What enters the projection is `src/publish_axes.rs` — one list, three rows.**
+   It was a hardcoded enumeration of two L5 conventions (`emit_owned_sites` +
+   `for set in app_sets`) until 2026-09-10, when the feed axis landed and paid
+   for the table. **A fourth convention is a row plus an `impl PublishAxis`**,
+   and the compiler will not let it skip an obligation: name, tree prefix,
+   `incoming()`, `project()`.
+   - The prefix matters because **the clean is wholesale** — `{base}/{peer}/` goes
+     in one `remove_dir_all`, so an axis nobody listed is not left alone, it is
+     deleted. Every axis therefore also owes a term in `run_plan`.
+   - **The residue that stays per-convention is tabulated in that module's doc**
+     (the legacy-web `.html` export, `--bare-root`, the plan's per-unit naming,
+     the `http_poll` URL builders) rather than left to be rediscovered.
+
+### 0.2 The three axes
+
+| axis | tree prefix | reader | ingest flag |
+|---|---|---|---|
+| sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` |
+| apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` |
+| feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` |
+
+Three things about the feed axis that are decisions, not details:
+
+- **A peer has ONE feed** — §4.2 pins the index at `/{peer}/app/feed/index` — so
+  the reader is `read_owned_feed`, not `read_all_feeds`. The sweep is over
+  entries.
+- **The entries are the authored fact; the §4 index is DERIVED at publish time**,
+  like `sites/index.html`. The cost, stated: a *backdated* post shifts every
+  entry after it and rewrites the archive from its insertion point. Appending —
+  the ordinary case — touches only the last page.
+- **`created_at` is required in the post's `+++` block and is never taken from
+  the file's mtime**, which `git clone` rewrites: the same posts would otherwise
+  produce different entities, hashes and page boundaries on every machine.
+  Likewise the §4.2 head is stamped from the feed's own newest post and **not**
+  from a wall clock, or the signed root would move on every run and `G-PIN-4`'s
+  *one fixture, two publishers, identical root* comparand would be unreachable
+  for any tree carrying a feed.
+
+**What is genuinely missing:** `resolve_publish_source` builds a **fresh
+in-memory** peer each run — the *keypair* is durable, the *content* is assembled
+at publish time. **There is no verb that reads a long-lived native store**, which
+is what *"publish cannot publish a peer's tree"* means. It applies to sites
+identically and is what blocks *"the desktop app posts"*.
+
 ## 1. End-to-end flow
 
 ```
@@ -104,10 +182,30 @@ python3 -m http.server 8081 --directory dist
 | `--prefix=<p>` | host many isolated peers under one domain at `/{prefix}` (multi-tenant; empty ⇒ root) |
 | `--html-only` | emit only legacy static `.html`, skip the entity-native `.bin` data |
 | `--bare-root` | render a **single** site at the domain root (the no-JS SSG opt-out; `Layout::BareRoot`) |
+| `--site=<id>` | publish only this site out of the set |
+| `--ingest-apps=<dir>` | ingest an app set (entity-apps `dist/`) alongside the sites. `--ingest-games=<dir>` is an accepted alias |
+| `--ingest-feed=<dir>` | ingest a directory of authored posts (`*.md` with a `+++` TOML block carrying **`created_at`**) as the peer's `APP-CONVENTION-FEED` archive — the **third publish axis**. The date is required and never taken from the file's mtime, which `git clone` rewrites; see `src/feed_ingest.rs` |
+| **`--plan`** | resolve the source and report **what would change, writing nothing**. Has its own exit-code contract (`run_plan`) |
+| **`--verify`** | prove an **already-published** tree resolves — every pointer, every body hashing to its address, the whole closure walkable (`run_verify`). **For a registry use `registry --verify`, not this** — different durable identity |
+| `--allow-out-of-set-links` | downgrade an out-of-set `site:`/`entity://` target from a build **failure** to a warning. `--strict-links` is **accepted and ignored** — it asks for today's default, and other repos' pipelines still pass it |
+| **`--set-home`** | this publish **moves the domain's home site**. Load-bearing: the home publish owns the domain-level fields and a secondary publish contributes only its `origins` entry, so without this a second peer defers to the existing home. A re-key *is* a deliberate home move |
+| **`--supersede=OLD=NEW`** | *(repeatable)* the succession this domain **declares**. A consumer cannot infer it for anyone but the home peer — `origins` is a map, and a key leaving as another arrives is ambiguous between a re-key and one tenant replacing another |
+| `--registry-pin=PEER_ID@ORIGIN` | the §7.4 preloaded name registry this deployment seeds. Same spelling as `registry --bind`, deliberately |
+| `--identity-seed=<64 hex>` | publish under a **specific** system identity. Default is the durable publisher keypair under `{ENTITY_DATA_DIR}/publish/` |
+| `--demo-identity` | the fixed demo publisher seed (dev/testing only). `--identity-seed` wins over it |
+
+> **This table is the whole flag set as of 2026-09-10** (23 entries, cross-checked against
+> `grep -oE '"--[a-z-]+' src/content_site/publish.rs`). It was **10 of 22** until the 09-10 audit — the
+> missing twelve included `--verify`, `--set-home` and `--supersede`, all three load-bearing.
+> `tools/publish-doc-check.py` (in `make lint`) now fails the build if a flag is added to `publish.rs`
+> without a row here, which is how `--ingest-feed` arrived in the same commit as its code.
+> **`registry` and `builds` are separate verbs with their own flags**, not part of this table; `main.rs`'s
+> usage text is canonical for those.
 
 ## 4. `dist/` layout — what a CDN serves
 
-A real, current publish of billslab (11 sites / 397 pages) = **71 MB, 1183 files**:
+A publish of billslab (11 sites / 397 pages) = **71 MB, 1183 files** — *measured 2026-08-24; a
+figure, not a live reading.*
 
 ```
 dist/
@@ -225,7 +323,8 @@ be short-TTL so a redeploy is picked up.
 
 ## 8. Code surface — the pieces it touches
 
-`src/content_site/` (17 files) is the home of the pipeline:
+`src/content_site/` (**32 files** as of 2026-09-10) is the home of the pipeline. The table below
+names the load-bearing ones and is **not** an inventory:
 
 | File | Role |
 |---|---|
@@ -239,7 +338,7 @@ be short-TTL so a redeploy is picked up.
 | `paths.rs` | tree path helpers + `asset_name_from_ref` (**the security gate**) |
 | `http_poll.rs` | remote fetch — pages + `asset_bin_url`/`fetch_asset` (the two-hop), `resolve_closure_via` |
 | `resolver.rs` | local/cached/remote resolution; `ResolvedPage.assets`; `persist_to_cache` write-through |
-| `static_export.rs` | legacy `.html` emit (`Layout::Projection` / `BareRoot`); **rewrites `href` not `src` — images deferred** |
+| `static_export.rs` | legacy `.html` emit (`Layout::Projection` / `BareRoot`); rewrites **both** `href` (`rewrite_hrefs`) **and** `src` (`rewrite_srcs`), and emits the asset files — see §9 |
 | `deployment_config.rs` (`src/`) | parse/apply `entity-deployment.json` |
 | `discovery.rs`, `origins.rs`, `cache.rs`, `prefs.rs`, `location.rs` | site enumeration, origin roster, foreign-site cache, prefs, link resolution |
 | `dom/content_site.rs` (`src/`) | the WASM DOM read path — `make_asset_resolver`, `rewrite_images`, `rewrite_links` |
@@ -257,17 +356,32 @@ below). A `site:{site_id}/{page}` body link projects to a sibling site under the
 same peer; proven on the seeded two-site demo and guarded by
 `static_export.rs::intra_domain_cross_site_link_projects_to_sibling_site`.
 
+**Landed since this list was written** (corrected 2026-09-10 — each was recorded
+here as deferred while shipping, which is the expensive direction: *a shipped
+capability recorded as deferred reads as work still owed*):
+
+- **Static-export images — SHIPPED.** `static_export.rs` rewrites `src` as well
+  as `href` (`rewrite_srcs`) and emits the asset files at
+  `sites/{peer}/{site}/assets/{name}`. Measured in a published tree: `dist-site`
+  carries `…/demo/assets/figures/demo.svg` and the page carries
+  `<img src="/sites/…/demo.svg">`. The no-JS surface is no longer alt-text-only.
+- **The name→peer-id layer — SHIPPED.** `registry_publish.rs` emits a signed
+  name registry and `named_site.rs` resolves one; `make registry` is the verb.
+  Inter-domain linking is no longer blocked on *"the registry still being built"*.
+
 **Deferred (non-blocking):**
-- **DevOps R2 push** — the static-bundle → bucket step (§7). Not code; just un-wired.
-- **Inter-domain (Type-2) cross-site links** — jump to a peer by *name*, resolved
-  by the registry/discovery layer (`entity://{name}/…`). Not ours; registry layer
-  still being built. The classifier already produces a `CrossPeer` target for the
-  `entity://{peer}/sites/{site}/pages/{page}` form (§11) — what's missing is the
-  name→peer-id resolution, which is the registry's job.
-- **Static-export images** — `static_export.rs` rewrites `href` not `src` and
-  copies no asset files (S5). The no-JS/SEO surface shows alt text only.
+- **DevOps push to the bucket** — the static-bundle → CDN step (§7). **Owned by
+  `<devops-tree>`, and its status is theirs to state, not ours** — see
+  `docs/status/TRACKER-<devops-tree>.md` rather than trusting a status
+  asserted here. (This row previously read *"not code; just un-wired"*, which was
+  a claim about somebody else's estate.)
 - **Worker-arm image pin** — code-verified + Direct/remote live-proven; a live
   e2e pin on `?worker=1` is belt-and-suspenders.
+- **Feeds are not described anywhere in `docs/architecture/specs/`.** Four
+  `app/feed/*` types, a publisher, a reader and a window exist; every account of
+  them is in `AGENTS.md` or a dated `docs/status/` handoff. See
+  `docs/plans/AUDIT-THE-PUBLISHING-PIPELINE-AND-WHY-ITS-MODEL-IS-UNFINDABLE-2026-09-10.md`
+  §8 F4.
 
 ## 10. Cross-site linking — the settled contract
 

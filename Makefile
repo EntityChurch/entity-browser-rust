@@ -604,7 +604,7 @@ federation-vectors:
 # type-checks surfaces its compile errors 11 minutes into a Selenium run, on the
 # box that happens to have a grid. It needs NO grid to compile.
 lint: image
-	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && ./tools/ecf-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && python3 tools/publish-doc-check.py && ./tools/ecf-lint.sh && ./tools/vocab-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image

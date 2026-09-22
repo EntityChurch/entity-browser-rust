@@ -12,6 +12,7 @@ pub mod content_site;
 pub mod content_stream;
 pub mod entity_tree;
 pub mod path_tap;
+pub mod feed;
 pub mod event_log;
 #[cfg(target_arch = "wasm32")]
 pub mod games;

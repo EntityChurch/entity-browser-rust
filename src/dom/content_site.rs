@@ -87,6 +87,7 @@ pub fn make_asset_resolver<'a>(
     bound_peer_id: &str,
     output: &SiteRenderOutput,
 ) -> impl Fn(&str) -> Option<(String, Vec<u8>)> + 'a {
+    use crate::content_site::asset_store;
     use crate::content_site::format::{SiteAsset, SITE_ASSET_TYPE};
     use crate::content_site::paths;
     let selector = bound_peer_id.to_string();
@@ -99,7 +100,28 @@ pub fn make_asset_resolver<'a>(
             return None;
         }
         let asset = SiteAsset::from_entity(&entity);
-        Some((asset.media_type, asset.bytes))
+        // Inline is a field read; a `pointer` walks the blob's closure out of
+        // the content store (content-site §4's `[MUST]` — every asset over
+        // 16 KiB, which on the papers sites is most figures).
+        //
+        // **The failure is reported, not swallowed, and the reasons are kept
+        // apart.** A blob we do not hold and a blob that does not decode send
+        // a reader to different places, and this returning a bare `None` for
+        // both is how a caching gap and a corrupt closure become one
+        // indistinguishable blank image. The renderer still draws nothing
+        // either way — it has one thing to draw — but the log says which.
+        match asset_store::resolve(&asset, |h| peers.content_by_hash(&selector, h)) {
+            Ok(bytes) => Some((asset.media_type, bytes)),
+            Err(why) => {
+                tracing::warn!(
+                    site = %site_id,
+                    asset = %name,
+                    %why,
+                    "site asset did not resolve — the image is left unrendered"
+                );
+                None
+            }
+        }
     }
 }
 

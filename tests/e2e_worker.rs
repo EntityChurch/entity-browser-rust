@@ -24655,3 +24655,238 @@ async fn update_banner_text(
         .await?;
     Ok(v.as_str().map(|s| s.to_string()))
 }
+
+// ---------------------------------------------------------------------------
+// The Feed window — APP-CONVENTION-FEED's first product surface
+// ---------------------------------------------------------------------------
+
+/// A well-formed, canonical peer id that this profile does **not** host.
+///
+/// Real, not invented: it is `Keypair::from_seed([9u8; 32])`'s peer id, which
+/// `feed_publish`'s tests use as their stranger. It has to be genuine, because
+/// `feed_follows::follow` refuses any id that does not embed its own key — a
+/// hand-typed `QmWhatever` would land on `NotAPeerId` and every assertion below
+/// would pass for the wrong reason.
+const A_REAL_STRANGER: &str = "2KLp3VgNLUW8pMsLuGhvEBDr2vimCNNvtp8anxjxWMWLbH";
+
+/// Read the Feed window's panel and follow list out of the DOM.
+///
+/// Returns a JSON blob rather than one string, because the assertions below are
+/// about **which of several states is on screen** and reading them one at a time
+/// would let the window change between reads.
+const READ_FEED: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    if (!layer) return JSON.stringify({error: 'no-dom-layer'});
+    const root = layer.shadowRoot || layer;
+    let win = null;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h = sec.querySelector('header h3');
+        if (h && h.textContent.trim() === 'Feed') win = sec;
+    }
+    if (!win) return JSON.stringify({error: 'no-feed-window'});
+    const rows = win.querySelectorAll('[data-field="feed-follows"] > div');
+    const notice = win.querySelector('.notice, [class*="notice"]');
+    return JSON.stringify({
+        // The whole window's text — the assertions match sentences a person
+        // would read, because that is what this gate is for.
+        text: (win.textContent || '').replace(/\s+/g, ' ').trim(),
+        follows: rows.length,
+        entries: win.querySelector('[data-field="feed-entries"]')
+            ? win.querySelector('[data-field="feed-entries"]').getAttribute('data-count')
+            : null,
+    });
+"#;
+
+/// Type into the Feed window's peer-id box and press Follow.
+///
+/// **Dispatches a real `input` event**, because `components::text_input` is
+/// draft-tracked: the value the button reads comes from `ctx.drafts`, which is
+/// filled by that listener and not by the DOM property. Setting `.value` alone
+/// would leave the draft empty and this gate would measure an empty submit
+/// while looking like it measured a real one.
+async fn feed_type_and_follow(
+    client: &Client,
+    peer_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let script = format!(
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let win = null;
+        for (const sec of root.querySelectorAll('section.window')) {{
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Feed') win = sec;
+        }}
+        if (!win) return 'no-feed-window';
+        const input = win.querySelector('[data-field="feed-peer"]');
+        if (!input) return 'no-input';
+        input.value = '{peer_id}';
+        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        const btn = win.querySelector('[data-field="feed-follow"]');
+        if (!btn) return 'no-follow-btn';
+        btn.click();
+        return 'clicked';
+        "#
+    );
+    let v = client.execute(&script, vec![]).await?;
+    Ok(v.as_str().unwrap_or("non-string").to_string())
+}
+
+/// **The Feed window, in a browser — and the claim is that a pending walk is
+/// never rendered as an empty feed.**
+///
+/// Every gate under this surface is native: the model, the poller's decision
+/// table, the follow registry and `FEED-R4`'s seven verdicts are all `make
+/// test`. **Nothing had ever executed `src/dom/feed.rs`**, and nothing had ever
+/// driven the draft → `Action::WindowEvent` → model → re-render loop, which is
+/// pure wiring and is exactly the half a model test cannot see.
+///
+/// ## What each row is for
+///
+/// 1. **Anti-vacuity.** The window opens and renders its own heading. Every
+///    assertion below is about text inside it, and `(no-feed-window)` would
+///    otherwise be indistinguishable from a state that simply does not say the
+///    words we are looking for.
+/// 2. **A fresh profile follows nobody, and says so** — *"not following anyone"*,
+///    which is a different screen from *"this publisher has posted nothing"*.
+/// 3. **A refused follow is refused, visibly, and adds no row.** This is the
+///    one that measures the wiring end to end: the typed value reaches
+///    `feed_follows::follow`, its refusal comes back as a distinct sentence, and
+///    the list does not grow.
+/// 4. **A real peer id is accepted and selects them** — and the panel is
+///    **NOT** the empty-feed screen. On this rig the deployment has no origin
+///    for that stranger, so the honest answer is the no-route one; what must
+///    never appear is *"has not posted anything"*, which would be this
+///    implementation telling a person a publisher wrote nothing when it never
+///    asked anybody.
+#[tokio::test(flavor = "current_thread")]
+async fn the_feed_window_follows_a_publisher_and_never_calls_an_unasked_question_an_empty_feed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!("http://localhost:{}/?log=trace", http_server_port()))
+        .await?;
+    wait_for_boot(&client, 30_000).await?;
+
+    let r = async {
+        // 1 — the window opens.
+        let spawn = click_spawn_btn(&client, "+ Feed").await?;
+        assert_eq!(spawn.as_str(), "clicked", "could not spawn Feed: {spawn}");
+
+        let read = |c: &Client| {
+            let c = c.clone();
+            async move {
+                let v = c.execute(READ_FEED, vec![]).await?;
+                let s = v.as_str().unwrap_or("{}").to_string();
+                Ok::<serde_json::Value, Box<dyn std::error::Error>>(
+                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+                )
+            }
+        };
+
+        let first = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| s.contains("\"follows\""))
+        })
+        .await?;
+        let state: serde_json::Value =
+            serde_json::from_str(first.as_str().unwrap_or("{}")).unwrap_or_default();
+        assert!(
+            state.get("error").is_none(),
+            "RED — the Feed window did not render: {state:?}"
+        );
+        let text = state["text"].as_str().unwrap_or_default().to_string();
+        // **Assert on the BODY, never on the word "Feed".** The window chrome
+        // draws the title, so `text.contains("Feed")` is satisfied by an empty
+        // render — measured: with `dom::feed::render` neutered to draw nothing,
+        // this row passed and row 2 caught it instead. A guard that leans on the
+        // next assertion is not a guard. The hint is rendered by
+        // `dom::feed::render` and by nothing else.
+        assert!(
+            text.contains("Follow a publisher by peer id"),
+            "RED (VACUOUS) — the Feed window frame is there and its BODY rendered \
+             nothing, so every assertion below would be about chrome: {text}"
+        );
+        println!("  feed: the window opened and its body rendered ✓");
+
+        // 2 — a fresh profile follows nobody, and the panel is the
+        // nothing-chosen screen rather than an empty feed.
+        assert_eq!(state["follows"].as_u64().unwrap_or(999), 0, "a fresh profile follows nobody");
+        assert!(
+            text.contains("not following anyone"),
+            "RED — a profile following nobody must say so: {text}"
+        );
+        assert!(
+            !text.contains("has not posted anything"),
+            "RED — nobody is even selected, so nothing may claim a publisher posted nothing: {text}"
+        );
+        println!("  feed: follows nobody, and says that rather than showing an empty feed ✓");
+
+        // 3 — a refusal reaches the screen, and adds no row. This is the whole
+        // draft → action → model → render loop, which no native test touches.
+        let typed = feed_type_and_follow(&client, "not-a-peer-id").await?;
+        assert_eq!(typed.as_str(), "clicked", "could not press Follow: {typed}");
+        let after = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| s.contains("not a peer id"))
+        })
+        .await?;
+        let state: serde_json::Value =
+            serde_json::from_str(after.as_str().unwrap_or("{}")).unwrap_or_default();
+        let text = state["text"].as_str().unwrap_or_default().to_string();
+        assert!(
+            text.contains("not a peer id"),
+            "RED — the refusal never reached the screen, so the draft/action/model \
+             loop is not wired: {text}"
+        );
+        assert_eq!(
+            state["follows"].as_u64().unwrap_or(999),
+            0,
+            "RED — a refused follow added a row anyway"
+        );
+        println!("  feed: a refused follow says why and adds nobody ✓");
+
+        // 4 — a real peer id is accepted, and the panel does NOT claim an empty
+        // feed for a question that was never asked.
+        let typed = feed_type_and_follow(&client, A_REAL_STRANGER).await?;
+        assert_eq!(typed.as_str(), "clicked", "could not press Follow: {typed}");
+        let after = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
+            v.as_str().is_some_and(|s| s.contains("\"follows\":1"))
+        })
+        .await?;
+        let state: serde_json::Value =
+            serde_json::from_str(after.as_str().unwrap_or("{}")).unwrap_or_default();
+        let text = state["text"].as_str().unwrap_or_default().to_string();
+        assert_eq!(
+            state["follows"].as_u64().unwrap_or(0),
+            1,
+            "RED — a valid peer id was not followed: {text}"
+        );
+        assert!(
+            text.contains(A_REAL_STRANGER),
+            "RED — the followed publisher is not named in the list: {text}"
+        );
+        // **The load-bearing assertion.** This rig registers no origin for that
+        // stranger, so the honest screen is the no-route one. What must never
+        // appear is the empty-feed sentence: nobody asked this publisher
+        // anything, so nothing may report what they did or did not write.
+        assert!(
+            !text.contains("has not posted anything"),
+            "RED — the panel claims this publisher posted nothing, and no request \
+             was ever made. That is the collapse `FeedStep::Wait` and \
+             `FeedPanel::NoRoute` exist to prevent: {text}"
+        );
+        assert!(
+            text.contains("does not know where this publisher is hosted"),
+            "RED — with no origin registered the panel owes the no-route sentence: {text}"
+        );
+        println!("  feed: a followed publisher with no route says so, and never claims an empty feed ✓");
+
+        let _ = read; // the closure form is kept for readability of the block above
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = client.close().await;
+    r?;
+    println!("FEED OK — the reader surface renders, refuses, follows, and never invents an empty feed.");
+    Ok(())
+}
