@@ -833,6 +833,45 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   the one component with a real durable tree cannot expose it. Both are documented deferrals, not
   regressions; F3 is the cheaper one.
   Full review, with the citations: `docs/plans/REVIEW-2026-09-03-b-THE-TREE-IS-THE-PRODUCT-AND-THE-SITE-IS-ONE-PROJECTION.md`.
+  **REPUBLICATION IS BYTE-EXACT AND AUTHORSHIP IS ROOT-ANCHORED — `tests/mirror_byte_fidelity.rs`,
+  in `make test`.** A real store re-serves another peer's exact encoding: measured through wire decode →
+  `MemoryContentStore` put/get → the emit call `RootProjector::finish` uses, with a **deliberately
+  non-canonical** fixture (`{"n":1}` with the int in non-minimal `uint8` form) because round-tripping
+  bytes our own encoder produced proves nothing. Falsified both ways. It holds structurally, not by luck:
+  `ecf_for_hash` *"embeds `data` bytes directly without re-encoding, preserving byte fidelity (matching
+  Go's approach)"* and `Entity` hashes over verbatim `data`. **Trap: `impl PartialEq for Entity` compares
+  `content_hash` ONLY** — the wrong granularity for any byte-fidelity question; compare `data`.
+  **But an `Entity` carries NO signer.** `SignedSession::resolve` is root-anchored — an entity is
+  authentic because it is reachable from its author's signed root — so a lifted entry has **integrity
+  without authorship**, and per-entry signatures do not exist to be "kept". Anything mirroring foreign
+  bytes must carry an **inclusion proof** (the author's root + the trie path, cheap because HAMT nodes
+  dedup) or accept that authorship needs the author's origin. Run this gate for any change to the emit
+  path, the store round-trip, or a mirror/republication surface.
+  **A SITE AND A FEED ARE THE SAME MECHANISM WITH A DIFFERENT DATA MODEL — do not re-derive a blocker
+  here, one was invented on 2026-09-04 and withdrawn the same day.** Entities at a peer-scoped tree path,
+  projected to static files, committed to by a signed root; `RootProjector::record(peer, subpath,
+  entity)` is already generic over what the entities mean. So arch's *"publish a feed, follow feeds is
+  easy"* is right **here** too, and F1's residue is a **reader plus an emitter** — the five mechanical
+  call sites the review already scoped, best spent on the `(tree_prefix, reader)` registration table
+  (AP44) rather than a third arm.
+  **And THE TREE IS A UNIVERSAL NAMESPACE: a foreign peer's entities live in MY tree under THAT peer's
+  own segment**, at their natural path — `foreign_cache::store_path` → `paths::manifest_path(foreign,
+  site)` = `/{foreign}/sites/…`, and `paths.rs:112` states it (*"the universal tree carries the
+  partition… it never filters by peer"*). `emit_owned_sites` is already multi-peer (`OwnedSite.peer_id`)
+  and `RootProjector::record` skips foreign peers **from the signed root only** — *"a publish can project
+  more than one peer's subgraph"* — which is exactly the mirror shape: served at the author's path,
+  verified against the author's signature, not claimed by my root. **So mirroring needs no new storage
+  class, and `author == namespace` holds trivially for a republished entry.** The withdrawn finding
+  claimed the opposite; it read `record`'s skip as a refusal while the next sentence of the same doc
+  comment says otherwise.
+  **The one genuinely absent verb, at its real size:** `resolve_publish_source` assembles into a scratch
+  peer holding the **durable keypair** (`--ingest <render dir>` or the demo seed) — `disk → tree →
+  project → sign`, which is what devops publishes with. There is **no verb reading a long-lived native
+  store**; that matters for publishing a tree out of Tori (F3's other side) and does **not** block a
+  feed. Cross-check, five surviving findings routed to arch, and the correction record:
+  `docs/plans/REVIEW-2026-09-04-THE-SOCIAL-TIER-CROSS-CHECKED-AGAINST-THE-BROWSER.md` — whose §7 is the
+  transferable half: **choosing the symbol after the claim produces a review that looks checked and is
+  not; if nothing you opened contradicted you, you did not run a check.**
   **Naming warning:** the transport lives in the wrong namespace — `http_poll.rs`, `signed_root.rs`,
   `signed_fetch.rs`, `publish_layout.rs`, `origins.rs`, `foreign_cache.rs` are all under
   `src/content_site/` and **none of them is a site concern**. Nothing depends on it; it is simply
