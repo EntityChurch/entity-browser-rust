@@ -3518,6 +3518,15 @@ impl EntityApp {
     /// Run one frame — drain actions, render DOM. Called from rAF loop.
     #[cfg(target_arch = "wasm32")]
     pub fn frame(&mut self) {
+        // FIRST: did wall-clock time jump since the previous frame? rAF does not
+        // advance while the device is suspended or the tab is backgrounded, so a
+        // large gap here IS the resume event — and on a resume every connection
+        // we believe in is a belief formed before the sleep. Probing them is what
+        // gets the §A1 seam to observe a dead channel now rather than ~130 s from
+        // now (`wake_probe`). Cheap on every ordinary frame: one clock read and
+        // an integer compare.
+        #[cfg(target_arch = "wasm32")]
+        crate::wake_probe::note_frame(&self.peer_manager);
         // Start kernel extension engines for any local peer that doesn't have
         // them yet. FIRST in the frame: `drain_system_backend_connect` below
         // EXECUTEs `maintain-peer` on S's own `system/network`, which 500s

@@ -91,9 +91,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use entity_entity::Entity;
-use entity_handler::ExecuteOptions;
-
 use crate::peers::Peers;
 
 /// Frames between probes while a peer is still fresh (~3s at 60fps).
@@ -264,40 +261,55 @@ impl ReachKeeper {
         }
     }
 
+    /// The device woke: make every standing intent due on the next pump, and
+    /// report how many were refreshed.
+    ///
+    /// **The countdown is measured in FRAMES, and frames do not advance while
+    /// the device is suspended** — so on wake every intent is exactly where it
+    /// was when we went to sleep. For a peer on the decayed cadence that is up
+    /// to a further ~30 s of silence at precisely the moment the counterpart is
+    /// back and dispatching at us. Resetting the countdown costs one probe per
+    /// wanted peer and buys back that window.
+    ///
+    /// **`probes` is deliberately NOT reset.** That counter is what decays the
+    /// fast cadence into the slow one, and re-arming a fast burst on every wake
+    /// would let a laptop that sleeps twice an hour hold an unreachable peer at
+    /// the fast rate forever — the pacing this module exists to bound. We are
+    /// re-asking *now*, not starting over.
+    pub fn wake(&self) -> usize {
+        let Ok(mut map) = self.inner.lock() else {
+            return 0;
+        };
+        let mut refreshed = 0usize;
+        for intent in map.values_mut() {
+            // An in-flight probe is left alone: its `landed` will clear the
+            // guard, and forcing a second one on top is the doubling-up that
+            // `in_flight` exists to prevent.
+            if intent.in_flight {
+                continue;
+            }
+            intent.countdown = 0;
+            refreshed += 1;
+        }
+        refreshed
+    }
+
     /// Called once per frame. Dispatches one cheap read per due pair.
     ///
-    /// The read is `system/tree:get` against a narrow prefix on the remote —
-    /// the same shape `ChatDelivery::list_remote` uses, chosen because it is
-    /// the cheapest thing that goes through the full dispatch ladder. Its
-    /// *result is discarded*: a failure is the expected case while no path
-    /// exists, and the consultation it triggered is the entire purpose.
+    /// The probe itself lives in [`crate::peer_probe`] — the same dispatch the
+    /// wake path sends, kept as one expression so the two cannot drift into
+    /// different ideas of "cheap". Its *result is discarded*: a failure is the
+    /// expected case while no path exists, and the consultation it triggered is
+    /// the entire purpose.
     pub fn pump(&self, peers: &Peers) {
         for (local, remote) in self.due(peers) {
-            let Some(dispatch) = peers.dispatch_handle(&local) else {
+            let Some(fut) = crate::peer_probe::probe(peers, &local, &remote) else {
                 self.landed(&local, &remote);
                 continue;
             };
-            let params = Entity::new("system/empty", entity_ecf::to_ecf(&entity_ecf::Value::Null))
-                .expect("system/empty Null is well-formed");
-            let opts = ExecuteOptions {
-                resource: Some(entity_capability::ResourceTarget {
-                    targets: vec![crate::app_paths::offers_prefix(
-                        crate::app_paths::APP_ID,
-                        &remote,
-                    )],
-                    exclude: vec![],
-                }),
-                ..Default::default()
-            };
-            let fut = dispatch.execute(
-                format!("entity://{remote}/system/tree"),
-                "get".to_string(),
-                params,
-                opts,
-            );
             let (keeper, l, r) = (self.clone(), local.clone(), remote.clone());
-            spawn(async move {
-                let _ = fut.await;
+            crate::peer_probe::spawn(async move {
+                fut.await;
                 keeper.landed(&l, &r);
             });
         }
@@ -322,16 +334,6 @@ impl ReachKeeper {
 pub fn global() -> &'static ReachKeeper {
     static KEEPER: OnceLock<ReachKeeper> = OnceLock::new();
     KEEPER.get_or_init(ReachKeeper::new)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn spawn<F: std::future::Future<Output = ()> + Send + 'static>(f: F) {
-    tokio::spawn(f);
-}
-
-#[cfg(target_arch = "wasm32")]
-fn spawn<F: std::future::Future<Output = ()> + 'static>(f: F) {
-    wasm_bindgen_futures::spawn_local(f);
 }
 
 #[cfg(test)]
@@ -427,6 +429,79 @@ mod tests {
         assert_eq!(k.targets().len(), 1);
         k.forget(&local, &remote);
         assert!(k.targets().is_empty(), "forget drops the intent");
+    }
+
+    /// The wake case: frames stop while the device is suspended, so a peer on
+    /// the decayed cadence is exactly where it was — up to ~30 s of further
+    /// silence at the moment the counterpart is back. `wake` makes it due now.
+    #[test]
+    fn a_wake_makes_a_decayed_intent_due_immediately() {
+        let (peers, local, remote) = unreachable_pair();
+        let k = ReachKeeper::new();
+        k.want(&local, &remote);
+
+        // Spend the first probe, then sit well inside the interval — nothing is
+        // due, which is the state a sleeping laptop freezes in.
+        for (l, r) in k.due(&peers) {
+            k.landed(&l, &r);
+        }
+        assert!(k.due(&peers).is_empty(), "paced: nothing due mid-interval");
+        k.landed(&local, &remote);
+
+        assert_eq!(k.wake(), 1, "the wake refreshes the intent and says how many");
+        assert_eq!(
+            k.due(&peers),
+            vec![(local.clone(), remote.clone())],
+            "and the peer is due on the very next pump"
+        );
+    }
+
+    /// `probes` is what decays the fast cadence into the slow one. A wake
+    /// re-asks *now*; it does not start over. Otherwise a laptop that sleeps
+    /// twice an hour would hold an unreachable peer at the fast rate forever —
+    /// the pacing this module exists to bound.
+    ///
+    /// Mutation check: reset `probes` in `wake` and this fails, with the peer
+    /// back on `FAST_EVERY`.
+    #[test]
+    fn a_wake_does_not_re_arm_the_fast_cadence() {
+        let (peers, local, remote) = unreachable_pair();
+        let k = ReachKeeper::new();
+        k.want(&local, &remote);
+
+        // Run the fast phase out, so the intent is on the slow cadence.
+        while k.probes(&local, &remote) < FAST_PROBES {
+            for (l, r) in k.due(&peers) {
+                k.landed(&l, &r);
+            }
+        }
+
+        k.wake();
+        // Due immediately (that is the point) — but the interval it then takes
+        // is still the slow one.
+        assert_eq!(k.due(&peers).len(), 1, "a wake re-asks now");
+        k.landed(&local, &remote);
+        for _ in 0..FAST_EVERY {
+            assert!(
+                k.due(&peers).is_empty(),
+                "a wake must not re-arm the fast burst"
+            );
+        }
+    }
+
+    /// An in-flight probe already covers the question a wake would ask, and
+    /// `in_flight` exists precisely so a slow round trip cannot stack. A wake
+    /// that ignored it would double up at the worst moment — right after a
+    /// resume, when round trips are slowest.
+    #[test]
+    fn a_wake_does_not_double_up_on_an_in_flight_probe() {
+        let (peers, local, remote) = unreachable_pair();
+        let k = ReachKeeper::new();
+        k.want(&local, &remote);
+        assert_eq!(k.due(&peers).len(), 1);
+        // No `landed` — that probe is still out there.
+        assert_eq!(k.wake(), 0, "an in-flight probe is left alone, and is not counted");
+        assert!(k.due(&peers).is_empty(), "and nothing is stacked on top of it");
     }
 
     /// `Action::ForgetConnection` is remote-scoped — the user dismissed a

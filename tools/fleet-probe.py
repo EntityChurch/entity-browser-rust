@@ -65,9 +65,25 @@ is_immutable = _cors.is_immutable
 # is treated as unrecoverable rather than as tuning.
 MAX_MUTABLE_AGE_S = 300
 
-BUILD_META = re.compile(
-    r'<meta\s+name=["\']entity-build["\']\s+content=["\']([^"\']*)["\']', re.I
-)
+def meta_content(name, html):
+    """The content of `<meta name="{name}">`, or None if the shell has no such tag.
+
+    ONE expression for "read a build stamp out of a shell", because
+    `tools/build-stamp.sh` now writes THREE of them and a second hand-written
+    regex is how two of them end up matched differently (C15's rule, applied to
+    this file rather than re-learned in it).
+
+    Note what the None means and keep it apart from an empty-ish value: no tag
+    at all is "this deployment predates the stamp", while a tag reading
+    `unknown` is "the build ran and could not tell" — build-stamp emits that
+    deliberately. Two different facts; do not collapse them.
+    """
+    m = re.search(
+        r'<meta\s+name=["\']' + re.escape(name) + r'["\']\s+content=["\']([^"\']*)["\']',
+        html,
+        re.I,
+    )
+    return m.group(1) if m else None
 # Hashed assets referenced by the shell. These are the URLs a stale-cache
 # incident actually pins, so they are probed rather than assumed.
 HASHED_REF = re.compile(r'["\'\(]([^"\'\)\s]*-[0-9a-f]{8,}(?:_bg)?\.(?:wasm|js))["\'\)]')
@@ -133,6 +149,7 @@ def probe_domain(base, timeout):
         "domain": base,
         "build": None,      # the commit LABEL
         "build_id": None,   # the bundle hash — the IDENTITY (§3.1)
+        "core_ref": None,   # the SIBLING KERNEL commit — the other half of the pair
         "reachable": False,
         "rows": [],
         "notes": [],
@@ -145,12 +162,26 @@ def probe_domain(base, timeout):
     out["reachable"] = True
     shell = body.decode("utf-8", "replace")
 
-    m = BUILD_META.search(shell)
-    out["build"] = m.group(1) if m else None
+    out["build"] = meta_content("entity-build", shell)
     if not out["build"]:
         out["notes"].append(
             "no <meta name=\"entity-build\"> in the shell — this deployment predates "
             "the build stamp (C5), so nothing here can say which commit it is running"
+        )
+
+    # THE OTHER HALF OF THE PAIR. This crate links `entity-core-rust` by path
+    # dependency across twenty paths with NO cross-repo lockfile, so the bundle
+    # hash is a function of OUR commit *and* whatever sibling checkout was on
+    # disk. `(entity-build, entity-core-ref)` is the smallest thing that
+    # identifies a reproducible build; a deployed shell has stamped both since
+    # 2026-09-05 and this probe could not read the second one until now, so the
+    # deployed pair was RECORDED and not OBSERVABLE.
+    out["core_ref"] = meta_content("entity-core-ref", shell)
+    if out["build"] and not out["core_ref"]:
+        out["notes"].append(
+            "the shell stamps a commit but no <meta name=\"entity-core-ref\"> — built "
+            "before 2026-09-05, so the kernel half of its build pair is unrecoverable "
+            "from the artifact"
         )
 
     paths = list(ALWAYS)
@@ -207,7 +238,8 @@ def main():
         bundles = ", ".join(b.rsplit("/", 1)[-1] for b in r.get("bundles", [])) or "—"
         print(
             f"  {r['domain']:<44} build={r.get('build_id') or '(unidentified)'}"
-            f"  commit={r['build'] or '(unstamped)'}  {bundles}"
+            f"  pair=({r['build'] or '(unstamped)'}, {r.get('core_ref') or '(unstamped)'})"
+            f"  {bundles}"
         )
 
     # Uniformity is a question about the BUILD, and the build is the bundle hash
@@ -221,8 +253,54 @@ def main():
     labels = {r["build"] for r in results if r["reachable"] and r["build"]}
     if len(ids) > 1:
         print(f"  NOTE: the fleet is NOT uniform — {len(ids)} distinct builds: {sorted(ids)}")
+        # Print the PAIR beside each divergent build, because the most common
+        # cause of "same commit, different bundle" is the kernel half moving
+        # under a local build — which is invisible if only the commit is shown.
+        # Reported, never the verdict: identity is the bundle hash (§3.1), and
+        # two kernel commits can legitimately produce one bundle when the
+        # difference did not reach us.
+        for r in results:
+            if r["reachable"] and r.get("build_id"):
+                print(
+                    f"        {r['build_id']}  ← ({r['build'] or '(unstamped)'}, "
+                    f"{r.get('core_ref') or '(unstamped)'})  {r['domain']}"
+                )
     elif len(ids) == 1:
         print(f"  the fleet is uniform on build {ids.pop()}")
+
+    # A DIRTY stamp on either half means the deployed bytes were built from a
+    # working tree nobody can reconstruct. Reported and NOT a failure, on this
+    # probe's own axis: the failure question here is "can this deployment be
+    # corrected?", and the answer is yes — republish. It is still the single
+    # most important thing to know before quoting a build id to a deployer.
+    dirty = [
+        r for r in results
+        if r["reachable"] and (
+            (r["build"] or "").endswith("-dirty") or (r.get("core_ref") or "").endswith("-dirty")
+        )
+    ]
+    for r in dirty:
+        print(
+            f"  NOTE: {r['domain']} was built from a DIRTY tree — pair "
+            f"({r['build']}, {r.get('core_ref')}). These bytes are not reproducible "
+            "from any commit; republish from a clean pair before treating this as a "
+            "rollback target"
+        )
+
+    # "We could not tell" is not "nobody recorded it" — build-stamp writes the
+    # literal `unknown` when the sibling checkout was absent or unreadable, and
+    # collapsing that into the unstamped case loses the one fact that says a
+    # build ran and failed to answer.
+    unknown_core = [
+        r for r in results if r["reachable"] and r.get("core_ref") == "unknown"
+    ]
+    for r in unknown_core:
+        print(
+            f"  NOTE: {r['domain']} stamps entity-core-ref=unknown — the build could not "
+            "read the sibling kernel checkout, so its pair is incomplete by measurement "
+            "rather than by age"
+        )
+
     if len(ids) <= 1 and len(labels) > 1:
         # Reported, never a failure: same code, different provenance stamps.
         print(

@@ -1075,6 +1075,49 @@ endif
 #
 # Neither browser is ever given the other's address, so there is no WebSocket
 # between them to fall back to: bytes that arrive crossed the §6.5 data channel.
+# THE OTHER PERSON CLOSED THE TAB — the positive half of the wake arc, and the
+# first gate here that watches a live WebRTC connection DIE.
+#
+# Every other WebRTC gate proves a channel opens and carries bytes. None of them
+# has ever asserted what happens when one stops working, which is why a dead
+# channel could be invisible for 30s (or, when idle, indefinitely) with the
+# whole suite green.
+#
+# A and B chat both ways, then B navigates away. A must stop saying "Connected".
+# GREEN as of 2026-09-08: **6/6 at 0.5s** on fresh rigs, across both handshake
+# roles. It landed RED the same day tracking a real defect and was closed by two
+# `core/peer` fixes, never by moving `DEMOTE_BUDGET_S` (12s) — the property we
+# WANT. 40 and 75 were both tried while it was red; 75 did not pass either.
+#
+# **It was bimodal, not flaky, and the reason is worth knowing before you read a
+# failure here.** A §6.5 link is ONE connection carrying TWO handshake roles: the
+# offerer becomes the §7.4.1 initiator (it decides who speaks HELLO first, NOT
+# who dials — both ICE agents fire outbound). Peer ids are fresh each run, so A
+# is the dialer in some runs and the acceptor in others, and the two roles read
+# that one channel through completely different code. Both halves had the same defect and only
+# the dialer's was found first — a 50/50 result from a deterministic gate. The
+# log panel therefore prints on PASS too, with role needles in it.
+#
+# Asserted on the RENDERED Peer Connections row, because the claim is that a
+# person stops being told they are connected to someone who is gone — with the
+# premise (chat crossed both ways AND the row read Connected first) asserted
+# separately, since "not Connected" is also what a peer that never connected says.
+DEMOTE_BUDGET_S ?= 12
+e2e-webrtc-vanish:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-vanish SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-vanish BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-vanish: two browsers chat, one vanishes, the other must notice (<$(DEMOTE_BUDGET_S)s)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; DEMOTE_BUDGET_S="$(DEMOTE_BUDGET_S)" SPIKE=spike_peer_vanishes.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-vanish: PASS — a vanished peer is noticed in seconds"; \
+	 else echo ">>> e2e-webrtc-vanish: FAIL (rc=$$rc) — read the premise lines first: a gate that never connected proves nothing"; fi; \
+	 exit $$rc
+
 FILE_SIZE ?= 700000
 e2e-webrtc-file:
 	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-file SKIPPED: podman not found on host"; exit 0; }
@@ -1783,7 +1826,19 @@ site: image
 SITE_DIST_OUT ?= dist-site
 SITE_DIST_TARGET ?= target-publish
 SITE_DIST_DEPLOY_CONFIG ?= 1
+# WHICH TWO COMMITS IS THIS BUILD MADE OF? Runs on the host (plain git, no
+# image) — `make build-pair` to see it, and it is what `site-dist` refuses on.
+.PHONY: build-pair
+build-pair:
+	@./tools/build-pair.sh --check
+
 site-dist:
+	@echo "==> the build PAIR — a release artifact is (our commit, entity-core-rust commit)"
+	@echo "    We link the kernel by path dependency with no cross-repo lockfile, so a"
+	@echo "    local build takes whatever sibling checkout is on disk. CORE_RUST_REF=<ref>"
+	@echo "    pins it (verified, never checked out); ALLOW_DIRTY=1 waives a dirty tree"
+	@echo "    and deliberately does NOT waive a pin mismatch."
+	@./tools/build-pair.sh --check
 	$(MAKE) wasm-release DIST=$(SITE_DIST_OUT) TARGET_DIR=$(SITE_DIST_TARGET)
 	$(MAKE) site OUT=$(SITE_DIST_OUT) DEPLOY_CONFIG=$(SITE_DIST_DEPLOY_CONFIG)
 	@echo ""
@@ -1794,6 +1849,7 @@ site-dist:
 	$(MAKE) builds-manifest DIST=$(SITE_DIST_OUT)
 	@echo ""
 	@echo "=== uploadable web tree: $(SITE_DIST_OUT)/ ==="
+	@echo "  pair:    $$(./tools/build-pair.sh)   ← quote BOTH to a deployer; the shell stamps them"
 	@echo "  objects: $$(find $(SITE_DIST_OUT) -type f | wc -l)   size: $$(du -sh $(SITE_DIST_OUT) | cut -f1)"
 	@echo "  apex:    SPA (index.html + wasm)   content: sites/ + content/"
 	@echo "  apps:    $$(find $(SITE_DIST_OUT) -path '*/apps/*/bundles/*.bin' | wc -l) bundle(s)"
@@ -2138,5 +2194,6 @@ publish publish-bare publish-serve:
 	@echo '  namespace and did NOT change: entity-browser publish <dir>'
 	@exit 1
 
+.PHONY: e2e-webrtc-vanish
 .PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-dist site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan fleet-probe builds-manifest
 

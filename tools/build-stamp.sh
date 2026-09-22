@@ -40,12 +40,14 @@ fi
 # `git` may be absent, the tree may not be a checkout, or the bind mount may
 # trip git's ownership check. Every one of those is "we do not know", not a
 # build failure.
-commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-if [ "$commit" != "unknown" ] && ! git diff --quiet HEAD 2>/dev/null; then
-    # A dirty build is a real and important distinction for a release artifact:
-    # the commit alone would claim a provenance the bytes do not have.
-    commit="$commit-dirty"
-fi
+# BOTH HALVES COME FROM ONE PLACE — `tools/build-pair.sh`. They used to be
+# computed here and are now read, because `site-dist`'s release guard needs the
+# identical answer and two expressions of one rule is C15's defect verbatim.
+# A dirty tree is a real and important distinction for a release artifact (the
+# commit alone would claim a provenance the bytes do not have), and that rule
+# now lives in exactly one file for both readers.
+pair=$("$(dirname "$0")/build-pair.sh")
+commit=${pair%% *}
 
 # THE SECOND HALF OF THE PROVENANCE, and without it the first half is not an
 # identifier — added 2026-09-05 after it cost a release hand-over.
@@ -67,13 +69,11 @@ fi
 # bundle nobody can reproduce.
 #
 # Same failure-is-not-a-build-failure rule as the commit above: `unknown` when
-# the sibling is absent, not a checkout, or unreadable. The path is relative to
-# THIS repo's root, which is where the script runs from (and the sibling is
-# bind-mounted beside us in the build image).
-core_ref=$(git -C ../entity-core-rust rev-parse --short HEAD 2>/dev/null || echo unknown)
-if [ "$core_ref" != "unknown" ] && ! git -C ../entity-core-rust diff --quiet HEAD 2>/dev/null; then
-    core_ref="$core_ref-dirty"
-fi
+# the sibling is absent, not a checkout, or unreadable. `build-pair.sh` resolves
+# the sibling from ITS OWN location rather than from `cwd`, so this no longer
+# depends on who invoked the stamp — same answer from the repo root, and a
+# defined one from anywhere else.
+core_ref=${pair##* }
 
 # THREE stamps, and no two of them answer the same question. (It was TWO until
 # 2026-09-05; re-state the count whenever one is added, because a heading that

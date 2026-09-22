@@ -141,6 +141,10 @@ make dist DIST_OS=windows XWIN_ACCEPT_LICENSE=1   # Windows installer, FROM LINU
 make site          # emit content sites (this was `make publish`; `publish` is reserved)
 make site-dist     # the UPLOADABLE production web tree → dist-site/ (SPA + content + apps
                    # + deployment config). `make site` alone is the CONTENT HALF ONLY.
+                   # REFUSES on a dirty tree (either half of the pair) before it builds:
+                   # CORE_RUST_REF=<ref> to pin the kernel, ALLOW_DIRTY=1 to waive dirt
+                   # (it does NOT waive a pin mismatch — that is a different failure).
+make build-pair    # which two commits is this build made of? Host-side, no image.
 make registry BIND='--bind=NAME=PEER_ID@ORIGIN'   # publish a NAME REGISTRY + verify it
 make federation    # the whole chain locally: N domains + a registry → dist-federation/
 make native        # DEPRECATED — prints redirect, no native UI build
@@ -924,6 +928,243 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   fix something, because the workaround outlives the bug and keeps teaching it. That line was
   also stale a *second* way nobody had noticed: on the Linux desktop `RTCPeerConnection` is
   undefined, so the reload promised a repair that surface could never perform.
+- **A STALE BELIEF SILENCES THE MACHINERY THAT WOULD CORRECT IT — the sleep/wake bug, fixed
+  2026-09-08 (`src/wake_probe.rs`).** Two machines chatting over §6.5 WebRTC; both sleep; on wake
+  each shows the other offline and nothing recovers until a reload, which recovers it in ~1 s with
+  no need to re-`meet`. **Nothing downstream was broken.** The §4.1 continuations, the §2.2
+  backoff, the §10.3 ladder and `reach_keeper`'s presence all work — they are never *triggered*,
+  because the liveness transition that starts them is not written for **~130 s**
+  (`3 × (30 s + 10 s) + 10 s` grace, `KeepaliveConfig::default`). The reload was never repairing
+  corrupted state; it was **skipping a slow detection path**.
+  **The deadlock is the transferable half, and each half is individually correct.**
+  `ReachKeeper::due` skips any peer the kernel calls `Connected` — right, since presence is for
+  peers we cannot reach — but after a suspend that is *every* peer, so the app's own recovery is
+  switched off for exactly the window it is needed. Meanwhile dispatch keeps using the dead pooled
+  route, so the ladder is never consulted either. **`is_connected()` was answering two questions:
+  *do we need presence?* and *is this belief current?*** (AP36 — a guard that skips work answers
+  ONE question; check every consequence is downstream of it.)
+  **The keepalive cannot short-circuit it, and an app dispatch can.** A missed ping only
+  increments a counter and it takes `max_missed` of them; a transport error on a connection we
+  *believed active* runs the kernel's §A1 seam (`demote_peer_on_transport_error`, `core/peer`'s
+  §10 step-1 site), which evicts the binding and writes `suspect` on the **first** failure. So the
+  whole fix is **send something on wake** — no kernel change, no app-side eviction, and we write
+  no liveness at all: the kernel observes the send failing and owns the demotion, which is the §A1
+  seam discipline rather than the fourth parallel liveness store AP12/D8 refuses.
+  **Probe, do not evict** — tearing down on wake costs a full re-establish on every wake where the
+  link was fine; the value was never in *which* action but in not waiting up to 30 s for the next
+  tick, and both options capture that. **~130 s → one round trip.**
+  **The wake signal is the FRAME LOOP, not the watchdog** — rAF does not advance while suspended
+  or backgrounded, so a large wall-clock gap between frames *is* the resume, with no worker, no
+  `visibilitychange` (a suspend does not always fire one) and no dependence on a watchdog the user
+  can turn off with `?watchdog=0`. The watchdog reaches the same conclusion by its own route and
+  **reports** it; it deliberately does not also act, because two detectors driving one repair is
+  the parallel mechanism. The threshold is **derived** from `KeepaliveConfig::interval_ms` (§5.4's
+  own "recently active" window) rather than typed in, so a §12.4 retune moves both together — and
+  it doubles as the debounce, which bounds the cost exactly: ≤1 wake probe per keepalive interval
+  can never more than double traffic already flowing.
+  **THE MECHANISM WAS ALREADY IN A TEST, AS SCAFFOLDING.** The reconnect proof's `cross_peer_probe`
+  carries the comment *"Provoke the drop detection: one dispatch over the dead connection… without
+  this we would be waiting ~60s on keepalive."* Understood exactly, written down as a workaround
+  **inside a test**, and never made a behaviour the product performs — *"a workaround in a runbook
+  is a bug report nobody filed"* one layer in. **Grep your test scaffolding for the fix**: a step a
+  test must perform to make the product behave is usually a step the product owes the user.
+  Gates: `decide`/`wake_gap_threshold_ms` and `FreezeVerdict` are pure and native, and
+  `a_connection_that_died_is_only_noticed_when_something_dispatches_at_it` (`peers.rs`, memory
+  transport) is the behavioural one — **falsified**, reporting *"it is still `connected`, so the
+  ~130 s wait is back"*. **Its step 3 IS the gate:** asserting only that the probe demotes would
+  pass equally if the kernel had already noticed, so pinning that the belief is *still* `Connected`
+  first is what makes the probe **necessary** rather than merely present.
+  **Stated bounds, because this class has never been gated in a browser.** No rig here can suspend
+  a machine, and `make e2e-webrtc-idle` — written for exactly Amendment 14's idle-death case —
+  **exits 2 = INCONCLUSIVE by its own Makefile note**, because `ChatDelivery`'s 5 Hz poll keeps the
+  link busy so nothing ever goes idle. So the *detection* claim is gated and the *suspend produces
+  the frame gap* and *NAT mapping expiry* claims are not. Retiring that poll onto `reach_keeper` is
+  what would make the idle gate mean something; it was **not** done here — the A3 finding makes it
+  a separate investigation (the poll is load-bearing for establishment retry and for symmetric
+  delivery), and blocking a recovery fix on it would be the larger mistake. Do not let a green
+  suite imply coverage this class has never had.
+  **Worker-arm bound:** the believed-connected set is read with the sync `read_peer_liveness`,
+  which on the Worker arm answers from a mirror seeded only for watched prefixes — so a profile on
+  `?worker=1` with no connection-showing window open probes only its `reach_keeper` intents. The
+  shipped arm is Direct/IDB, where the read is complete.
+- **A GATE WRITTEN TO PROVE A FIX WORKS IS THE ONE THAT FINDS IT DOES NOT — 2026-09-08,
+  `make e2e-webrtc-vanish`.** It was written as the positive half of the WebRTC EOF change
+  (item C), which had shipped an hour earlier with a commit message claiming a dead channel now
+  "fails now rather than on the next 30s request deadline". **It does not.** The gate's own
+  diagnostics locate the gap precisely — `transport is over: 1` (our sentinel IS posted) with
+  `terminating reader task: 0` (the reader loop does not end) — so the wiring is a *prerequisite*
+  for the claim, not the claim. **Write the gate before the commit message, or the message is a
+  hypothesis wearing a result's clothes.**
+  **The worse finding is the one nobody was looking for: detection is BIMODAL, and a vanished
+  peer's counterpart just keeps rendering Connected.** Over 8 fresh-grid runs, ~half detect at
+  30.6 s and the rest not within 75 s. **Diagnosed the same day to a `core/peer` bug — not a
+  spec issue and not the SDK** (`docs/status/HANDOFF-2026-09-08-A-VANISHED-PEER-IS-NEVER-NOTICED.md`):
+  `spawn_reader_loop` terminating has **no consequence**, so the pooled binding stays live, the
+  status entity still says `connected`, `ReachKeeper::due` keeps skipping the peer, and every
+  later dispatch burns the full 30 s `DEFAULT_REQUEST_TIMEOUT`. **Evict on reader-loop exit; do
+  NOT write liveness there** — §A1 forbids demoting inside a transport primitive, and eviction
+  alone feeds machinery that already exists (§5.4a's `escalate_unbound_suspect`, the §10.3
+  ladder, `reach_keeper`). *The spec had specified the recovery; nothing triggered it.*
+  **A ZERO FROM AN UNVALIDATED NEEDLE IS NOT EVIDENCE, and this cost a wrong published
+  conclusion.** The first pass read `terminating reader task: 0` and wrote up *"the reader loop
+  does not end"* — into a commit message. Adding a **control needle** for a kernel line that MUST
+  be present (`internal dispatch: remote completed`, 24 hits) proved capture was fine, and a
+  temporary probe in `connection_from_port_typed` then showed the sentinel arriving and the
+  reader ending after all. **Put a must-be-present control in any log-grep diagnostic panel**,
+  and note the twin trap: **the instrumented run changed the mode**, so the probe was removed and
+  the measurement repeated before anything was concluded.
+  **Landed RED on purpose, and the threshold was not tuned to make it green.** 40 s and 75 s were
+  both tried; 75 s fails too, and a budget above 30 would only be measuring the request deadline —
+  a gate satisfied by its fallback. **The gate is deterministic; the PRODUCT is what is
+  nondeterministic, and that distinction is what makes a red gate legitimate rather than flaky.**
+  **CLOSED 2026-09-08 at `6/6 PASS, 0.5 s`, by two `core/peer` fixes and no threshold change** —
+  the entry below is what it took, and the fix shape recommended above was wrong.
+  **Two rig lessons it cost.** Its first cut failed on its own premise — `(no-row-for-peer)` —
+  because Peer Connections' *Known devices* table is written by `reach_keeper`'s remember branch
+  and therefore needs a reach **intent**, which binding a chat by peer id never registers. The
+  Chat window's `[data-field='chat-reachability']` row needs no registry and is where the person
+  who reported this was looking. And the diagnostic needle `"reader task terminated"` matched the
+  *awaiter's* message, not the reader's own `"terminating reader task"` — **a zero from a needle
+  you have not verified against the source string is not evidence.**
+- **A TRANSPORT PRIMITIVE THAT EVICTS ITS OWN BINDING DISARMS THE DEMOTION THAT WAS ABOUT TO
+  FIRE — the vanished-peer fix, 2026-09-08, and the handoff's recommended fix was this mistake.**
+  That handoff said *"evict on reader-loop exit; do NOT write liveness there"*, reasoning that
+  §5.4a's `escalate_unbound_suspect` would take it from a missing binding. **It would not, and
+  the eviction is what stops it.** `demote_peer_on_transport_error` fires only while the failed
+  endpoint is **still the bound one** (the §A1 no-clobber guard), so evicting from the transport
+  makes the next dispatch's demotion a no-op; and `escalate_unbound_suspect` escalates only from
+  `suspect`, which nothing then wrote. Measured rather than reasoned: with the binding removed at
+  reader-death the seam leaves `system/peer/status` reading **`connected`**, with no mechanism
+  left to move it — strictly worse than the bug. **So the primitive REPORTS and the seam ACTS:
+  the reader raises a flag, and a dispatch issued after it fails immediately instead of at the
+  30 s deadline.** *Do not fix a stale binding by removing it from the layer that cannot demote
+  it.*
+  **The second half is why it read as a 50/50 flake: a §6.5 link is ONE connection with TWO
+  handshake roles, so ONE defect has TWO code paths and only one was fixed.** The same vanished
+  counterpart is a dead `RemoteConnection` on one browser (`spawn_reader_loop`) and a dead
+  **accepted** connection on the other (`handle_connection` + `InboundReentryEndpoint`). Peer ids
+  are fresh each run, so the role flips run to run.
+  **Say this precisely, because the spec pins the distinction and I got it wrong first.**
+  `EXTENSION-SIGNALING` §6.5: *"The offerer governs negotiation direction, **never** who dials"* —
+  both peers' ICE agents fire outbound, and the retracted `lower-dials/higher-listens` split is
+  explicitly named as the non-traversing bug that framing causes. What the offerer rule decides is
+  the **§7.4.1 initiator** (*"one role assignment, not two"*), i.e. who speaks HELLO first — and
+  *that* is what puts one side on `spawn_reader_loop` and the other on `handle_connection`. The
+  "one connection, reused both ways" half is `EXTENSION-NETWORK` §6.5.1b's duplex table and is
+  **informative**, not a MUST. **A claim about the spec that you did not open the spec to make is
+  the 09-04 review's §7 again** — the measurement was right and the explanation was invented. **When a gate is bimodal, make it
+  print which mode it got** — the panel now runs on PASS too, with role needles (`reader:` /
+  `terminating reader task` vs `remote disconnected (EOF)` / `reentry:`), because a run that does
+  not say which role it took cannot tell a bimodal product from a flaky rig. `data channel
+  closed: 2` for a single close is needle overlap (the EOF line embeds its own reason string) —
+  **check whether your needles match each other before reading a count as an event count.**
+  **The acceptor's teardown had the identical eviction**, plus no fast-fail of its own. Over a
+  socket it appears to have one — the accept loop's writer task breaks on a failed `write_frame`
+  and drops `resp_rx`, so `writer_tx.send` starts failing — but over a `MessagePort`
+  `post_message` never fails, so the writer task never breaks and every send "succeeds" into a
+  channel nobody reads. **That is why no native rig here had ever exhibited it, and why the
+  neuter of that fix came back GREEN in the integration gate.** A neuter that passes has a third
+  cause and this was it: the gate is sound, the neuter landed, and *the rig cannot produce the
+  condition*. Recorded on the test rather than explained away, with a separate unit gate that
+  **holds the receiver open on purpose** to reproduce a MessagePort — the same move as pairing a
+  duplex read half with `io::sink()` on the dialer side. **Ask what your fixture's write half
+  does when the far end is gone; if it errors, it is not the transport the bug lives on.**
+  **And the first shape of the acceptor fix regressed something worse than the bug.** Keeping the
+  endpoint registered with a flag beside its live sender took
+  `a12_escalates_to_disconnected_after_the_a1_eviction` from **0.51 s to 30 s**: that endpoint's
+  `resp_tx` clone is what keeps the accept loop's writer task parked, and that task owns the
+  **socket's write half** — so an endpoint outliving its loop held a half-open socket open and its
+  counterpart never saw EOF. The sender is now an `Option` the teardown takes, so releasing the
+  handle and recording the close are one act. **A retained handle is a retained resource: when you
+  extend something's lifetime, enumerate what it is holding.** Found by `make test`, not by
+  reading — which is the argument for running the whole suite before believing a targeted gate.
+- **AUDITED ACROSS THE COHORT — ALL THREE implementations leave an acceptor-only peer reading
+  `connected` forever, by THREE DIFFERENT ROUTES, and the spec has a MUST-shaped hole at a site it
+  never mentions (2026-09-08).** Packet:
+  `docs/status/ROUTING-2026-09-08-B-arch-CONSOLIDATED-…` (one document; the `-A` plans doc is folded
+  into it and was never delivered).
+  **`entity-core-py` is audited now and it is NOT the same defect — it is the same end state with
+  no arm to disarm.** Its acceptor writes `connected` (`peer.py:2923`, right after
+  `_register_inbound_reentry`), and its demotion gates entirely on
+  `remove_connection(peer_id, expected=…)`, which resolves `self._connections` — **the outbound pool,
+  by object identity** — so a peer we never dialed cannot be demoted by any path; its keepalive is
+  *"one loop task per pooled **outbound** connection"* by its own comment, exactly as Go's is. So Go
+  has a `wasReentryBinding` arm its own teardown disarms, and py has no arm at all.
+  **That trio is the argument, and it is stronger than the bug:** *a rule two impls get wrong is a
+  coincidence; a rule all three get wrong by different mechanisms is a spec that does not say the
+  thing.* **When you audit a cohort, do not stop at the seat that matches your own defect** — the
+  seat that reaches the same broken state differently is what turns a bug report into a spec ask.
+  **The composition is the finding, and both halves of it are individually correct.** §A1's
+  no-clobber MUST (*demote only if the failed connection is still the currently-bound one*) and
+  §5.4a's scope pin (*"an implementation that escalates on any unbound peer rather than on any
+  `suspect` peer converts this rule into a new defect"*) combine so that **any teardown which
+  unbinds a connection permanently silences liveness for that peer**: the demotion is refused
+  because nothing is bound, the escalation is refused because the status is still `connected`,
+  and nothing else writes. The spec never mentions connection teardown, so an ordinary
+  clean-up-what-I-registered defer has no way to know it is standing on a normative seam.
+  **Verified in `entity-core-go`'s source, not taken on report:** `(*Connection).serve`'s defer
+  calls `unregisterInboundForReentry`, and `(*Peer).demotePeer` carries the identical
+  `wasReentryBinding = p.inboundForReentry(peerID) == tcp` guard that the defer disarms. Worse
+  there than here on two counts — `escalateUnboundSuspect` tests only the **outbound** pool, and
+  `startKeepalive` is outbound-only by documented scope, so an acceptor-only binding has no
+  keepalive loop at all. Reachable with no WebRTC: the validator-as-B, no-listener case Go's own
+  comments cite. Its `wasReentryBinding` arm is, as far as a named search can tell, untested.
+  **What Go already had is the argument for promoting our fix rather than keeping it local:** its
+  `readerDone` latch is the same *primitive reports, seam acts* shape we landed as
+  `reader_ended`, reached independently. **Two impls converging on a behaviour the spec only
+  SHOULDs is when it should become a MUST.** (Reader-EOF fast-fail is implementation-defined —
+  named searches for `EOF`, `half-open`, `read half`, `DEFAULT_REQUEST_TIMEOUT` over the arch
+  specs return nothing; the obligation is V7 §6.11's *informative* teardown SHOULD.)
+  **And a spec-hygiene finding that takes ten seconds to check:** the Amendment 12 proposal's
+  header says *"FOLDED IN FULL… All Amendment 12 spec deltas are now in `EXTENSION-NETWORK`"*
+  while its own fold table one screen down says only the §A1/§5.4 **join** landed.
+  `mark_connection_closed`, `seam discipline`, `currently-bound`, `no-clobber` → **zero hits
+  combined** in `EXTENSION-NETWORK.md`. So the two rules an implementer must compose live in two
+  documents, one filed under `proposals/implemented/` where it reads as history. §5.4a's own
+  root-cause note already named this — *"§A1 lives only in the proposal, §5.4 lives here, nothing
+  owned the composition"* — and it produced a second defect of the same shape anyway. **A header
+  that overclaims a fold is worse than one admitting a partial: it is the reason nobody re-reads
+  the composition.** Same family as *recording a gap is what makes it look handled*.
+  **The bound this leaves, and it is the operator-facing half: on the acceptor side liveness is
+  corrected by a DISPATCH, not by the teardown.** A peer that accepts a connection, never
+  dispatches back, and whose counterpart vanishes still renders `connected`. That was true before
+  too — the change makes it *correctable* rather than permanent. The browser always dispatches
+  (the chat poll, the wake probe), which is why our gate closes; **a server-role peer that only
+  ever answers does not.** The responder writes `connected` at the AUTHENTICATE grant and the §A3
+  slice gives it no way to retract it: both demotion paths need a peer we dispatch at or keep
+  alive, and an acceptor-only binding is neither. Do not describe the acceptor side as covered.
+- **COMPARING TWO e2e RUNS ON DIFFERENT GRID STATES IS NOT A COMPARISON — 2026-09-08, and it
+  produced a confident wrong conclusion in one step.** `e2e-webrtc-chat`'s §11.5 deposit counter
+  read **12/side (FAIL)** with a change in and **4/side (PASS)** with it stashed, which reads as
+  proof. It was not: those two runs sat at different points in a **four-gate sequence on one
+  Selenium node**, and the metric degrades as the node ages. Disabling **both** new handlers still
+  reproduced 8/side — *that* is what caught the error, and it is the move to reach for: **neuter
+  your own change entirely; if the symptom survives, the symptom is not yours.** On a fresh
+  `make e2e-grid` per run the change measured **4 / 4 / 4, PASS**.
+  AGENTS.md already said *"`make e2e-grid` before you run the suite"* and *"always **replaces** the
+  node, so a run starts on a cold browser"* — written about the unfiltered suite, and I read it as
+  advice for long runs rather than as a precondition for **any** comparison. **A/B on a shared
+  mutable rig requires the rig reset between arms, not just before the first one.** Deposit counts
+  in particular are a *ratio* metric against an O(1) bound of 8, so a stale node walks them
+  straight through the threshold.
+- **DURATION CANNOT SEPARATE A SUSPEND FROM A WEDGE — but WHICH THREAD STOPPED can, and the
+  design doc that said otherwise had not read the worker (2026-09-08).** `watchdog_policy` dropped
+  any gap over 60 s as *"must be sleep"*, and the standing write-up called that a hole: *"a device
+  that wakes and then wedges produces one long gap."* **It does not.** The watcher lives off the
+  main thread and resets its own clock after every report (`last = Date.now()`), so while the main
+  thread is wedged it keeps ticking and emits a **stream of threshold-sized reports** — a single
+  gap far larger than the threshold can only mean the *watcher itself* stopped, i.e. the whole
+  process was suspended. The heuristic was sound; what was wrong was that it threw the conclusion
+  away. **Read what GENERATES the input before you call a heuristic on it wrong** — the claim was
+  reasoned from durations alone and would have sent a session to fix a non-defect.
+  What was genuinely broken is smaller and is AP40: three guards collapsed into one `bool` and one
+  log line reading *"tab backgrounded / device sleep — not a real freeze"*, naming three causes and
+  committing to none, so the Event Log could not answer the one question an *"it froze after
+  waking"* report turns on. Now four outcomes (`Backgrounded | ResumeRace | EnvironmentGap |
+  Freeze`), each with its own sentence, and `is_freeze()` is spelled **positively** so a fifth
+  environmental cause cannot silently start rendering as a stall (`AppServerView::is_serving`'s
+  bug, one subsystem over). `a_wedged_main_thread_still_reports_because_its_gaps_are_threshold_sized`
+  pins the reasoning above as a test, so a future author cannot re-derive the wrong version.
 - **THE DESKTOP'S RENDEZVOUS AND APP SERVER DEFAULT **ON** (2026-09-07, operator's call) —
   `persistence::{DEFAULT_SIGNALING_NODE, DEFAULT_APP_SERVER}`.** A fresh install was neither, so
   the whole zero-config LAN path (*walk over, type the URL, you are paired before the app boots*)
@@ -1425,10 +1666,26 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   and §3.5's recovery Boot section. Today the mechanism is reachable by a hand-typed
   `?build=<id>` — real for an operator or support, inert for everyone else. **Do not describe row
   10 as closed.**
-  **Second stated bound, measured 2026-09-04 and a different claim from the first: the FLEET has no
-  slots, because a mechanism that shipped is not a mechanism a deployment HAS.** `/builds.json` and
+  **RE-MEASURED 2026-09-08 — one domain has slots now, five do not, and the split is the fact to
+  carry.** `entitychurch.org` serves `/builds.json` **200** listing **two** builds
+  (`7a1118c2630bd81d` @ `d9cc645` index 1, and a retained `70e3e3d69e547fb4` @ `ef3a7e1` index 0,
+  `min_rollback_index: 0`), and **both slots' shells AND their bundles resolve 200** — so row 10 is
+  real on a live domain for the first time. It also serves `/sw-selfdestruct.js` **200**, so C17 is
+  pre-staged there. **The other five — `ecdeos.org`, `entitychurchfoundation.org`,
+  `entitycoreprotocol.org`, `entitychurchregistry.org`, `billslab.com` — are 404 on BOTH**, because
+  all five still serve the pre-C9 bundle `6a41dc151b1b09ba`. **The first publish to any of them
+  creates its first slot and still has nothing to roll back to.** Re-measure with a `curl` per
+  domain; do not quote this paragraph forward.
+  **And the fleet is genuinely non-uniform now, unlike the 09-02 false alarm** — two distinct
+  bundles, not one bundle with two labels. `6a41dc151b1b09ba` carries **three** commit labels
+  (`1ad7ca4`, `56c0921`, `10a5398`), which is still ONE build and ONE rollback slot per §3.1.
+  **Every one of those five is `(unstamped)` on `entity-core-ref`**, so the kernel half of their
+  pair is unrecoverable from the artifact — the stamp landed 2026-09-05 and they predate it.
+  Headers are correctable on all six (`fleet-probe` exit 0).
+  **Original bound, measured 2026-09-04, kept because the reasoning is the transferable half: a
+  mechanism that shipped is not a mechanism a deployment HAS.** `/builds.json` and
   `/builds/<live-build-id>/index.html` both 404 on all **six** live domains — the retained-build
-  machinery landed 2026-09-02, after the last deploy, so no publish has ever written one. The
+  machinery landed 2026-09-02, after the last deploy, so no publish had ever written one. The
   consequence is the one that matters on a cutover day: **the FIRST publish to use it still has
   nothing to roll back to**, and cannot retroactively retain the shell it is replacing (that shell
   was built from another branch and is not in hand). It creates the first slot, which pays off from
@@ -1604,8 +1861,37 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `entity-build-id`, so a deployed shell states which kernel it was linked against and the question
   is answerable **from the artifact** rather than from someone's memory of what was on disk. Stamped
   as `unknown` when it cannot be read, deliberately — *"we could not tell"* and *"nobody recorded
-  it"* are different facts (AP40). **`fleet-probe` does not report it yet**; that is the obvious
-  follow-on and is the field most likely to differ between two domains reporting the same commit.
+  it"* are different facts (AP40). **`fleet-probe` reports the PAIR as of 2026-09-08** — the
+  inventory line reads `pair=(commit, core-ref)`, a non-uniform fleet prints the pair beside each
+  divergent build so *"same commit, two bundles"* names its own cause in one line, and a `-dirty`
+  half on either side gets its own NOTE (*these bytes are not reproducible from any commit*). All
+  three read through **one** `meta_content(name, html)` helper rather than a third hand-written
+  regex — C15's rule applied to the probe, since `build-stamp.sh` now writes three tags. **Reported,
+  never the verdict:** identity stays the bundle hash (§3.1), because two kernel commits can
+  legitimately produce one bundle when the difference did not reach us, and `unknown` stays apart
+  from unstamped for the AP40 reason above. Falsified against two fixture origins carrying one
+  commit label, two bundles and one dirty half.
+  **CONTROLLED AT BUILD TIME AS OF 2026-09-08 — `tools/build-pair.sh`, and `make site-dist` refuses
+  before it builds anything.** CI pinned `CORE_RUST_REF`; a **local** build pinned nothing, and the
+  site publish is built locally, so the pair was recorded and observable and not controlled. Now:
+  `make build-pair` prints and checks it; `site-dist` runs `--check` first and prints the pair in
+  its closing summary; **`CORE_RUST_REF=<ref>` is a real pin** — same variable name as
+  `release.yml`, so the local path and the workflow express one intent one way — and it **verifies,
+  never checks out**, because a sibling repo's git is read-only from here.
+  **`build-stamp.sh` no longer computes the pair, it reads it** — the two expressions of one rule
+  were C15's defect verbatim, so there is one file and both callers use it. It also resolves the
+  sibling from **its own location** rather than from `cwd`, which is the same answer from the repo
+  root and a defined one from anywhere else.
+  **The hatch is `ALLOW_DIRTY=1`, and what it does NOT waive is the point.** A dirty tree is
+  waivable; a **`CORE_RUST_REF` mismatch is not**, and the way out of that one is to unset the
+  variable — which is an explicit statement that you are building against whatever is on disk, i.e.
+  the thing you asked to be protected from. The first cut let `ALLOW_DIRTY` swallow both, caught
+  while falsifying the guard: **a hatch named for one failure must not absorb another** (AP36, in a
+  guard written the same hour). Four arms falsified — dirty/no-hatch reds, dirty+hatch passes,
+  mismatch+hatch still reds, match+hatch passes — plus `site-dist` seen refusing on the real target.
+  **Stated bound: this makes the pair MEANINGFUL, not reproducible-by-instruction.** Refusing a
+  dirty tree guarantees both halves are *at some commit*, so a reader can check the pair out. It is
+  not a lockfile and does not choose a ref for you.
   **Quote build ids as `(our commit, entity-core-rust commit)` in anything a deployer reads.**
   **AN UNEXPLAINED RED IN A SUBSYSTEM YOU DID NOT TOUCH IS A `git -C ../entity-core-rust log`
   BEFORE IT IS A BISECT — 2026-09-06, and the entry above did not prevent it.** That entry is

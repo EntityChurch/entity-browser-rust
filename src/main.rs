@@ -74,6 +74,13 @@ mod listener_state;
 mod peer_mode;
 mod peer_registry;
 mod reach_keeper;
+// The one expression of "send the cheapest thing that goes through the full
+// dispatch ladder" — shared by `reach_keeper` (be present while disconnected)
+// and `wake_probe` (test a belief we hold while connected).
+mod peer_probe;
+// After a suspend, re-check every connection we believe in instead of waiting
+// ~130 s for the keepalive to notice. Feeds the §4.1 machine at step 2.
+mod wake_probe;
 // Why a peer could not be reached, from our own ICE agent's gathered candidate
 // types. `dial_markers`' shape (local, in-flight, in-memory) — NOT a fourth
 // liveness store; the kernel owns connection state and this only advises.

@@ -33,7 +33,7 @@
 //! `forget()`'d (charter D12 / AP1). Event data read via `js_sys::Reflect`
 //! (codebase idiom) so no extra web-sys feature.
 
-use crate::watchdog_policy::freeze_report_suppressed;
+use crate::watchdog_policy::{classify_freeze_report, FreezeVerdict};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -228,6 +228,8 @@ fn on_freeze_detected(gap_ms: f64) {
     //   1. currently hidden — definitely backgrounded, not a user-visible freeze;
     //   2. just returned to the foreground — the resume race (see RESUME_GRACE_MS);
     //   3. implausibly long gap — device sleep/suspend with no visibilitychange.
+    // These are FOUR outcomes, not a bool: which one fired is the question an
+    // "it froze after waking" report turns on. See `FreezeVerdict`.
     let now = js_sys::Date::now();
     let ms_since_resume = STATE.with(|s| {
         s.borrow()
@@ -235,12 +237,40 @@ fn on_freeze_detected(gap_ms: f64) {
             .map(|st| now - st.last_resume_ms)
             .unwrap_or(f64::INFINITY)
     });
-    if freeze_report_suppressed(document_hidden(), ms_since_resume, gap_ms) {
-        crate::diagnostics::note(format!(
-            "frozen-frame watchdog: ignored a ~{secs}s gap (tab backgrounded / \
-             device sleep — not a real freeze)." // i18n-ignore — diagnostics sink
-        ));
-        return;
+    // Each cause gets its own sentence. The old single line named three at once
+    // ("tab backgrounded / device sleep") and committed to none, so the Event
+    // Log could not tell an operator which of them had actually happened —
+    // exactly the distinction a report of "it froze after waking" turns on.
+    match classify_freeze_report(document_hidden(), ms_since_resume, gap_ms) {
+        FreezeVerdict::Backgrounded => {
+            crate::diagnostics::note(format!(
+                "frozen-frame watchdog: ignored a ~{secs}s gap — the tab was \
+                 backgrounded, so rendering was paused." // i18n-ignore — diagnostics sink
+            ));
+            return;
+        }
+        FreezeVerdict::ResumeRace => {
+            crate::diagnostics::note(format!(
+                "frozen-frame watchdog: ignored a ~{secs}s gap — it was reported \
+                 as we returned to the foreground (the resume race)." // i18n-ignore
+            ));
+            return;
+        }
+        FreezeVerdict::EnvironmentGap => {
+            // NOT a freeze — the watcher worker stopped too, which means the
+            // whole process was suspended. Recorded as the wake it is, because
+            // it is also the moment every connection this profile holds became
+            // suspect. The *repair* is driven from the frame loop
+            // (`wake_probe`), not from here: two detectors acting on one
+            // conclusion is the parallel mechanism this design refuses.
+            crate::diagnostics::note(format!(
+                "frozen-frame watchdog: the device was suspended for ~{secs}s \
+                 (not a freeze); connections are being re-checked." // i18n-ignore
+            ));
+            tracing::info!(gap_ms, "watchdog: device suspend/resume observed");
+            return;
+        }
+        FreezeVerdict::Freeze => {}
     }
 
     // Visibility: land it in the same in-app diagnostics sink as #4. This is

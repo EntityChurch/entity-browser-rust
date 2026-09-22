@@ -3891,6 +3891,125 @@ mod memory_transport_tests {
         handle_b.abort();
     }
 
+    /// **THE WAKE PROOF** — a connection that died while we were not looking
+    /// stays `Connected` in the read-model until *something dispatches at it*,
+    /// and the wake probe is that something.
+    ///
+    /// This is the whole of the sleep bug in miniature. Two machines chat over
+    /// §6.5 WebRTC, both sleep, and on wake each shows the other offline with
+    /// nothing recovering until the page is reloaded. Nothing downstream is
+    /// broken: the §4.1 continuations, the §2.2 backoff, the §10.3 ladder and
+    /// `reach_keeper`'s presence all work — **they are simply never triggered**,
+    /// because the liveness transition that starts them is not written for ~130 s
+    /// (`3 × (interval + timeout) + grace`).
+    ///
+    /// And for that whole window the app's own recovery is switched *off* by the
+    /// same stale belief: `ReachKeeper::due` skips any peer the kernel calls
+    /// `Connected`. Keepalive is slow, the keeper is silent, dispatch keeps using
+    /// the dead route, and each mechanism is individually behaving as designed.
+    ///
+    /// The keepalive's own ping cannot short-circuit it — a miss only increments
+    /// a counter, and it takes `max_missed` of them. An ordinary **app dispatch**
+    /// is different: a transport error on a connection we believed active runs
+    /// the kernel's §A1 seam (`liveness::demote_peer_on_transport_error` at
+    /// `core/peer`'s §10 step-1 site), which evicts the binding and writes
+    /// `suspect` on the **first** failure. So the entire repair is *send
+    /// something*, and we write no liveness ourselves.
+    ///
+    /// **Step 3 is the gate.** Asserting only that the probe demotes would pass
+    /// just as well if the kernel had already noticed on its own, which would
+    /// make this a test of nothing. Pinning that the belief is *still*
+    /// `Connected` first is what establishes that the probe is **necessary**, and
+    /// step 4 that it is **sufficient**.
+    ///
+    /// **Mutation check:** delete the probe in step 4 and step 5 fails with B
+    /// still `Connected` — the ~130 s window, reproduced.
+    ///
+    /// Note this same dispatch already existed here as *test scaffolding*
+    /// (`cross_peer_probe` in the reconnect proof, commented "without this we
+    /// would be waiting ~60s on keepalive"). The mechanism was understood and
+    /// written down as a workaround inside a test instead of as a behaviour the
+    /// product performs — the runbook's "reload Tori once" one layer in.
+    ///
+    /// What this does NOT cover: that a real device suspend produces the frame
+    /// gap `wake_probe` keys on (no rig here can suspend a machine), nor NAT
+    /// mapping expiry. It covers the detection claim, which is the half that was
+    /// wrong.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_connection_that_died_is_only_noticed_when_something_dispatches_at_it() {
+        use crate::peer_liveness::{liveness_of, LiveStatus};
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // (1) A is connected to B, and the kernel says so.
+        let connect = peers_a.connect_peer(&pid_a, format!("memory://{pid_b}"));
+        tokio::time::timeout(Duration::from_secs(2), connect)
+            .await
+            .expect("connect timed out")
+            .expect("A connects to B");
+        assert!(
+            eventually(Duration::from_secs(2), || liveness_of(&peers_a, &pid_b)
+                == LiveStatus::Connected)
+                .await,
+            "the premise: the kernel must have written `connected`"
+        );
+
+        // (2) The world changes while nobody is dispatching — the sleep. B's
+        // listener goes, so it neither answers nor accepts new dials.
+        handle_b.abort();
+        let endpoints_before = registry.len();
+        assert!(
+            eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
+            "B's endpoint must leave the registry — otherwise the outage is not \
+             real and the rest of this proves nothing"
+        );
+
+        // (3) THE BUG: A still believes. Nothing has told it, and nothing will
+        // for ~130 s. This is what the user sees as "it just sat there", and it
+        // is also what silences `ReachKeeper::due`.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            liveness_of(&peers_a, &pid_b),
+            LiveStatus::Connected,
+            "a dead connection nobody has dispatched over still reads as \
+             `connected` — if this ever fails, something else now detects the \
+             drop and this gate has stopped measuring the wake probe"
+        );
+
+        // (4) The wake: exactly the dispatch `wake_probe::probe_after_resume`
+        // sends at every believed-connected peer.
+        crate::peer_probe::probe(&peers_a, &pid_a, &pid_b)
+            .expect("A has a dispatch handle")
+            .await;
+
+        // (5) The §A1 seam observed the transport error, evicted the binding and
+        // demoted the peer — so the §4.1 continuation has something to fire on
+        // and `reach_keeper` starts probing again.
+        assert!(
+            eventually(Duration::from_secs(3), || liveness_of(&peers_a, &pid_b)
+                != LiveStatus::Connected)
+                .await,
+            "one dispatch must be enough to demote a peer that is gone; it is \
+             still `connected`, so the ~130 s wait is back"
+        );
+        assert!(
+            peers_a
+                .direct_peer_shared(&pid_a)
+                .expect("A shared")
+                .remote
+                .get(&pid_b)
+                .is_none(),
+            "the dead binding must also be EVICTED — until it is, dispatch keeps \
+             using the dead route and the §10.3 ladder is never consulted, so \
+             re-establishment cannot begin"
+        );
+
+        handle_a.abort();
+    }
+
     /// **THE TRANSFER PROOF** — one peer offers a file, another pulls it back
     /// byte for byte over a real connection, with **no `local/files` anywhere**.
     ///

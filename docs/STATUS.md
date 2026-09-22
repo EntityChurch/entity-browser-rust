@@ -198,6 +198,107 @@ dropped, because a backlog that only grows is not being read.
 - Offline-wipe: a hard refresh while the server is unreachable wipes local state. Needs a
   hash/version handshake and an offline-keeps-local design.
 
+**Connectivity & liveness** — the wake arc, `docs/plans/DESIGN-CONNECTION-RECOVERY-AND-WAKE-2026-09-08.md`
+(read its **§9 corrections** before §4/§5; two findings there were written from reasoning and are
+wrong). Items A and B shipped 2026-09-08; the rest is open.
+- **THE UI FREEZE AFTER WAKE — unexplained, and it needs a reproduction, not more analysis.**
+  Reported 2026-09-07/08: on wake the app *"would not close windows"*. A mechanism is identified —
+  a `borrow_mut()` held across an await makes the rAF loop's `try_borrow_mut()` fail every frame
+  and log `FRAME SKIP`, which is exactly "alive but unresponsive" — but **both known instances are
+  boot-only** (`main.rs:722`, `main.rs:845`), so that is a class to look for, *not* the diagnosis.
+  The other six `borrow_mut()` sites in `src/` were checked and do not hold across an await.
+  **Note it is not merely cosmetic: the frame loop drives `reach_keeper::pump`, `ChatDelivery`'s
+  poll and now `wake_probe::note_frame`, so a wedged UI disables every app-tier detector at once**
+  — which is why the freeze and the connectivity symptom may be one bug rather than two.
+  **Evidence to capture when it recurs, in this order** (they are three different bugs):
+  `FRAME SKIP` ⇒ something holds the app `RefCell`; `FRAME STALL` (>50 ms) with no SKIP ⇒ the frame
+  itself is slow, not blocked; `FRAME PANIC` ⇒ a panic unwinding out of `frame()`. Then the Event
+  Log's watchdog note, which since 2026-09-08 names *which* of the four causes fired.
+- **The sleep/idle class has NO browser gate, and this is the blocker for honestly closing the
+  arc.** `make e2e-webrtc-idle` was written for exactly Amendment 14's idle-death case and
+  **exits 2 = INCONCLUSIVE** — by the Makefile's own note, `ChatDelivery`'s 5 Hz poll keeps the
+  link busy so nothing ever goes idle. Making it meaningful means retiring that poll onto
+  `reach_keeper` (its module doc proposes it), which is the **A3 investigation**, not a cadence
+  tweak: the poll is load-bearing for establishment retry and for symmetric delivery over WebRTC.
+  Until then, do not let a green suite imply coverage this class has never had.
+- ~~**A VANISHED PEER IS OFTEN NEVER NOTICED**~~ — **CLOSED 2026-09-08.**
+  `make e2e-webrtc-vanish` now reads **6/6 PASS at 0.5 s** on fresh rigs, across both handshake
+  roles, where it was ~half at 30.6 s and the rest never within 75 s. Found by the gate written to
+  prove the opposite, landed red for a day, and closed by **two `core/peer` fixes** — the budget
+  (12 s) never moved.
+  **Both fixes are one rule at two sites: a transport primitive that EVICTS its own binding
+  disarms the §A1 demotion.** `demote_peer_on_transport_error` fires only while the failed
+  endpoint is still bound, so evicting from the transport makes the next dispatch's demotion a
+  no-op — and `escalate_unbound_suspect` escalates only from `suspect`, which nothing then wrote.
+  Measured: the status entity is left reading `connected` with nothing able to move it, i.e. worse
+  than the bug. So each primitive now **reports** and the seam **acts**: a dispatch issued after
+  the reader has ended fails immediately rather than at the 30 s deadline, and the binding is left
+  in place for the seam to evict and demote.
+  **The bimodality was ONE defect with TWO code paths.** A §6.5 link is one connection carrying two
+  handshake roles — the offerer becomes the §7.4.1 initiator, so one side runs the dialer's reader
+  loop and the other runs the accept loop — and peer ids are fresh each run, so the role flipped
+  run to run and a deterministic gate scored 50/50. (The offerer rule decides the handshake role,
+  **not** which side dials: both ICE agents fire outbound.) The gate's
+  log panel now prints on PASS too, with role needles, so a future run says which mode it took.
+  The two kernel changes are `RemoteConnection::reader_ended` (the dialer half) and
+  `InboundReentryEndpoint::connection_over` plus the accept loop's teardown no longer
+  deregistering (the acceptor half), gated by
+  `a_dispatch_after_the_reader_ends_fails_now_not_at_the_request_deadline`,
+  `the_reader_ending_leaves_the_binding_for_the_a1_seam_to_evict`,
+  `a_reentry_dispatch_after_the_accept_loop_ends_fails_now_not_at_the_request_deadline` and
+  `an_acceptor_notices_the_dialer_that_vanished`. Detail, including the two wrong turns it cost,
+  is in this repo's agent guidance.
+  **What the earlier diagnosis got wrong**, kept because it is the useful half: the second mode
+  was attributed to session lifecycle in the browser's WebRTC proxy, and it was the acceptor path
+  in the kernel; and the fix shape it proposed — evict on reader exit — is the mistake the first
+  paragraph describes.
+  **AUDITED ACROSS THE COHORT, and all three implementations reach the same stuck state by three
+  different routes.** The acceptor half is live in the Go implementation (source-verified: its
+  accept-loop teardown deregisters the same reentry binding its own no-clobber guard then requires,
+  and an acceptor-only binding there has no keepalive loop at all). The Python implementation is not
+  the same defect and ends in the same place: its acceptor writes `connected`, and its demotion is
+  gated on evicting from the **outbound** connection pool by object identity, so a peer it never
+  dialed cannot be demoted by any path — Go has an arm its own teardown disarms, Python has no arm.
+  A rule two implementations get wrong is a coincidence; a rule all three get wrong by different
+  mechanisms is a specification that does not say the thing.
+  The Go implementation had *already* reached our dialer-side fix independently, which is
+  the argument for promoting that behaviour: today it is only an informative SHOULD in the core
+  protocol's teardown contract. And the composition the defect lives in — demote-only-if-still-
+  bound, escalate-only-from-suspect — has a hole at a site the specification never mentions:
+  connection teardown. Routed to arch and to the Go implementation with the asks spelled out.
+  **Not closed by this: on the acceptor side liveness is corrected by a DISPATCH, not by the
+  teardown.** A peer that accepts a connection, never dispatches back, and whose counterpart
+  vanishes still renders `connected` — true before this change too; the difference is that it is
+  now correctable rather than permanent. A browser always dispatches, which is why the gate
+  closes; a server-role peer that only ever answers does not.
+- ~~**Item C — no `connectionstatechange` handler**~~ — **shipped 2026-09-08**, in
+  `entity-core-rust` `bindings/wasm-worker-proxy/src/webrtc_session.rs` (**quote the pair**: our
+  `dev` + kernel `0f858df`). The data channel's `close` and the peer connection's
+  `connectionstatechange → failed` now post the zero-length EOF sentinel `PortReader` already
+  surfaces, so a dead channel fails the connection immediately instead of on the 30 s
+  `DEFAULT_REQUEST_TIMEOUT` — or, when idle, not at all. `Disconnected` is deliberately **not**
+  terminal (the spec makes it transient; it escalates to `failed` on its own via RFC 7675 consent
+  freshness). Verified not to fire on healthy paths (chat ×3 fresh-grid, meet, file 700 KB, EOF
+  marker absent throughout).
+  **CORRECTION, same day: its commit message overclaimed, and was then made true.** It said the
+  connection "fails now rather than on the next 30s request deadline"; measured, it did not — the
+  sentinel is posted and nothing downstream acted on it. The two `core/peer` fixes above supplied
+  the missing half, so the claim now holds. The EOF wiring is **necessary and was not sufficient**
+  on its own, which is the shape to remember rather than the sentence.
+  The wiring is a prerequisite for that claim, not the claim. See the open defect above, which is
+  the gate that caught it.
+- **Item D — a visible reconnecting state.** Amendment 12 ruling D explicitly **rejected** a
+  `connecting`/`reconnecting` value on the liveness entity and routed it to the derived
+  `system/network/peer-summary`; `dial_markers` already does this for the *first* establish. So the
+  work is extending a derived read-model, **not** adding a state. Needs i18n across 30 locales
+  (`i18n-lint` baseline is empty — `raw=0` — and must stay that way).
+- **`MeetReach::NoNode` / `NeedsReload` still tell the user to reload.** The late-arm fix
+  (`f9bb540`) made that advice obsolete on the Direct arm; it remains correct on Worker. The same
+  stale row survives in `RUNBOOK-TWO-MACHINES` §5 (`FAIL rendezvous … reload the page`).
+- **The establisher is primary-only.** Nothing technical requires it — an artifact of the seam
+  being a constructor argument on the primary's keypair, recorded in `peers.rs` as deliberate
+  policy.
+
 **Content / publishing**
 - **Cross-domain `site:` links — the fail-loudly half is CLOSED on both sides.** Measured
   2026-08-23: the corpus carried **seven**, three files, all on `entity-church-foundation`, all
@@ -254,6 +355,35 @@ dropped, because a backlog that only grows is not being read.
 - Vault label `|` / newline is not escaped (`vault_codec`); do it in a calm window alongside input
   validation.
 - ~~Commit `Cargo.lock` for reproducible release builds~~ — **closed**, both lockfiles are tracked.
+- **A build of this application is identified by a PAIR, and only one half is pinned outside CI.**
+  This crate links the Rust reference implementation by **path dependency** across twenty paths, and
+  there is no cross-repo lockfile — so the bundle hash is a function of this repo's commit *and* of
+  whichever sibling checkout was on disk when the bundle was built. Two things are now true and one
+  is not:
+  - **Recorded.** A built shell stamps `entity-build` (this commit), `entity-core-ref` (the kernel
+    commit it linked against) and `entity-build-id` (the bundle hash, which is the *identity* — a
+    commit is only a label). Either stamp reads `-dirty` when its tree was dirty, and `unknown` when
+    it could not be read; *"we could not tell"* and *"nobody recorded it"* are kept apart on purpose.
+  - **Observable.** `make fleet-probe` reports `pair=(commit, core-ref)` per domain, prints the pair
+    beside each build when a fleet is not uniform — so *"same commit, two different bundles"* names
+    its own cause without a bisect — and calls out a dirty half as bytes no commit can reproduce.
+    Reported, never the verdict: identity stays the bundle hash, because two kernel commits can
+    legitimately yield one bundle when the difference did not reach this crate.
+  - **Controlled, as of 2026-09-08.** The release workflow already pinned the kernel ref; the
+    **local** build path — which is how the web tree is built — did not. It does now: emitting the
+    uploadable tree **refuses before it builds** if either half of the pair is a dirty or unreadable
+    checkout, prints the pair in its summary, and accepts an explicit kernel ref that it *verifies*
+    (never checks out — another repository's history is not this build's to move). The waiver for a
+    dirty tree deliberately does **not** waive a mismatched pin: those are different problems and
+    the way out of the second is to stop asking for a pin.
+  - **What that is and is not.** It makes the pair *meaningful* — both halves are at some commit, so
+    a reader can reproduce the build by checking the pair out. It is **not** a cross-repo lockfile
+    and it does not choose a version for you. That remains open.
+
+  Why it is here rather than in a note: this was measured, not theorised — a comment-only edit to an
+  unhashed asset appeared to move the bundle hash, which our own rules say is impossible. Rebuilding
+  twice at a fixed commit returned the same new id, which separated *"the build is
+  non-deterministic"* from *"an input nobody was tracking changed."* It was the sibling.
 
 **Long-deferred capability stages** (`docs/architecture/specs/SYSTEM-VISION.md`): KB wiki PoC, type renderer registry,
 pipeline builder (SDK Layer 2), relay on the Tauri backend, the capability + identity arc (Key
