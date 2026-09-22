@@ -238,6 +238,8 @@ impl WindowView for ProgramsWindow {
             init_save_hash: None,
             // A built-in program is our own L5 payload with no file surface.
             files: false,
+            assets: None,
+            workspace: None,
         };
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;

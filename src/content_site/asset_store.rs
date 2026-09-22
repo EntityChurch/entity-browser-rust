@@ -308,6 +308,20 @@ where
             return Err(ResolveError::InvalidForType { tag: tag.clone() })
         }
     };
+    reassemble_blob(blob_hash, lookup)
+}
+
+/// A `system/content/blob`'s bytes, reassembled from a content lookup — the
+/// pointer arm of [`resolve`], with no asset around it.
+///
+/// Public because a site asset is not the only thing that points at a blob: an
+/// app's asset bundle (`crate::apps::assets`) names one per file. One walk of
+/// the blob wire shape, two callers — C15, the same reason
+/// [`blob_closure_via`] is shared.
+pub fn reassemble_blob<F>(blob_hash: Hash, lookup: F) -> Result<Vec<u8>, ResolveError>
+where
+    F: Fn(&Hash) -> Option<Entity>,
+{
     let blob = lookup(&blob_hash).ok_or(ResolveError::BlobMissing(blob_hash))?;
     let chunks = chunk_hashes_of(&blob).map_err(ResolveError::Malformed)?;
     let scratch = MemoryContentStore::new();

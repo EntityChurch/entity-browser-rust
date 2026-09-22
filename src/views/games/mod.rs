@@ -1282,12 +1282,13 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
         ensure_demo_set(pm, peer_id, set);
     }
     let mut window = AppWindow::new(id, peer_id.to_string());
+    // The catalog and bundles, not the whole set prefix: the player writes
+    // asset indexes under it, and a rebuild would restart the running app
+    // (`paths::launcher_watch_prefixes`).
     for set in paths::APP_SETS {
-        pm.watch_prefix(
-            &mut window.watch,
-            &window.peer_id,
-            paths::set_prefix(&window.peer_id, set),
-        );
+        for prefix in paths::launcher_watch_prefixes(&window.peer_id, set) {
+            pm.watch_prefix(&mut window.watch, &window.peer_id, prefix);
+        }
     }
     pm.watch_prefix(
         &mut window.watch,
@@ -1335,11 +1336,9 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
             continue;
         }
         for set in paths::APP_SETS {
-            pm.watch_prefix(
-                &mut window.watch,
-                &window.peer_id,
-                paths::set_prefix(&foreign, set),
-            );
+            for prefix in paths::launcher_watch_prefixes(&foreign, set) {
+                pm.watch_prefix(&mut window.watch, &window.peer_id, prefix);
+            }
         }
     }
     Box::new(window)
@@ -1613,6 +1612,24 @@ impl WindowView for AppWindow {
             init_state,
             init_save_hash,
             files: entry.files,
+            assets: (!entry.assets.is_empty()).then(|| crate::apps::assets::AssetSource {
+                apps_peer: sv.apps_peer.clone(),
+                set: sv.set.to_string(),
+                app_id: entry.id.clone(),
+                origin: sv.origin.clone(),
+                bundles: entry.assets.clone(),
+            }),
+            // The person's working files live in THIS profile's tree, whoever
+            // published the app (`crate::apps::workspace`).
+            workspace: entry.workspace.then(|| crate::apps::workspace::WorkspaceSource {
+                app_id: entry.id.clone(),
+                prefix: crate::app_paths::app_workspace_prefix(
+                    crate::app_paths::APP_ID,
+                    &self.peer_id,
+                    sv.set,
+                    &entry.id,
+                ),
+            }),
         };
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;

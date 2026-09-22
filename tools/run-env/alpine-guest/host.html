@@ -162,14 +162,14 @@ async function get(name) {
     //      the page learns of them from a private OSC the guest prints, never by
     //      typing at the shell. So this drives them the way a person would -- as
     //      a command at the prompt -- and checks the bytes at the other end.
-    //  7a host -> guest: an x-file lands in /mnt under its BASE name.
+    //  7a host -> guest: an x-file lands in the home directory under its BASE name.
     const PUSHED = new TextEncoder().encode('pushed by the host\n');
     send('x-file', { name: 'some/dir/pushed.txt', media_type: 'text/plain', data: PUSHED });
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 2500));   // the guest agent moves it into /root
     const cat = await (async () => { const p = await_('x-run-done', 20000);
-      send('x-run', { cmd: 'cat /mnt/pushed.txt' }); return p; })();
+      send('x-run', { cmd: 'cat /root/pushed.txt' }); return p; })();
     R.r.pushed_seen = cat.out;
-    say('guest cat /mnt/pushed.txt: ' + JSON.stringify(cat.out));
+    say('guest cat /root/pushed.txt: ' + JSON.stringify(cat.out));
     //  7b guest -> host: `send` hands the host a file the guest just wrote.
     const sent = await_('x-file', 20000);
     send('x-run', { cmd: "printf 'made in the guest\\n' > /root/made.txt && send /root/made.txt" });

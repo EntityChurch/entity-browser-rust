@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} ऐप को भेजा गया",
   "apps.file.kept": "{name} आपकी फ़ाइलों में सहेजा गया",
   "apps.file.refused": "{name} सहेजा नहीं गया: {why}",
-  "apps.file.not_sent": "कोई फ़ाइल नहीं भेजी गई: {why}"
+  "apps.file.not_sent": "कोई फ़ाइल नहीं भेजी गई: {why}",
+  "filetransfer.save_to_device": "इस डिवाइस पर सहेजें",
+  "filetransfer.from_app": "{app} से",
+  "filetransfer.save_failed": "{name} को इस डिवाइस पर सहेजा नहीं जा सका: {why}"
 }

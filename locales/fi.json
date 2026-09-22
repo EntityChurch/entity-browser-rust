@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} lähetettiin sovellukseen",
   "apps.file.kept": "{name} tallennettiin tiedostoihisi",
   "apps.file.refused": "{name} ei tallennettu: {why}",
-  "apps.file.not_sent": "Tiedostoa ei lähetetty: {why}"
+  "apps.file.not_sent": "Tiedostoa ei lähetetty: {why}",
+  "filetransfer.save_to_device": "Tallenna tälle laitteelle",
+  "filetransfer.from_app": "Sovelluksesta {app}",
+  "filetransfer.save_failed": "Tiedostoa {name} ei voitu tallentaa tälle laitteelle: {why}"
 }

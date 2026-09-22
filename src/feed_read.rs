@@ -65,7 +65,11 @@
 //! the legacy SHA-256 form need an out-of-band key, and *"we could not check"*
 //! must never render as *"this is not theirs"*.
 
-#![allow(dead_code)] // no window follows a feed yet; the gates are native
+// The Feed window follows a feed since 2026-09-10 (`views::feed` via
+// `feed_fetch`); what is still unused is the half of this module's surface the
+// window does not call — `read_by_enumeration`'s reporting arms and several
+// `Unattributed` constructors that only a gate builds.
+#![allow(dead_code)]
 
 use std::future::Future;
 use std::pin::Pin;

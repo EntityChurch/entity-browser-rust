@@ -32,7 +32,9 @@ import urllib.request
 # :4444 is usually another session's, and a probe that can only reach it either
 # queues behind their run or steals their slot.
 GRID = os.environ.get("GRID", "http://127.0.0.1:4444")
-URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8201/host.html"
+# ?boot=cold: the paint-during-boot check below needs a BOOT, and with a snapshot
+# published beside the page a launch resumes in ~2 s with no boot to sample.
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8201/host.html?app=index.html%3Fboot%3Dcold"
 BUDGET_S = 240
 
 
@@ -121,7 +123,7 @@ checks = [
     # The guest's own verbs (build-guest.sh 3c). A host file lands under its BASE
     # name -- `some/dir/pushed.txt` must not create directories in the guest --
     # and a file the guest `send`s arrives at the host byte-exact and base-named.
-    ("host -> guest: an x-file lands in /mnt under its base name",
+    ("host -> guest: an x-file lands in the home directory under its base name",
      "pushed by the host" in (r.get("pushed_seen") or []),
      json.dumps(r.get("pushed_seen"))),
 

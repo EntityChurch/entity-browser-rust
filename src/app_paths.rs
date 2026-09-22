@@ -60,6 +60,18 @@ pub fn app_saves_prefix(app_id: &str, peer_id: &str, set: &str) -> String {
     format!("/{}/app/{}/apps/{}/state/", peer_id, app_id, set)
 }
 
+/// Prefix holding one app's **working files** (`crate::apps::workspace`), one
+/// entity per file at `{prefix}{path}` — visible in the entity tree.
+/// A sibling of `state/` and `backups/`, **not under either**: the Apps window
+/// watches those, and a watch covering this prefix would rebuild the player —
+/// restarting the running app — on every save
+/// (`the_workspace_is_outside_every_prefix_the_apps_window_watches`).
+/// e.g. `app_workspace_prefix(APP_ID, pid, "apps", "alpine")` →
+/// `"/{pid}/app/entity-browser/apps/apps/work/alpine/"`
+pub fn app_workspace_prefix(app_id: &str, peer_id: &str, set: &str, app_id_in_set: &str) -> String {
+    format!("/{}/app/{}/apps/{}/work/{}/", peer_id, app_id, set, app_id_in_set)
+}
+
 /// Prefix holding every backup of every app in one set.
 /// e.g. `"/{pid}/app/entity-browser/apps/games/backups/"`
 pub fn app_backups_prefix(app_id: &str, peer_id: &str, set: &str) -> String {
@@ -140,29 +152,6 @@ pub fn feed_follows_prefix(app_id: &str, peer_id: &str) -> String {
 /// `"/{pid}/app/entity-browser/feed-follows/PEERB"`
 pub fn feed_follow_path(app_id: &str, peer_id: &str, subject_peer_id: &str) -> String {
     format!("{}{}", feed_follows_prefix(app_id, peer_id), subject_peer_id)
-}
-
-/// Prefix for the **gatherer** registry — peers this profile will read OTHER
-/// authors through (`APP-CONVENTION-FEED` §6). e.g.
-/// `"/{pid}/app/entity-browser/feed-gatherers/"`
-///
-/// ⚠ **Separate from `feed-follows/` because it is a different relationship**,
-/// not a flag on the same one: you *follow* Alice to read Alice, and you name
-/// Greg to be able to read **anybody** through Greg's mirrors. A gatherer need
-/// not be followed and a followed peer need not gather.
-///
-/// It is ours and local, for §2.4's reason one convention over — a follow record
-/// is *"the reader's private data"* that nothing publishes, and so is this. §6
-/// names no path for it because it names **no discovery mechanism at all**: a
-/// reader has no way to learn a gatherer exists, which is why this is a list
-/// somebody types rather than one anything infers.
-pub fn feed_gatherers_prefix(app_id: &str, peer_id: &str) -> String {
-    format!("/{}/app/{}/feed-gatherers/", peer_id, app_id)
-}
-
-/// One gatherer record, keyed by the gatherer's peer id.
-pub fn feed_gatherer_path(app_id: &str, peer_id: &str, gatherer_peer_id: &str) -> String {
-    format!("{}{}", feed_gatherers_prefix(app_id, peer_id), gatherer_peer_id)
 }
 
 /// Prefix for the peer-supersession registry — `retired_peer_id → the peer that
@@ -497,6 +486,27 @@ pub fn roster_entry_path(app_id: &str, peer_id: &str, hosted_pid: &str) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every prefix the Apps window watches (`views::games` wires exactly these)
+    /// must stay clear of the workspace: a save under a watched prefix rebuilds
+    /// the player and restarts the running app — the asset-index bug again.
+    #[test]
+    fn the_workspace_is_outside_every_prefix_the_apps_window_watches() {
+        let work = app_workspace_prefix(APP_ID, "P", "apps", "alpine");
+        assert_eq!(work, "/P/app/entity-browser/apps/apps/work/alpine/");
+        let mut watched = vec![
+            app_saves_prefix(APP_ID, "P", "apps"),
+            app_backups_prefix(APP_ID, "P", "apps"),
+            window_state_path(APP_ID, "P", 1),
+        ];
+        watched.extend(crate::apps::paths::launcher_watch_prefixes("P", "apps"));
+        for w in &watched {
+            assert!(
+                !work.starts_with(w.as_str()) && !w.starts_with(work.as_str()),
+                "the Apps window watches {w}, which overlaps the workspace {work}"
+            );
+        }
+    }
 
     #[test]
     fn workspace_path_builds_correctly() {

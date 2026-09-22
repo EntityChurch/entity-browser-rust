@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} به برنامه فرستاده شد",
   "apps.file.kept": "{name} در فایل‌های شما ذخیره شد",
   "apps.file.refused": "{name} ذخیره نشد: {why}",
-  "apps.file.not_sent": "هیچ فایلی فرستاده نشد: {why}"
+  "apps.file.not_sent": "هیچ فایلی فرستاده نشد: {why}",
+  "filetransfer.save_to_device": "ذخیره در این دستگاه",
+  "filetransfer.from_app": "از {app}",
+  "filetransfer.save_failed": "ذخیرهٔ {name} در این دستگاه ممکن نشد: {why}"
 }

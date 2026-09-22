@@ -114,7 +114,10 @@
 // module exists to argue against. When a window follows a feed, that half moves
 // and this gate narrows to the emitter.
 #![cfg(not(target_arch = "wasm32"))]
-#![allow(dead_code)] // no CLI verb publishes a feed yet; the gate is native
+// `publish --ingest-feed` reaches this since 2026-09-10 (`publish_axes::FeedAxis`)
+// and the browser cannot: this module is native-only, so the WASM build sees
+// every item here as unused. The gate that matters is `make site FEED=…`.
+#![allow(dead_code)]
 
 use std::path::Path;
 
@@ -592,6 +595,117 @@ pub(crate) mod tests {
 
     fn author_id() -> String {
         RootProjector::new(identity()).unwrap().peer_id().to_string()
+    }
+
+    // -- the scale probe ---------------------------------------------------
+
+    /// **A MEASUREMENT, NOT A GATE** — `#[ignore]`d, run by hand:
+    /// `make test-one T="the_cost_of_a_large_feed --ignored"`.
+    ///
+    /// Every number in this module's design argument (§4.3 rule 1's *"the same
+    /// cost as posting"*, `FEED-R12`'s page bound) is about **a feed at scale**,
+    /// and every fixture here is 3–34 entries. This prints what a publish
+    /// actually costs so the answer to *"does it work at 5,000 posts"* is a
+    /// table rather than an inference.
+    ///
+    /// It asserts nothing about the numbers on purpose — a threshold nobody has
+    /// earned is a flake, and the point is the shape of the curve.
+    #[test]
+    #[ignore]
+    fn the_cost_of_a_large_feed() {
+        fn tree_size(dir: &Path) -> (usize, u64) {
+            let mut files = 0usize;
+            let mut bytes = 0u64;
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                let Ok(rd) = std::fs::read_dir(&d) else { continue };
+                for e in rd.flatten() {
+                    let Ok(md) = e.metadata() else { continue };
+                    if md.is_dir() {
+                        stack.push(e.path());
+                    } else {
+                        files += 1;
+                        bytes += md.len();
+                    }
+                }
+            }
+            (files, bytes)
+        }
+
+        println!(
+            "\n{:>7} {:>7} {:>8} {:>9} {:>12} {:>10} {:>10} {:>10}",
+            "n", "pages", "keys", "files", "bytes", "project", "finish", "total"
+        );
+        for n in [100usize, 500, 1000, 2000, 4000, 8000, 16000] {
+            let author = author_id();
+            let posted = entries(&author, n);
+            let dir = tempfile::tempdir().unwrap();
+            let mut root = RootProjector::new(identity()).unwrap();
+
+            let t0 = std::time::Instant::now();
+            let report =
+                publish_feed(dir.path(), &mut root, &posted, &[], DEFAULT_PAGE_SIZE, NOW).unwrap();
+            let project = t0.elapsed();
+
+            let t1 = std::time::Instant::now();
+            let signed = root.finish(dir.path()).unwrap();
+            let finish = t1.elapsed();
+
+            let (files, bytes) = tree_size(dir.path());
+            println!(
+                "{n:>7} {:>7} {:>8} {files:>9} {bytes:>12} {:>10.2?} {:>10.2?} {:>10.2?}",
+                report.page_count,
+                signed.keys,
+                project,
+                finish,
+                project + finish
+            );
+        }
+    }
+
+    /// **The OTHER half of the cost question: what does posting ONE more cost?**
+    ///
+    /// §4.3 rule 1's `[MUST]` buys *"rewriting page 12 changes page 12's binding
+    /// and nothing else — `O(tree depth)`, the same cost as posting"*. That is a
+    /// claim about **bindings that move**, and this prints it beside the claim
+    /// nobody states: what the *publisher* pays to emit the archive again.
+    #[test]
+    #[ignore]
+    fn the_cost_of_posting_one_more() {
+        println!("\n{:>7} {:>12} {:>12} {:>10}", "n", "keys moved", "of total", "republish");
+        for n in [100usize, 1000, 4000] {
+            let author = author_id();
+
+            let before = {
+                let dir = tempfile::tempdir().unwrap();
+                let mut root = RootProjector::new(identity()).unwrap();
+                publish_feed(dir.path(), &mut root, &entries(&author, n), &[], DEFAULT_PAGE_SIZE, NOW)
+                    .unwrap();
+                root.bindings_for_measurement()
+            };
+            let (after, republish) = {
+                let dir = tempfile::tempdir().unwrap();
+                let mut root = RootProjector::new(identity()).unwrap();
+                let t0 = std::time::Instant::now();
+                publish_feed(
+                    dir.path(),
+                    &mut root,
+                    &entries(&author, n + 1),
+                    &[],
+                    DEFAULT_PAGE_SIZE,
+                    NOW,
+                )
+                .unwrap();
+                root.finish(dir.path()).unwrap();
+                (root.bindings_for_measurement(), t0.elapsed())
+            };
+
+            let moved = after
+                .iter()
+                .filter(|(k, v)| before.get(*k).map(|b| b != *v).unwrap_or(true))
+                .count();
+            println!("{n:>7} {moved:>12} {:>12} {republish:>10.2?}", after.len());
+        }
     }
 
     // -- the end-to-end loop ----------------------------------------------

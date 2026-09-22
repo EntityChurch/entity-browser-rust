@@ -2247,7 +2247,7 @@ impl EntityApp {
         effective_surface: &crate::session_config::BootSurface,
         system_pid: &str,
     ) {
-        if let crate::session_config::BootSurface::Window { peer_id, window_type, target } =
+        if let crate::session_config::BootSurface::Window { peer_id, window_type } =
             &effective_surface
         {
             // Resolve the target peer: empty `peer_id` = the system peer
@@ -2277,23 +2277,16 @@ impl EntityApp {
                 // Window ids are ephemeral → the durable `(peer, type)` is
                 // the stable identifier, re-spawned each boot; no extra
                 // persistence needed.
-                match self.window_manager.spawn_at(
-                    window_type,
-                    &target_peer,
-                    target.as_ref(),
-                    &self.peer_manager,
-                ) {
+                match self
+                    .window_manager
+                    .spawn(window_type, &target_peer, &self.peer_manager)
+                {
                     Some(id) => {
                         self.maximized_window = Some(id);
                         tracing::info!(
                             window_type = %window_type,
                             target_peer = %target_peer,
                             window_id = id,
-                            // `target_peer` is the local store; this is the
-                            // publisher. Both, because a deployment that boots
-                            // the Feed window at nobody and one that boots it at
-                            // a publisher are the same line otherwise.
-                            aimed_at = %crate::open_target::write(target.as_ref()),
                             "boot_load: booted into maximized window surface"
                         );
                     }
@@ -3232,14 +3225,7 @@ impl EntityApp {
                         Some((p, t)) => (p.to_string(), t.to_string()),
                         None => (String::new(), raw),
                     };
-                    // `?window=` is a developer override for the SURFACE, not
-                    // for an address — the query grammar is `{peer}:{type}` and
-                    // widening it to carry a URI is a separate decision.
-                    crate::session_config::BootSurface::Window {
-                        peer_id,
-                        window_type,
-                        target: None,
-                    }
+                    crate::session_config::BootSurface::Window { peer_id, window_type }
                 })
                 .unwrap_or_else(|| cfg.boot_surface.clone());
             self.apply_window_surface(&effective_surface, &system_pid);
@@ -3796,7 +3782,7 @@ impl EntityApp {
     fn process_actions(&mut self, actions: Vec<Action>) {
         for action in &actions {
             match action {
-                Action::SpawnWindow { type_name, peer_id, target } => {
+                Action::SpawnWindow { type_name, peer_id } => {
                     let open = self.window_manager.open_count();
                     let pid = peer_id.as_deref()
                         .unwrap_or(self.peer_manager.primary_peer_id());
@@ -3809,35 +3795,11 @@ impl EntityApp {
                             if let Some(dom) = self.dom.as_ref() {
                                 dom.focus_window(existing);
                             }
-                            // **Focusing is not opening, and a focused window is
-                            // still owed the address.** Singleton mode reuses the
-                            // open instance, so a second *Open* click at a
-                            // different publisher would otherwise focus a window
-                            // still showing the first one — the button doing
-                            // nothing, which is the defect `open_target` was
-                            // built to fix arriving through the other arm.
-                            if let (Some(target), Some(win)) =
-                                (target.as_ref(), self.window_manager.get_mut(existing))
-                            {
-                                let outcome = win.view.aim(target, &self.peer_manager);
-                                tracing::info!(
-                                    window_type = %type_name,
-                                    window_id = existing,
-                                    subject_peer = %target.peer(),
-                                    outcome = outcome.label(),
-                                    "focused window re-aimed at a target"
-                                );
-                            }
                             continue;
                         }
                     }
                     tracing::info!(type_name = %type_name, peer_id = %pid, open_windows = open, "SpawnWindow");
-                    self.window_manager.spawn_at(
-                        type_name,
-                        pid,
-                        target.as_ref(),
-                        &self.peer_manager,
-                    );
+                    self.window_manager.spawn(type_name, pid, &self.peer_manager);
                 }
                 Action::CloseWindow(id) => {
                     tracing::info!(window_id = id, "CloseWindow");
@@ -4323,6 +4285,10 @@ impl EntityApp {
                 Action::WithdrawOffer { peer_id, offer_id, filename } => {
                     tracing::info!(peer = %peer_id, offer = %offer_id, "Action::WithdrawOffer");
                     self.handle_withdraw_offer(peer_id.clone(), offer_id.clone(), filename.clone());
+                }
+                Action::SaveOwnOffer { peer_id, offer_id, filename } => {
+                    tracing::info!(peer = %peer_id, offer = %offer_id, "Action::SaveOwnOffer");
+                    self.handle_save_own_offer(peer_id.clone(), offer_id.clone(), filename.clone());
                 }
                 Action::Query { peer_id, expression } => {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Query");
@@ -4881,6 +4847,70 @@ impl EntityApp {
         log.log(format!(
             "✓ stopped offering {filename} (already-shared content ids still resolve)"
         ));
+    }
+
+    /// Save one of our own offers to this device (`Action::SaveOwnOffer`).
+    ///
+    /// The outcome goes to the card's status slot as well as the event log, for
+    /// the reason `handle_offer_file` gives: on a phone the Results pane is not
+    /// where anyone is looking. Success is the download itself.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_save_own_offer(&self, pid: String, offer_id: String, filename: String) {
+        let log = self.event_log_writer.clone();
+        let attempt = self.offer_attempt.clone();
+        let watchers: Vec<crate::window_watch::DirtyFlag> = self
+            .window_manager
+            .windows
+            .iter()
+            .filter(|w| w.open && w.view.type_name() == "File Transfer") // i18n-ignore — stable type identifier, not UI text
+            .map(|w| w.view.watch().flag())
+            .collect();
+        let wake = move |flags: &[crate::window_watch::DirtyFlag]| {
+            for f in flags {
+                f.mark();
+            }
+        };
+        let fail = |why: String| {
+            log.log(format!("✗ save {filename} → {why}"));
+            attempt.set_save_failed(
+                &filename,
+                &crate::i18n::t("filetransfer.save_failed", &[("name", &filename), ("why", &why)]),
+            );
+            wake(&watchers);
+        };
+        let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
+            fail(crate::file_offer::not_routed_message(&pid));
+            return;
+        };
+        let blob = match crate::file_offer::hash_from_id(&offer_id) {
+            Ok(h) => h,
+            Err(e) => {
+                fail(e);
+                return;
+            }
+        };
+        attempt.set_saving(&filename);
+        wake(&watchers);
+        wasm_bindgen_futures::spawn_local(async move {
+            let outcome = match crate::file_offer::read_own_offer(&dispatch, &blob).await {
+                Ok(bytes) => crate::ops::download::save_bytes(&filename, &bytes).map(|()| bytes.len()),
+                Err(e) => Err(e),
+            };
+            match outcome {
+                Ok(n) => {
+                    log.log(format!("✓ saved {filename} to this device ({n} bytes)"));
+                    attempt.set_saved(&filename, n as u64);
+                }
+                Err(why) => {
+                    log.log(format!("✗ save {filename} → {why}"));
+                    attempt.set_save_failed(
+                        &filename,
+                        &crate::i18n::t("filetransfer.save_failed", &[("name", &filename), ("why", &why)]),
+                    );
+                }
+            }
+            wake(&watchers);
+        });
     }
 
     /// Pull a file from `handler_uri` (`local/files:read` on `path`) and

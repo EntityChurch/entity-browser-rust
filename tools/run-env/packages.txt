@@ -1,0 +1,42 @@
+# The package set the Alpine Environment can `apk add` with no network.
+#
+# One Alpine package name per line; `#` starts a comment. build-packages.sh
+# fetches every name here PLUS its dependency closure from Alpine v3.21 (x86),
+# drops what the image already ships at the same version, and signs the index.
+# A visitor downloads only what they install; the cost of a longer list is
+# hosting and publish time (PLAN-2026-09-13-THE-VM-RELEASE §5, decision D4).
+#
+# This is a STARTER set, chosen to build the mechanism. The list is the
+# operator's call. Measured closures, 2026-09-13, before the image's own
+# packages are dropped:
+#   file tools + editors + python3 + git   51 apks  37 MiB
+#   documents and images                   60 apks  34 MiB
+#   gcc + musl-dev + make (tier 2 below)   16 apks  63 MiB
+# NOT AVAILABLE on x86: pandoc (Alpine builds it for x86_64 and aarch64 only).
+
+# files
+zip
+unzip
+p7zip
+file
+jq
+xxd
+rsync
+sqlite
+
+# editors, shells, work
+vim
+tmux
+git
+python3
+
+# documents and images
+poppler-utils
+qpdf
+imagemagick
+exiftool
+
+# tier 2 -- toolchain, +63 MiB. Uncomment to include.
+# gcc
+# musl-dev
+# make

@@ -60,6 +60,31 @@ pub fn bundle_path(peer_id: &str, set: &str, id: &str) -> String {
     format!("/{}/{}/{}/bundles/{}", peer_id, APPS_SUBPATH, set, id)
 }
 
+/// An app's asset-bundle index: `/{peer}/apps/{set}/assets/{id}/{bundle}`.
+/// One entity per bundle — see [`crate::apps::assets`] for why the index, and
+/// not a binding per file, is the unit.
+pub fn asset_index_path(peer_id: &str, set: &str, id: &str, bundle: &str) -> String {
+    format!("/{}/{}/{}/assets/{}/{}", peer_id, APPS_SUBPATH, set, id, bundle)
+}
+
+/// **What the Apps window watches under a set** — the catalog and the bundles,
+/// and deliberately NOT the whole set prefix.
+///
+/// The set prefix also holds `assets/`, and the running player is the one
+/// writer there: it caches a fetched asset index at its natural path on mount.
+/// Watching that write rebuilds the section, which replaces the `<iframe>` and
+/// restarts the app it was fetching for — measured on the first launch of the
+/// VM app, which booted twice (the second mount found the index current). The
+/// grid renders from the catalog and the player from the bundle; nothing renders
+/// from an asset index, so there is nothing a watch on it could refresh.
+/// Gated by `the_launcher_does_not_watch_the_asset_indexes_its_player_writes`.
+pub fn launcher_watch_prefixes(peer_id: &str, set: &str) -> [String; 2] {
+    [
+        catalog_path(peer_id, set),
+        format!("/{}/{}/{}/bundles/", peer_id, APPS_SUBPATH, set),
+    ]
+}
+
 /// Convenience: the games catalog path for a peer.
 pub fn games_catalog_path(peer_id: &str) -> String {
     catalog_path(peer_id, GAMES_SET)
@@ -79,5 +104,20 @@ mod tests {
         assert_eq!(set_prefix("P", "games"), "/P/apps/games/");
         assert_eq!(games_catalog_path("P"), "/P/apps/games/catalog");
         assert_eq!(games_bundle_path("P", "chess"), "/P/apps/games/bundles/chess");
+        assert_eq!(asset_index_path("P", "apps", "vm", "guest"), "/P/apps/apps/assets/vm/guest");
+    }
+
+    #[test]
+    fn the_launcher_does_not_watch_the_asset_indexes_its_player_writes() {
+        let watched = launcher_watch_prefixes("P", "apps");
+        let index = asset_index_path("P", "apps", "vm", "image");
+        assert!(
+            !watched.iter().any(|w| index.starts_with(w.as_str())),
+            "a watched prefix covers the asset index the player writes on mount — every first \
+             launch would restart the app it is fetching for: {watched:?}"
+        );
+        // …and it still sees what it renders from.
+        assert!(watched.iter().any(|w| catalog_path("P", "apps").starts_with(w.as_str())));
+        assert!(watched.iter().any(|w| bundle_path("P", "apps", "vm").starts_with(w.as_str())));
     }
 }

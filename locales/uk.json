@@ -830,5 +830,8 @@
   "apps.file.sent": "{name} надіслано в застосунок",
   "apps.file.kept": "{name} збережено у ваших файлах",
   "apps.file.refused": "{name} не збережено: {why}",
-  "apps.file.not_sent": "Файл не надіслано: {why}"
+  "apps.file.not_sent": "Файл не надіслано: {why}",
+  "filetransfer.save_to_device": "Зберегти на цей пристрій",
+  "filetransfer.from_app": "З {app}",
+  "filetransfer.save_failed": "Не вдалося зберегти {name} на цей пристрій: {why}"
 }

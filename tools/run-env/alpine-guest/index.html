@@ -33,11 +33,31 @@
                  flex:0 0 auto; }
   #keys button.on { background:#0a63c2; border-color:#0a63c2; }
   #screen_container { display:none; }
+  /* Power: the machine lives in this page, so this is where it is turned off and on. */
+  #power { flex:0 0 auto; font:14px/1 system-ui,sans-serif; padding:3px 8px; background:#333;
+           color:#ddd; border:1px solid #444; border-radius:3px; }
+  #power.off { background:#7a2a24; border-color:#9a3a32; }
+  #powermenu { position:fixed; top:34px; right:6px; z-index:10; background:#2a2a2a;
+               border:1px solid #444; border-radius:4px; padding:4px; min-width:230px;
+               max-width:calc(100vw - 12px); box-shadow:0 4px 14px rgba(0,0,0,.5); }
+  #powermenu button { display:block; width:100%; text-align:left; font:13px system-ui,sans-serif;
+                      padding:9px 10px; background:none; color:#ddd; border:0; border-radius:3px; }
+  #powermenu button:hover, #powermenu button:focus { background:#3a3a3a; }
+  #powermenu .note { padding:6px 10px 4px; font-size:11px; color:#888; white-space:normal; }
 </style>
 <body>
 <div id="bar">
   <b>Alpine</b>
   <span id="status" class="dim">starting…</span>
+  <button id="power" title="Restart or turn off the machine" aria-haspopup="true" aria-expanded="false">⏻</button>
+</div>
+<div id="powermenu" hidden>
+  <button data-power="restart">Restart</button>
+  <button data-power="cold">Restart and show the boot</button>
+  <button data-power="off">Turn off</button>
+  <button data-power="start" hidden>Start</button>
+  <button data-power="start-cold" hidden>Start and show the boot</button>
+  <div class="note">Your home directory (~) is saved first. Everything else starts fresh.</div>
 </div>
 <div id="term"></div>
 <div id="keys">
@@ -74,11 +94,55 @@ const t0 = performance.now();
 
 let emulator = null, booted = false, prompted = false, serial = '', pending = null;
 
+// ── assets from the HOST, when the host offers them ───────────────────────────
+// Hosted in an entity-app player, this page is an opaque-origin document: its
+// relative URLs resolve against the HOST page, where none of these files are.
+// So the player serves them. The catalog declares two bundles and `init` says
+// which ones this host answers for (`x-assets`); the page asks for a KEY in a
+// bundle with `x-asset-get` and gets bytes or a refusal code back. The host
+// does not know what any key means -- that is the whole contract.
+//   engine : v86.wasm · seabios.bin · vgabios.bin      (changes with OUR builds)
+//   image  : vmlinuz · initramfs · fs.json · blobs/<sha256>   (the environment)
+// Standalone (no host, or a host that offers nothing) nothing below runs and
+// the page fetches the same files by URL, exactly as before.
+let hostBundles = null;             // null = URL mode; a Set = host mode
+let assetSeq = 0;
+const assetWaiting = new Map();
+function hostAsset(bundle, key) {
+  return new Promise((resolve, reject) => {
+    const id = 'a' + (++assetSeq);
+    assetWaiting.set(id, { resolve, reject, bundle, key });
+    window.__m1.assets.requests++;
+    const per = window.__m1.assets.byBundle[bundle] = window.__m1.assets.byBundle[bundle] || { requests: 0, bytes: 0 };
+    per.requests++;
+    send('x-asset-get', { id, bundle, key });
+  });
+}
+function onHostAsset(m) {
+  const w = assetWaiting.get(m.id);
+  if (!w) return;
+  assetWaiting.delete(m.id);
+  if (m.ok && m.data) {
+    const bytes = new Uint8Array(m.data);
+    window.__m1.assets.bytes += bytes.byteLength;
+    window.__m1.assets.byBundle[w.bundle].bytes += bytes.byteLength;
+    w.resolve(bytes);
+  } else {
+    window.__m1.assets.refused++;
+    window.__m1.assets.lastRefusal = `${w.bundle}/${w.key}: ${m.reason}`;
+    w.reject(new Error(`the host did not serve ${w.bundle}/${w.key} (${m.reason})`));
+  }
+}
+// A buffer handed to v86 is kept by it; give it one that is exactly the file.
+const exactBuffer = u8 => (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength)
+  ? u8.buffer : u8.slice().buffer;
+
 // Diagnostics live HERE, not on screen. A probe reads them; a person reads the
 // terminal. (The previous page put a JSON dump across 80% of the viewport --
 // that was a measurement rig mistaken for the product.)
 window.__m1 = { serial:'', booted:false, probeOk:false, bootMs:null, promptMs:null,
                 error:null, net:null,
+                assets:{ requests:0, bytes:0, refused:0, lastRefusal:null, mode:'url', byBundle:{} },
                 env:{ crossOriginIsolated: (typeof crossOriginIsolated!=='undefined') ? crossOriginIsolated : 'undefined',
                       SharedArrayBuffer_present: (typeof SharedArrayBuffer!=='undefined'),
                       sandboxed: window.origin === 'null',
@@ -132,17 +196,62 @@ setInterval(() => sampleFit('tick'), 250);
 // a phone reads as "the app is broken", which is how it was reported.
 // Fitting is half of it. A serial console has NO window size: the kernel answers
 // TIOCGWINSZ 0x0 until something states it, so full-screen programs refuse to
-// start. Nothing carries a browser resize into a 16550, so we say it with `stty`.
+// start. Nothing carries a browser resize into a 16550, so the guest's agent
+// runs `stty` on the console for us, told over the control line (ttyS1).
+// ⚠ IT USED TO BE TYPED INTO THE SHELL: `stty rows R cols C` echoed on every
+// resize, and with vi or nano open it typed those words INTO THE FILE. Reported
+// on a phone, where rotating and opening the keyboard both resize.
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 let lastSize = '';
 function fitAndTell() {
   try { fit.fit(); } catch (e) { return; }
   const size = term.rows + 'x' + term.cols;
-  if (!prompted || size === lastSize) { lastSize = size; return; }
+  if (!agentReady || size === lastSize) return;     // `hello` resends it
   lastSize = size;
-  emulator && emulator.serial0_send(`stty rows ${term.rows} cols ${term.cols}\n`);
+  toAgent(`size ${term.rows} ${term.cols}`);
 }
+
+// ── the control line: ttyS1, which no person sees ─────────────────────────────
+// The guest's agent (build-guest.sh 3d) reads fixed verbs here and answers
+// `hello` when it starts and `manifest TOK N` when a listing is ready. Nothing
+// the page sends is ever run as a command, and nothing touches the person's shell.
+let agentReady = false, agentBuf = '';
+const agentWaiters = new Map();
+function toAgent(line) {
+  if (!emulator) return;
+  // One line, always: a newline inside a result would start a second verb.
+  const clean = String(line).replace(/[\r\n]+/g, ' ').slice(0, 900);
+  emulator.serial_send_bytes(1, new TextEncoder().encode(clean + '\n'));
+}
+function onAgentLine(line) {
+  const [verb, tok, n] = line.split(' ');
+  if (verb === 'hello') {
+    const first = !agentReady;
+    agentReady = true;
+    window.__m1.agent = window.__m1.agent || { hello: [] };
+    window.__m1.agent.hello.push(since());
+    lastSize = ''; fitAndTell();
+    if (first) workspaceBaseline();
+    if (first && SNAPSHOT_BUILD) buildSnapshot();
+  } else if (verb === 'manifest') {
+    const w = agentWaiters.get(tok);
+    if (w) { agentWaiters.delete(tok); w(Number(n)); }
+  } else if (verb === 'resumed' || verb === 'zeroed' || verb === 'received' || verb === 'shell') {
+    const w = agentWaiters.get(tok);
+    if (w) { agentWaiters.delete(tok); w(line.split(' ').slice(2)); }
+  }
+}
+// Ask the agent one fixed verb and wait for its answer line, or fail after `ms`.
+function askAgent(verb, args, ms) {
+  const tok = token();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { agentWaiters.delete(tok); reject(new Error(`the machine did not answer ${verb}`)); }, ms);
+    agentWaiters.set(tok, v => { clearTimeout(timer); resolve(v); });
+    toAgent([verb, tok, ...args].join(' '));
+  });
+}
+const token = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('');
 addEventListener('resize', () => setTimeout(fitAndTell, 150));
 // A phone rotating or opening its keyboard changes the visual viewport without
 // firing a useful `resize` on some browsers.
@@ -215,9 +324,18 @@ for (const b of document.querySelectorAll('#keys button[data-k]')) {
       k = String.fromCharCode(k.toUpperCase().charCodeAt(0) - 64);
       ctrl = false; $('ctrl').classList.remove('on');
     }
-    emulator && emulator.serial0_send(k);
+    typeIn(k);
     focusKeyboard();
   });
+}
+
+// Everything typed reaches the guest as UTF-8 BYTES. v86's `serial0_send(str)`
+// sends each character's code as ONE byte, so `é` arrived as Latin-1 0xE9 and
+// anything past U+00FF was truncated -- a file named on a phone keyboard came out
+// as a different name. Found when the probe sent a non-ASCII file name.
+const utf8 = new TextEncoder();
+function typeIn(text) {
+  emulator && emulator.serial_send_bytes(0, utf8.encode(text));
 }
 
 function status(text, cls) { $('status').textContent = text; $('status').className = cls || 'dim'; }
@@ -363,7 +481,16 @@ function installRetainingStorage(t_start) {
         // step and a bigger one -- this is the retention fix, not the progress
         // fix, and conflating them would put a decompressor in the way of a
         // measurement we can take today.
-        p = Promise.resolve(inner.read(sha, 0, size, size)).then(full => {
+        const fromPackages = packageShas && packageShas.has(sha);
+        const fetched = hostBundles
+          ? hostAsset(fromPackages ? 'packages' : 'image', 'blobs/' + sha)
+          : fromPackages
+            ? fetch('guest/packages/blobs/' + sha).then(r => {
+                if (!r.ok) throw new Error(`package file ${sha.slice(0, 12)}: HTTP ${r.status}`);
+                return r.arrayBuffer();
+              }).then(b => new Uint8Array(b))
+            : Promise.resolve(inner.read(sha, 0, size, size));
+        p = fetched.then(full => {
           if (full && full.length) {
             held.set(sha, full);
             st.bytes_held += full.length;
@@ -391,27 +518,200 @@ function installRetainingStorage(t_start) {
   };
 }
 
-function boot() {
-  window.__m1.phases.boot_called = since();
-  status('fetching the environment…');
+// ── the package set: a repository merged into the root at boot ────────────────
+// build-packages.sh ships a signed apk repository as its own 9p index. When it
+// is on offer (the `packages` bundle, or guest/packages/ standalone) it is
+// grafted in at /var/cache/entity-packages -- where build-guest.sh points apk --
+// and every file under it is read from THAT bundle. Nothing in it is fetched
+// until apk reads it, so a visitor who installs nothing pays one ~10 KB index.
+// Absent or unreadable: the machine boots the same and apk says the repository
+// is missing. A failure here must never stop the boot.
+let packageShas = null;             // sha256 of every file the packages bundle serves
+const PACKAGES_AT = ['var', 'cache'];
+function mergePackages(baseIndex, pkgIndex) {
+  const base = JSON.parse(new TextDecoder().decode(baseIndex));
+  const pkgs = JSON.parse(new TextDecoder().decode(pkgIndex));
+  if (base.version !== 3 || pkgs.version !== 3 || !Array.isArray(pkgs.fsroot)) {
+    throw new Error('a 9p index is not version 3');
+  }
+  const DIR = 0x4000, REG = 0x8000;
+  let nodes = base.fsroot;
+  for (const name of PACKAGES_AT) {
+    let dir = nodes.find(n => n[0] === name);
+    if (!dir) { dir = [name, 0, base.fsroot[0] ? base.fsroot[0][2] : 0, DIR | 0o755, 0, 0, []]; nodes.push(dir); }
+    if ((dir[3] & 0xF000) !== DIR) throw new Error(`/${PACKAGES_AT.join('/')} is not a directory in the image`);
+    nodes = dir[6];
+  }
+  const shas = new Set();
+  const walk = n => {
+    if ((n[3] & 0xF000) === REG) shas.add(n[6]);
+    else if ((n[3] & 0xF000) === DIR) n[6].forEach(walk);
+  };
+  for (const n of pkgs.fsroot) {
+    if (nodes.some(m => m[0] === n[0])) throw new Error(`the image already has /${PACKAGES_AT.join('/')}/${n[0]}`);
+    walk(n);
+    nodes.push(n);
+  }
+  base.size += pkgs.size || 0;
+  return { index: new TextEncoder().encode(JSON.stringify(base)), shas };
+}
+async function withPackages(baseIndex, fetchPkgIndex) {
+  const st = window.__m1.packages = { offered: true, files: 0, error: null };
   try {
-    emulator = new V86({
-      wasm_path: "build/v86.wasm",
-      memory_size: 256 * 1024 * 1024,
-      vga_memory_size: 2 * 1024 * 1024,
-      screen_container: $("screen_container"),
+    const merged = mergePackages(baseIndex, await fetchPkgIndex());
+    packageShas = merged.shas;
+    st.files = merged.shas.size;
+    return merged.index;
+  } catch (e) {
+    st.error = String(e).slice(0, 200);
+    return baseIndex;
+  }
+}
+
+// ── the machine, and resuming a snapshot of it instead of booting it ──────────
+// One definition of the machine, used to build it AND to decide whether a
+// snapshot fits it. A snapshot (build-snapshot.py) is guest memory and device
+// state taken at the prompt: it only runs on the exact engine, image, package
+// index and machine settings it was taken with, so snapshot.json records an
+// identity of each and the page resumes only when all four match. Anything
+// else -- no snapshot, a mismatch, a fetch that fails -- boots cold, exactly as
+// before. PLAN-2026-09-13-THE-VM-RELEASE §6 has the measurements.
+const MACHINE = {
+  memory_size: 256 * 1024 * 1024,
+  vga_memory_size: 2 * 1024 * 1024,
+  // root=host9p -- v86's 9p mount tag, read out of the engine's own
+  // configspace_tagname ([104,111,115,116,57,112]), never guessed.
+  cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose " +
+           "console=ttyS0 console=tty0 init=/sbin/init",
+  // The control line (build-guest.sh 3d). Without it the agent finds no port
+  // and the guest simply never says hello: sizes and saves stop.
+  uart1: true,
+};
+const MACHINE_ID = `mem=${MACHINE.memory_size};vga=${MACHINE.vga_memory_size};uart1=${MACHINE.uart1};cmdline=${MACHINE.cmdline}`;
+// An identity, not a security check: the bytes already came from the host by
+// content hash. Two FNV-1a 32 passes with different bases, because crypto.subtle
+// is absent outside a secure context (a phone on http://<lan-ip> is one) and
+// this must give the same answer there. build-snapshot.py records the ids THIS
+// function computed while building, so the two cannot disagree.
+function idHash(u8) {
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x9e3779b9;
+  for (let i = 0; i < u8.length; i++) {
+    a = Math.imul(a ^ u8[i], 0x01000193) >>> 0;
+    b = Math.imul(b ^ u8[i], 0x01000193) >>> 0;
+  }
+  return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0') + ':' + u8.length;
+}
+const SNAPSHOT_BUILD = parent === window && new URLSearchParams(location.search).get('snapshot') === 'build';
+window.__m1.snapshot = { used: false, why: 'not checked' };
+// Decide from what is in hand. Returns null to boot cold, with the reason kept.
+function snapshotFits(meta, ids) {
+  const st = window.__m1.snapshot;
+  if (SNAPSHOT_BUILD) { st.why = 'building one'; return false; }
+  if (POWER_ON.boot === 'cold') { st.why = 'a boot from scratch was asked for'; return false; }
+  if (!meta) { st.why = 'none published'; return false; }
+  let m;
+  try { m = JSON.parse(new TextDecoder().decode(meta)); } catch (e) { st.why = 'snapshot.json unreadable'; return false; }
+  for (const k of ['engine', 'image', 'packages', 'machine']) {
+    if ((m[k] || null) !== (ids[k] || null)) { st.why = `built for a different ${k}`; return false; }
+  }
+  st.why = 'fits';
+  return true;
+}
+
+// The files every boot needs, by URL (standalone) or from the host's bundles.
+// In host mode they arrive as bytes and are handed to v86 as buffers; the file
+// index goes in as a blob: URL because v86 only loads it by URL, and there is
+// no `baseurl` -- every inode body comes through the storage seam instead.
+async function bootSources() {
+  if (!hostBundles) {
+    // Standalone: graft the package set in only if this directory carries one.
+    // A 404 is the ordinary case (no packages built), so it is not an error.
+    const bytesOf = async url => { const r = await fetch(url); if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`); return new Uint8Array(await r.arrayBuffer()); };
+    const maybe = url => bytesOf(url).catch(() => null);
+    const [wasmBytes, base, pkgIndex, meta] = await Promise.all([
+      bytesOf("build/v86.wasm"), bytesOf("guest/fs.json"), maybe("guest/packages/fs.json"), maybe("guest/snapshot.json"),
+    ]);
+    let index = base;
+    if (pkgIndex) index = await withPackages(base, async () => pkgIndex);
+    else window.__m1.packages = { offered: false, files: 0, error: null };
+    const ids = { engine: idHash(wasmBytes), image: idHash(base), packages: pkgIndex ? idHash(pkgIndex) : null, machine: MACHINE_ID };
+    window.__m1.snapshot.ids = ids;
+    const common = {
+      wasm_fn: env => WebAssembly.instantiate(wasmBytes, env).then(r => r.instance.exports),
       bios: { url: "bios/seabios.bin" },
       vga_bios: { url: "bios/vgabios.bin" },
-      bzimage: { url: "guest/vmlinuz" },
-      initrd: { url: "guest/initramfs" },
-      // root=host9p -- v86's 9p mount tag, read out of the engine's own
-      // configspace_tagname ([104,111,115,116,57,112]), never guessed.
-      cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose " +
-               "console=ttyS0 console=tty0 init=/sbin/init",
-      filesystem: { basefs: { url: "guest/fs.json" }, baseurl: "guest/blobs/" },
-      autostart: true,
+      filesystem: { basefs: { url: URL.createObjectURL(new Blob([index], { type: 'application/json' })) }, baseurl: "guest/blobs/" },
+    };
+    if (snapshotFits(meta, ids)) {
+      const state = await maybe("guest/snapshot.bin.zst");
+      if (state) { window.__m1.snapshot.used = true; return Object.assign(common, { initial_state: { buffer: exactBuffer(state) } }); }
+      window.__m1.snapshot.why = 'snapshot.bin.zst could not be fetched';
+    }
+    return Object.assign(common, { bzimage: { url: "guest/vmlinuz" }, initrd: { url: "guest/initramfs" } });
+  }
+  window.__m1.assets.mode = 'host';
+  const t = since();
+  // The kernel and initramfs are only fetched for a cold boot: a resume never
+  // runs them. snapshot.json is small and its absence is ordinary (not-found).
+  const [wasm, bios, vga, baseIndex, pkgIndex, meta] = await Promise.all([
+    hostAsset('engine', 'v86.wasm'), hostAsset('engine', 'seabios.bin'), hostAsset('engine', 'vgabios.bin'),
+    hostAsset('image', 'fs.json'),
+    hostBundles.has('packages') ? hostAsset('packages', 'fs.json').catch(e => ({ error: e })) : null,
+    hostAsset('image', 'snapshot.json').catch(() => null),
+  ]);
+  let index = baseIndex;
+  if (!hostBundles.has('packages')) window.__m1.packages = { offered: false, files: 0, error: null };
+  else index = await withPackages(baseIndex, async () => { if (pkgIndex.error) throw pkgIndex.error; return pkgIndex; });
+  const havePkgs = !!(pkgIndex && !pkgIndex.error && packageShas);
+  const ids = { engine: idHash(wasm), image: idHash(baseIndex), packages: havePkgs ? idHash(pkgIndex) : null, machine: MACHINE_ID };
+  window.__m1.snapshot.ids = ids;
+  const common = {
+    wasm_fn: env => WebAssembly.instantiate(wasm, env).then(r => r.instance.exports),
+    bios: { buffer: exactBuffer(bios) },
+    vga_bios: { buffer: exactBuffer(vga) },
+    filesystem: { basefs: { url: URL.createObjectURL(new Blob([index], { type: 'application/json' })) } },
+  };
+  let sources = null;
+  if (snapshotFits(meta, ids)) {
+    const state = await hostAsset('image', 'snapshot.bin.zst').catch(e => { window.__m1.snapshot.why = String(e); return null; });
+    if (state) { window.__m1.snapshot.used = true; sources = Object.assign(common, { initial_state: { buffer: exactBuffer(state) } }); }
+  }
+  if (!sources) {
+    const [kernel, initrd] = await Promise.all([hostAsset('image', 'vmlinuz'), hostAsset('image', 'initramfs')]);
+    sources = Object.assign(common, { bzimage: { buffer: exactBuffer(kernel) }, initrd: { buffer: exactBuffer(initrd) } });
+  }
+  window.__m1.assets.fixed_ms = since() - t;
+  return sources;
+}
+
+async function boot() {
+  if (window.__m1.phases.boot_called != null) return;     // exactly once
+  window.__m1.phases.boot_called = since();
+  status(hostBundles ? 'fetching the environment from the host…' : 'fetching the environment…');
+  let sources, restore = null;
+  try {
+    // The saved workspace is fetched BESIDE the environment, not after it: it
+    // has to be on the guest's disk before the machine starts (see below).
+    [sources, restore] = await Promise.all([
+      bootSources(),
+      hostWorkspace ? fetchWorkspace().catch(e => ({ error: String(e) })) : null,
+    ]);
+  } catch (e) {
+    window.__m1.error = String(e);
+    status('could not fetch the environment: ' + String(e).slice(0, 120), 'bad');
+    send('error', { message: String(e).slice(0,300) });
+    return;
+  }
+  try {
+    emulator = new V86(Object.assign({}, MACHINE, {
+      screen_container: $("screen_container"),
+      // Started by hand, once the saved workspace is on the disk: the guest's
+      // sysinit extracts it before any shell exists, so it must already be
+      // there. A race here would be a restore that works on a slow phone and
+      // silently does nothing on a fast desktop.
+      autostart: false,
       disable_speaker: true,
-    });
+    }, sources));
   } catch (e) {
     window.__m1.error = String(e);
     status('failed: ' + e, 'bad');
@@ -420,6 +720,20 @@ function boot() {
   }
   window.emulator = emulator;
   installRetainingStorage();
+  emulator.add_listener("serial1-output-byte", b => {
+    const ch = String.fromCharCode(b);
+    if (ch === '\n') { const l = agentBuf.replace(/\r$/, ''); agentBuf = ''; onAgentLine(l); }
+    else if (agentBuf.length < 4096) agentBuf += ch;
+  });
+  emulator.add_listener("emulator-loaded", async () => {
+    if (window.__m1.snapshot.used) {
+      emulator.run();
+      await afterResume(restore);
+    } else {
+      await placeRestore(restore);
+      emulator.run();
+    }
+  });
   emulator.add_listener("download-progress", onProgress);
   // A failed fetch must not leave the line reading "fetching…" forever. It is the
   // one state where the user can DO something (reload, check the network), and a
@@ -436,7 +750,11 @@ function boot() {
   emulator.add_listener("serial0-output-byte", b => {
     const ch = String.fromCharCode(b);
     serial += ch; window.__m1.serial = serial;
-    term.write(ch);
+    // BYTES to xterm, never `ch`: xterm decodes UTF-8 across writes, and a byte
+    // handed over as a Latin-1 character is drawn as one. Every non-ASCII thing
+    // the guest printed (a file name, a translated host answer) came out as
+    // mojibake. `serial` stays a byte string: the probes and regexes read it.
+    term.write(new Uint8Array([b]));
     feedRun(ch);
     const plain = strip(serial);
 
@@ -469,7 +787,7 @@ function boot() {
   });
   // xterm gives selection, scrollback and paste for free; the plain v86 screen
   // container is a text grid the emulator owns, which cannot be copied out of.
-  term.onData(d => emulator.serial0_send(applyCtrl(d)));
+  term.onData(d => typeIn(applyCtrl(d)));
 }
 
 // ── the guest's own file verbs: `send` and `receive` ──────────────────────────
@@ -497,7 +815,17 @@ function download(name, bytes) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
-async function sendOut(path) {
+// Sends the host has not answered yet, oldest first: `x-file-result` carries the
+// name, not a request id, so the first waiting send of that name is the one.
+const sendsWaiting = [];
+// Answer a waiting `send`/`save` in the guest: the script prints this line, so
+// the person reads what the HOST did rather than a line printed before it acted.
+function answerGuest(tok, ok, text) {
+  // Bidi isolates wrap names in the host's translated sentences; a terminal
+  // draws them as nothing at best and as boxes at worst.
+  if (tok) toAgent(`result ${tok} ${ok ? 'ok' : 'fail'} ${String(text).replace(/[\u2066-\u2069]/g, '')}`);
+}
+async function sendOut(path, tok) {
   const name = baseName(path);
   window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
   try {
@@ -507,42 +835,545 @@ async function sendOut(path) {
     const exact = bytes.slice();
     window.__m1.files.sent.push({ name, length: exact.byteLength });
     if (parent !== window) {
+      sendsWaiting.push({ name, tok, at: since() });
       send('x-file', { name, media_type: 'application/octet-stream', data: exact });
       status(`sent ${name} to the host…`);
     } else {
       download(name, exact);
       status(`downloaded ${name} (no host to send it to)`);
+      answerGuest(tok, true, `send: ${name} downloaded by the browser (no host to keep it)`);
     }
   } catch (err) {
     status(`could not read ${path}: ${String(err).slice(0, 80)}`, 'bad');
+    answerGuest(tok, false, `send: could not read ${path}: ${String(err).slice(0, 80)}`);
   }
 }
 term.parser.registerOscHandler(OSC_FILES, data => {
-  // Serial bytes reach xterm one Latin-1 char per byte, so a UTF-8 path arrives
-  // as mojibake. Put the bytes back together before reading anything out of it.
-  const text = new TextDecoder().decode(Uint8Array.from(data, c => c.charCodeAt(0) & 0xff));
+  // xterm has already decoded the UTF-8 (the serial bytes reach it as bytes),
+  // so a path arrives as the text it is.
+  const text = data;
   const cut = text.indexOf(';');
   const verb = cut < 0 ? text : text.slice(0, cut);
-  const arg = cut < 0 ? '' : text.slice(cut + 1);
-  if (verb === 'send' && arg && emulator) sendOut(arg);
+  let arg = cut < 0 ? '' : text.slice(cut + 1);
+  // `send;TOKEN;PATH` from a guest that waits for an answer; plain `send;PATH`
+  // from an older image, which does not. The token is exactly 8 hex characters.
+  let tok = null;
+  const t = /^([0-9a-f]{8});/.exec(arg);
+  if (t && (verb === 'send' || verb === 'save' || verb === 'power')) { tok = t[1]; arg = arg.slice(9); }
+  else if (verb === 'save' && /^[0-9a-f]{8}$/.test(arg)) { tok = arg; arg = ''; }
+  if (verb === 'prompt') onPromptPing();
+  else if (verb === 'send' && arg && emulator) sendOut(arg, tok);
+  else if (verb === 'save') {
+    saveWorkspace('command').then(r => answerGuest(tok, r.ok, 'save: ' + r.text));
+  }
+  else if (verb === 'power' && tok && (arg === 'restart' || arg === 'off')) {
+    // `reboot` / `poweroff` in the guest (build-guest.sh 3c2). Answer first, so
+    // the script returns before the machine it runs on goes away. A reboot
+    // starts the machine the way this session started it.
+    if (powering) { answerGuest(tok, false, 'power: the machine is already restarting or turning off'); return true; }
+    answerGuest(tok, true, arg === 'restart'
+      ? 'reboot: saving your home directory, then restarting'
+      : 'poweroff: saving your home directory, then turning off');
+    power(arg === 'restart' ? (POWER_ON.boot === 'cold' ? 'cold' : 'restart') : 'off', 'command');
+  }
   else if (verb === 'receive') {
     if (parent !== window) { send('x-request-file', {}); status('asked the host for a file — use its “Send a file” button'); }
     else status('no host to receive a file from', 'bad');
   }
   return true;                      // handled: never draw the sequence
 });
-// Inward: a file the host sends lands in /mnt under its own base name.
+// Inward: a file the host sends lands in the HOME DIRECTORY under its own base
+// name, and is kept with the rest of it. It used to land in /mnt, which is RAM:
+// the one directory whose files a person expects to keep lost them on reload,
+// and two directories with two different rules was one too many to explain.
+//
+// The page cannot write it into /root itself: the root is cache=loose, so a file
+// created from outside may be invisible to a guest that already listed /root,
+// and the page cannot see what is already there to avoid overwriting it. So it
+// writes under a fresh staging name and the agent moves it in, picking
+// `notes-1.txt` if `notes.txt` exists (build-guest.sh 3d, `receive`).
+const b64OfText = s => { let bin = ''; for (const b of utf8.encode(s)) bin += String.fromCharCode(b); return btoa(bin); };
+const textOfB64 = s => new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0)));
 async function receiveIn(m) {
   const name = baseName(String(m.name || ''));
-  if (!name || name === '.' || name === '..' || /[\x00-\x1f]/.test(name)) {
+  if (!name || name === '.' || name === '..' || /[\x00-\x1f\x7f]/.test(name)) {
     status('the host sent a file with an unusable name', 'bad'); return;
   }
   const bytes = new Uint8Array(m.data);
-  await emulator.create_file('mnt/' + name, bytes);
   window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
-  window.__m1.files.received.push({ name, length: bytes.byteLength });
-  status(`received ${name} → /mnt/${name}`, 'ok');
+  if (!agentReady) {
+    status(`could not take ${name}: the machine is still starting -- send it again in a moment`, 'bad');
+    window.__m1.files.received.push({ name, length: bytes.byteLength, error: 'not ready' });
+    return;
+  }
+  const staged = `incoming-${token()}`;
+  let answer;
+  try {
+    await emulator.create_file('var/lib/entity/' + staged, bytes);
+    answer = await askAgent('receive', [staged, b64OfText(name)], 30000);
+  } catch (e) {
+    status(`could not take ${name}: ${String(e).slice(0, 80)}`, 'bad');
+    window.__m1.files.received.push({ name, length: bytes.byteLength, error: String(e) });
+    return;
+  }
+  const [st, dest64] = answer;
+  if (st !== 'ok' || !dest64) {
+    status(`could not take ${name} (${st})`, 'bad');
+    window.__m1.files.received.push({ name, length: bytes.byteLength, error: st });
+    return;
+  }
+  const dest = textOfB64(dest64);
+  window.__m1.files.received.push({ name, dest, length: bytes.byteLength });
+  status(`received ${name} → ~/${dest}`, 'ok');
+  redrawPrompt();                  // the agent printed a line under the prompt
+  saveWorkspace('received');
 }
+
+// ── the workspace: /root, kept by the host ────────────────────────────────────
+// The host keeps an app's working files in the entity tree, one entity per file
+// (`x-workspace`, src/apps/workspace.rs). This page decides what that means for
+// a machine:
+//
+//   LAUNCH  list + fetch every file, write ONE tar onto the guest disk at
+//           /var/lib/entity/restore.tar BEFORE starting the CPU; the guest's
+//           sysinit extracts it into /root before any shell starts. A tar, not
+//           a file per create_file: it carries the mode (an executable stays
+//           executable), the mtime, and creates directories.
+//   SAVE    ask the agent for a manifest of /root (mode mtime size path), diff
+//           it against what we believe the host holds, and send only what
+//           changed. Every 30 s, when the page is hidden, and on `save`.
+//
+// ⚠ WHAT MAY BE DELETED IS DECIDED HERE, AND NARROWLY. A path is only removed
+// from the host if THIS SESSION saw it on the guest's disk and then saw it gone.
+// A file the host holds that never appeared (a restore that failed, a file too
+// big to fetch) is left alone — a broken restore must never be the reason a
+// person's work is deleted on the next autosave.
+let hostWorkspace = false;           // `init` said the host keeps files
+let hostSigs = new Map();            // path -> sig, as the host listed them at launch
+let known = null;                    // path -> sig we believe the host holds (null = no baseline yet)
+let saving = null;
+window.__m1.work = { restored: 0, restoreFailed: 0, saves: 0, saved: 0, removed: 0, last: null, recent: [] };
+
+const workWaiting = new Map();
+let workSeq = 0;
+function workRequest(type, body, ms) {
+  return new Promise((resolve, reject) => {
+    const id = 'w' + (++workSeq);
+    const timer = setTimeout(() => { workWaiting.delete(id); reject(new Error(`${type}: no answer from the host`)); }, ms || 60000);
+    workWaiting.set(id, m => { clearTimeout(timer); resolve(m); });
+    const transfer = (body.put || []).map(p => p.data);
+    parent.postMessage(Object.assign({ source: APP, type, id }, body), '*', transfer);
+  });
+}
+function onWorkReply(m) {
+  const w = workWaiting.get(m.id);
+  if (w) { workWaiting.delete(m.id); w(m); }
+}
+const sigOf = (mode, mtime, size) => `${mode}:${mtime}:${size}`;
+
+async function fetchWorkspace() {
+  const listing = await workRequest('x-work-list', {});
+  if (!listing.ok) throw new Error(`the host did not list the workspace (${listing.reason})`);
+  const files = listing.files || [];
+  const got = [];
+  let next = 0, failed = 0;
+  // A few at a time: a workspace can hold thousands of small files.
+  async function worker() {
+    while (next < files.length) {
+      const f = files[next++];
+      const r = await workRequest('x-work-get', { path: f.path }).catch(() => null);
+      if (r && r.ok && r.data) got.push({ f, data: new Uint8Array(r.data) });
+      else failed++;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
+  for (const { f } of got) hostSigs.set(f.path, sigOf(f.mode, f.mtime, f.size));
+  window.__m1.work.restored = got.length;
+  window.__m1.work.restoreFailed = failed + (listing.unreadable || []).length;
+  return { tar: got.length ? makeTar(got) : null, count: got.length, failed };
+}
+
+// A POSIX ustar archive. Names up to 255 bytes (prefix + name); longer ones are
+// skipped and counted, never truncated into a different path.
+function makeTar(entries) {
+  const enc = new TextEncoder();
+  const blocks = [];
+  const field = (buf, off, len, str) => { const b = enc.encode(str); buf.set(b.subarray(0, len), off); };
+  const octal = (n, len) => n.toString(8).padStart(len - 1, '0') + '\0';
+  for (const { f, data } of entries) {
+    const name = enc.encode(f.path);
+    let pre = '', base = f.path;
+    if (name.length > 100) {
+      const cut = f.path.lastIndexOf('/', f.path.length - 1);
+      pre = cut > 0 ? f.path.slice(0, cut) : '';
+      base = cut > 0 ? f.path.slice(cut + 1) : f.path;
+      if (enc.encode(pre).length > 155 || enc.encode(base).length > 100) { window.__m1.work.restoreFailed++; continue; }
+    }
+    const h = new Uint8Array(512);
+    field(h, 0, 100, base);
+    field(h, 100, 8, octal(f.mode & 0o7777, 8));
+    field(h, 108, 8, octal(0, 8));
+    field(h, 116, 8, octal(0, 8));
+    field(h, 124, 12, octal(data.length, 12));
+    field(h, 136, 12, octal(Math.max(0, Math.floor(f.mtime)), 12));
+    field(h, 148, 8, '        ');
+    h[156] = 0x30;                                    // '0': a regular file
+    field(h, 257, 6, 'ustar\0');
+    field(h, 263, 2, '00');
+    field(h, 345, 155, pre);
+    let sum = 0; for (const b of h) sum += b;
+    field(h, 148, 8, sum.toString(8).padStart(6, '0') + '\0 ');
+    blocks.push(h, data);
+    const pad = (512 - (data.length % 512)) % 512;
+    if (pad) blocks.push(new Uint8Array(pad));
+  }
+  blocks.push(new Uint8Array(1024));
+  const total = blocks.reduce((a, b) => a + b.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0; for (const b of blocks) { out.set(b, o); o += b.length; }
+  return out;
+}
+
+// On the disk before the CPU runs. `fs9p` is built by the engine asynchronously;
+// `emulator-loaded` is after it, but wait for it anyway rather than trust order.
+async function placeRestore(restore) {
+  if (!restore) return;
+  if (restore.error) {
+    window.__m1.work.restoreError = restore.error;
+    status('your saved files could not be fetched: ' + restore.error.slice(0, 80), 'bad');
+    return;
+  }
+  if (!restore.tar) return;
+  for (let i = 0; i < 200 && !emulator.fs9p; i++) await new Promise(r => setTimeout(r, 10));
+  try {
+    await emulator.create_file('var/lib/entity/restore.tar', restore.tar);
+    window.__m1.work.placedMs = since();
+  } catch (e) {
+    window.__m1.work.restoreError = 'could not place the archive: ' + e;
+  }
+}
+
+// After a snapshot restore: the guest woke with the clock, the RNG state and the
+// files of the moment the snapshot was taken, for every visitor, and its agent
+// is already running (it said hello at build time, not now). So the page tells
+// it to put all three right (the `resume` verb, build-guest.sh 3d) and only then
+// treats the machine as ready.
+const SHELL_REFRESH_KEY = '\x1b[9999~';
+async function afterResume(restore) {
+  const st = window.__m1.snapshot;
+  st.resumedAtMs = since();
+  status('resuming the machine…');
+  let archive = '-';
+  if (restore && restore.error) {
+    window.__m1.work.restoreError = restore.error;
+  } else if (restore && restore.tar) {
+    // A fresh name each time: this root is cache=loose, and a name the guest
+    // already looked up (and did not find) at build time may be remembered.
+    archive = `restore-${token()}.tar`;
+    for (let i = 0; i < 200 && !emulator.fs9p; i++) await new Promise(r => setTimeout(r, 10));
+    try { await emulator.create_file('var/lib/entity/' + archive, restore.tar); window.__m1.work.placedMs = since(); }
+    catch (e) { window.__m1.work.restoreError = 'could not place the archive: ' + e; archive = '-'; }
+  }
+  const seed = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(64))));
+  try {
+    const [files, rng] = await askAgent('resume', [Math.floor(Date.now() / 1000), seed, archive], 20000);
+    st.files = files; st.rng = rng;
+    if (files === 'failed' || files === 'missing') window.__m1.work.restoreError = `the saved files were not restored (${files})`;
+  } catch (e) {
+    st.error = String(e);
+    status('the machine resumed but did not answer: ' + String(e).slice(0, 80), 'bad');
+    return;
+  }
+  st.readyMs = since();
+  booted = window.__m1.booted = true;
+  agentReady = true;
+  window.__m1.agent = window.__m1.agent || { hello: [] };
+  window.__m1.agent.resumed = st.readyMs;
+  // The console shell was started when the snapshot was BUILT: it has none of
+  // the history just restored into ~ and the $RANDOM sequence every visitor
+  // shares. Press the one key sequence its profile binds to a refresh
+  // (build-guest.sh 3), then ask the agent whether it ran; if not, the agent
+  // replaces the shell. ⚠ THE ONE EXCEPTION to "the page never types into the
+  // shell": a readline key binding, not a command, sent once, before the
+  // terminal is handed to anyone. Nothing reaches the command line, and readline
+  // redraws the prompt the snapshot drew into a terminal that no longer exists.
+  typeIn(SHELL_REFRESH_KEY);
+  try { [st.shell] = await askAgent('shell', [], 5000); }
+  catch (e) { st.shell = 'no answer'; }
+  if (st.shell !== 'refreshed' && st.shell !== 'replaced') await redrawPrompt();
+  lastSize = ''; fitAndTell();
+  workspaceBaseline();
+  if (!prompted) {
+    prompted = true;
+    window.__m1.promptMs = window.__m1.phases.prompt = Math.round(performance.now() - t0);
+    status(`resumed in ${(window.__m1.promptMs / 1000).toFixed(1)}s`, 'ok');
+    send('ready');
+  }
+}
+
+// Make whatever is on the console redraw: bash (readline) redraws its prompt and
+// the line being typed on SIGWINCH, and vi or nano redraw their screen -- which
+// is what repairs a line the agent printed underneath either (measured). The
+// size may already equal this one, so change it twice: one column wider, then real.
+async function redrawPrompt() {
+  if (!agentReady) return;
+  try { fit.fit(); } catch (e) {}
+  toAgent(`size ${term.rows} ${term.cols + 1}`);
+  await new Promise(r => setTimeout(r, 250));
+  lastSize = ''; fitAndTell();
+}
+
+// BUILD TIME (?snapshot=build, standalone): boot cold, zero free memory, save the
+// state, gzip it for the builder to copy out. build-snapshot.py drives this.
+async function buildSnapshot() {
+  const out = window.__snapshotOut = { phase: 'waiting for the prompt' };
+  try {
+    for (let i = 0; i < 600 && !prompted; i++) await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 3000));            // let the boot's tail settle
+    out.phase = 'zero-filling';
+    await askAgent('zerofill', [], 120000);
+    await new Promise(r => setTimeout(r, 1000));
+    out.phase = 'saving';
+    const state = await emulator.save_state();
+    const gz = new Uint8Array(await new Response(new Blob([state]).stream()
+      .pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    Object.assign(out, { phase: 'ready', raw: state.byteLength, gzip: gz, ids: window.__m1.snapshot.ids });
+  } catch (e) {
+    Object.assign(out, { phase: 'error', error: String(e && e.stack || e) });
+  }
+}
+
+async function guestManifest() {
+  const tok = token();
+  const count = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { agentWaiters.delete(tok); reject(new Error('the machine did not list /root')); }, 30000);
+    agentWaiters.set(tok, n => { clearTimeout(timer); resolve(n); });
+    toAgent(`manifest ${tok}`);
+  });
+  const out = new Map();
+  // ⚠ v86's read_file REJECTS AN EMPTY FILE with "File not found" (it reads
+  // `size` bytes, gets null for zero, and treats null as absent). An empty /root
+  // -- every fresh profile -- is an empty manifest, so the agent's own count
+  // decides, and a zero is never read. Found by the gate, on its first run.
+  if (!count) return out;
+  const lines = await emulator.read_file('var/lib/entity/manifest');
+  for (const line of new TextDecoder().decode(lines).split('\n')) {
+    const m = /^([0-7]+) (\d+) (\d+) \.\/(.+)$/.exec(line);
+    if (!m) continue;
+    const mode = parseInt(m[1], 8), mtime = Number(m[2]), size = Number(m[3]);
+    out.set(m[4], { mode, mtime, size, sig: sigOf(mode, mtime, size) });
+  }
+  return out;
+}
+
+// The first manifest after the agent says hello. What the host holds is the
+// baseline for a path it listed; for a path it did not (a file the IMAGE put in
+// /root) the guest's own copy is, so an untouched image file is never uploaded.
+let timersArmed = false;
+async function workspaceBaseline() {
+  if (!hostWorkspace || known) return;
+  try {
+    const current = await guestManifest();
+    known = new Map();
+    for (const [path, e] of current) known.set(path, hostSigs.has(path) ? hostSigs.get(path) : e.sig);
+    window.__m1.work.baselineMs = since();
+    delete window.__m1.work.baselineError;
+  } catch (e) {
+    // Not fatal: the next save tries again. A baseline that failed once must not
+    // switch saving off for the whole session.
+    window.__m1.work.baselineError = String(e);
+  }
+  if (!timersArmed) {
+    timersArmed = true;
+    setInterval(() => saveWorkspace('auto'), 30000);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) saveWorkspace('hidden'); });
+  }
+}
+
+const kb = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(1)} MB`;
+const MAX_FILE = 32 * 1048576, MAX_BATCH = 48 * 1048576;
+
+function saveWorkspace(reason) {
+  if (!hostWorkspace) return Promise.resolve({ ok: false, text: 'nothing keeps files here -- open this machine from the entity browser' });
+  if (!agentReady) return Promise.resolve({ ok: false, text: 'the machine is still starting -- try again in a moment' });
+  // One at a time; a request that arrives during a save runs after it, so an
+  // explicit `save` always reflects the disk as it is when it was typed.
+  const run = (saving || Promise.resolve()).then(() => doSave(reason));
+  const tail = run.catch(() => {});
+  saving = tail;
+  tail.then(() => { if (saving === tail) saving = null; });
+  return run.catch(e => ({ ok: false, text: String(e).slice(0, 200) }));
+}
+
+async function doSave(reason) {
+  lastSaveAt = since();
+  if (!known) {
+    await workspaceBaseline();
+    if (!known) throw new Error(window.__m1.work.baselineError || 'could not list /root');
+  }
+  const current = await guestManifest();
+  const changed = [], removed = [];
+  for (const [path, e] of current) if (known.get(path) !== e.sig) changed.push([path, e]);
+  for (const path of known.keys()) if (!current.has(path)) removed.push(path);
+  if (!changed.length && !removed.length) {
+    window.__m1.work.last = { reason, nothing: true, at: since() };
+    window.__m1.work.recent.push(window.__m1.work.last);
+    if (window.__m1.work.recent.length > 12) window.__m1.work.recent.shift();
+    return { ok: true, text: 'nothing changed' };
+  }
+  let saved = 0, bytes = 0, gone = 0;
+  const failed = [], savedPaths = [];
+  let batch = [], batchBytes = 0;
+  const flush = async (rm) => {
+    if (!batch.length && !rm.length) return;
+    const r = await workRequest('x-work-save', { put: batch.map(b => b.msg), remove: rm }, 120000);
+    if (!r.ok && r.reason) {                       // the whole batch was refused
+      for (const b of batch) failed.push(`${b.path} (${r.reason})`);
+    } else {
+      const bad = new Map((r.failed || []).map(f => [f.path, f.reason]));
+      for (const b of batch) {
+        if (bad.has(b.path)) {
+          failed.push(`${b.path} (${bad.get(b.path)})`);
+          // A path the host will never accept is not retried every 30 s.
+          if (bad.get(b.path) === 'bad-path' || bad.get(b.path) === 'bad-mode') known.set(b.path, b.sig);
+        } else { known.set(b.path, b.sig); saved++; bytes += b.size; savedPaths.push(b.path); }
+      }
+      for (const p of rm) if (!bad.has(p)) { known.delete(p); }
+      gone += r.removed || 0;
+    }
+    batch = []; batchBytes = 0;
+  };
+  for (const [path, e] of changed) {
+    if (e.size > MAX_FILE) { failed.push(`${path} (over ${kb(MAX_FILE)})`); known.set(path, e.sig); continue; }
+    let data;
+    try { data = (await emulator.read_file('root/' + path)).slice(); }
+    catch (err) { failed.push(`${path} (unreadable)`); continue; }
+    if (batchBytes + data.length > MAX_BATCH) await flush([]);
+    batch.push({ path, sig: e.sig, size: data.length, msg: { path, mode: e.mode, mtime: e.mtime, data: data.buffer } });
+    batchBytes += data.length;
+  }
+  await flush(removed);
+  const w = window.__m1.work;
+  w.saves++; w.saved += saved; w.removed += gone;
+  w.last = { reason, saved, removed: gone, bytes, failed, at: since(),
+            paths: savedPaths.slice(0, 20) };
+  w.recent.push(w.last); if (w.recent.length > 12) w.recent.shift();
+  const parts = [];
+  if (saved) parts.push(`${saved} file${saved === 1 ? '' : 's'} saved (${kb(bytes)})`);
+  if (gone) parts.push(`${gone} removed`);
+  if (failed.length) parts.push(`not saved: ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}`);
+  const text = (parts.join(', ') || 'nothing saved') + (failed.length ? '' : ' -- kept in this browser');
+  if (reason !== 'command' && (saved || gone || failed.length)) status(`saved ~: ${parts.join(', ')}`, failed.length ? 'bad' : 'ok');
+  return { ok: !failed.length, text };
+}
+
+// A command finished (the shell's PROMPT_COMMAND, build-guest.sh 3). Save a
+// moment later, and not more often than every SAVE_SPACING_MS: a save lists the
+// home directory on the emulated CPU, and a person typing commands back to back
+// should not pay for one each. The Apps window closes an app without warning, so
+// this bounds what a close loses to the last few seconds, not 30.
+const PROMPT_SAVE_DELAY_MS = 1500, SAVE_SPACING_MS = 5000;
+let lastSaveAt = -1e9, promptSaveTimer = null;
+function onPromptPing() {
+  if (!hostWorkspace || !agentReady || powering || promptSaveTimer) return;
+  const wait = Math.max(PROMPT_SAVE_DELAY_MS, lastSaveAt + SAVE_SPACING_MS - since());
+  promptSaveTimer = setTimeout(() => { promptSaveTimer = null; if (!powering) saveWorkspace('prompt'); }, wait);
+}
+
+// ── power: restart, restart showing the boot, turn off, start ─────────────────
+// The machine lives in this page, so turning it off and on is the page's job,
+// never the guest's: a reboot INSIDE a resumed guest has no kernel to boot (a
+// resume never fetched one), and a poweroff inside it leaves a dead terminal and
+// an unsaved home directory. `reboot`/`poweroff` in the guest ask for this too.
+//
+// A restart is a RELOAD of this document, not an emulator rebuilt in place: the
+// page holds a dozen pieces of per-machine state (the agent, the workspace
+// baseline, retained blobs, timers, the snapshot decision), and a reload resets
+// every one of them by construction where a hand-written reset would miss the
+// next one added. The host answers the second `ready-for-init` like the first.
+// How to start next goes across the reload in `window.name`, which a sandboxed
+// opaque-origin frame keeps across its own reload (measured, Firefox and Chrome)
+// and which is the only storage such a frame has.
+// `?boot=cold` asks for the same by URL: a standalone page (no power button has
+// been pressed yet) can then show the boot, and a probe that measures the boot
+// itself can get one while a snapshot is published beside the page.
+const POWER_ON = (() => {
+  try {
+    const v = JSON.parse(window.name || 'null');
+    if (v && v.entityVm) { window.name = ''; return { boot: v.entityVm.boot === 'cold' ? 'cold' : 'resume', note: v.entityVm.note || null, by: v.entityVm.by || null }; }
+  } catch (e) {}
+  let byUrl = null;
+  try { byUrl = new URLSearchParams(location.search).get('boot'); } catch (e) {}
+  return byUrl === 'cold' ? { boot: 'cold', note: null, by: 'url' } : { boot: 'resume', note: null, by: null };
+})();
+window.__m1.power = { started: POWER_ON, actions: [] };
+if (POWER_ON.note) term.write(`\x1b[2m[${POWER_ON.note}]\x1b[0m\r\n`);
+
+let powering = false, poweredOff = false;
+async function power(what, by) {
+  if (powering) return;
+  const log = { what, by: by || 'menu', at: since() };
+  window.__m1.power.actions.push(log);
+  if (what === 'start' || what === 'start-cold') {
+    startAgain(what === 'start-cold' ? 'cold' : 'resume', null, log.by);
+    return;
+  }
+  powering = true;
+  closePowerMenu();
+  let note;
+  if (emulator && hostWorkspace && !agentReady) {
+    // Still starting: no shell has run, so nothing can have changed since the
+    // files were put back.
+    note = 'the machine had not finished starting, so there was nothing new to save';
+  } else if (emulator && hostWorkspace) {
+    status('saving your home directory…');
+    // Bounded: a wedged guest must not make the power button the thing that hangs.
+    const r = await Promise.race([
+      saveWorkspace('power'),
+      new Promise(res => setTimeout(() => res({ ok: false, text: 'the machine did not answer' }), 20000)),
+    ]);
+    log.save = r;
+    note = r.ok ? 'your home directory was saved' : `your home directory was NOT fully saved: ${r.text}`;
+  } else {
+    note = hostWorkspace ? 'the machine was not running, so nothing needed saving' : 'nothing keeps files here, so nothing was saved';
+  }
+  if (what === 'off') {
+    try { emulator && emulator.destroy && emulator.destroy(); } catch (e) {}
+    emulator = window.emulator = null;
+    agentReady = false; poweredOff = true; powering = false;
+    term.write(`\r\n\r\n\x1b[1mThe machine is off\x1b[0m -- ${note}.\r\nUse the power button to start it.\r\n`);
+    status('off', 'bad');
+    $('power').classList.add('off');
+    for (const b of document.querySelectorAll('#powermenu [data-power]')) {
+      b.hidden = !b.dataset.power.startsWith('start');
+    }
+    log.done = since();
+    return;
+  }
+  startAgain(what === 'cold' ? 'cold' : 'resume', `restarted -- ${note}`, log.by);
+}
+function startAgain(boot, note, by) {
+  status(boot === 'cold' ? 'restarting from scratch…' : 'restarting…');
+  window.name = JSON.stringify({ entityVm: { boot, note, by } });
+  location.reload();
+}
+function closePowerMenu() {
+  $('powermenu').hidden = true;
+  $('power').setAttribute('aria-expanded', 'false');
+}
+$('power').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = $('powermenu');
+  if (!menu.hidden) { closePowerMenu(); return; }
+  menu.style.top = Math.round($('bar').getBoundingClientRect().bottom + 2) + 'px';
+  menu.hidden = false;
+  $('power').setAttribute('aria-expanded', 'true');
+});
+for (const b of document.querySelectorAll('#powermenu [data-power]')) {
+  b.addEventListener('click', e => { e.stopPropagation(); power(b.dataset.power, 'menu'); });
+}
+document.addEventListener('click', e => { if (!$('powermenu').contains(e.target)) closePowerMenu(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && !$('powermenu').hidden) closePowerMenu(); });
 
 // ── files, both directions ────────────────────────────────────────────────────
 // Extraction asks the GUEST for the listing rather than reading emulator.fs9p:
@@ -574,7 +1405,7 @@ function runInGuest(cmd, ms) {
     // the whole command line back down the serial link, and that echo contains
     // both markers -- but there the begin marker is followed by `;`, so a match
     // that requires \r?\n cannot latch onto the echo of its own command.
-    emulator.serial0_send(`echo __B__${tok}; ${cmd}; echo __E__${tok}\n`);
+    typeIn(`echo __B__${tok}; ${cmd}; echo __E__${tok}\n`);
     // A guest that never answers is "could not look", never "empty" -- different
     // facts, and only one of them means the VM produced nothing.
     setTimeout(() => {
@@ -598,7 +1429,14 @@ addEventListener('message', async e => {
   if (!m || m.source !== HOST) return;
   try {
     switch (m.type) {
-      case 'init': boot(); break;
+      case 'init': {
+        const offered = Array.isArray(m['x-assets']) ? m['x-assets'] : [];
+        if (offered.includes('engine') && offered.includes('image')) hostBundles = new Set(offered);
+        hostWorkspace = m['x-workspace'] === true;
+        boot(); break;
+      }
+      case 'x-asset': onHostAsset(m); break;
+      case 'x-work-listing': case 'x-work-file': case 'x-work-saved': onWorkReply(m); break;
       case 'request-state':
         // Whole-object, latest-wins, host-blind -- the contract's own semantics.
         // Deliberately NOT where file bytes go: debounced, retained N deep and
@@ -618,6 +1456,16 @@ addEventListener('message', async e => {
         window.__m1.files.results.push({ ok: !!m.ok, name: m.name, reason: m.reason || null });
         status(m.ok ? `the host saved ${m.name}` : `the host did not save ${m.name}: ${m.reason}`,
                m.ok ? 'ok' : 'bad');
+        {
+          const i = sendsWaiting.findIndex(s => s.name === m.name);
+          if (i >= 0) {
+            const [s] = sendsWaiting.splice(i, 1);
+            // `detail` is the host's own sentence ("Saved notes.txt to your
+            // files"); an older host sends none, so say what we know.
+            const said = m.detail || (m.ok ? `the host kept ${m.name}` : `the host did not keep ${m.name}`);
+            answerGuest(s.tok, !!m.ok, `send: ${said}${m.ok ? '' : ` (${m.reason})`}`);
+          }
+        }
         break;
       case 'x-list-files': {
         const names = await runInGuest('ls -1 /mnt');
@@ -652,6 +1500,10 @@ addEventListener('message', async e => {
 send('ready-for-init');
 // The contract's 150ms fallback: a host that never answers still gets a working
 // app. Standalone (no parent) that is the only path, and it is the common one.
-setTimeout(() => { if (!emulator) boot(); }, 150);
+// ⚠ EMBEDDED, THE FALLBACK WAITS LONGER: booting in URL mode inside a player
+// fetches every file from the HOST's origin, where none of them exist, so a
+// slow `init` would lose the host's assets to a boot that cannot succeed. A
+// frame with a parent gets two seconds for `init` before falling back.
+setTimeout(() => { if (!emulator) boot(); }, parent !== window ? 2000 : 150);
 </script>
 </body>

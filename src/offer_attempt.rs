@@ -48,6 +48,15 @@ pub enum OfferOutcome {
     /// It did not happen. Carries the reason verbatim, because a bare "failed"
     /// leaves the user exactly as stuck as the silence did.
     Failed(String),
+    /// "Save to this device" on one of our own offers: reading its bytes back
+    /// out of our own store. The same card, the same one status line — a press
+    /// on a row is a press on this card, and only the latest is waited on.
+    Saving,
+    /// Handed to the browser as a download. Renders nothing: the download is
+    /// the feedback, and a line saying so would outlive it.
+    Saved(u64),
+    /// The save did not happen, and this is why.
+    SaveFailed(String),
 }
 
 impl OfferOutcome {
@@ -55,7 +64,7 @@ impl OfferOutcome {
     /// spinner — the distinction matters to a log reader, not to the person
     /// waiting.
     pub fn in_flight(&self) -> bool {
-        matches!(self, OfferOutcome::Reading | OfferOutcome::Preparing)
+        matches!(self, OfferOutcome::Reading | OfferOutcome::Preparing | OfferOutcome::Saving)
     }
 }
 
@@ -94,6 +103,21 @@ impl OfferAttempt {
     /// `filename` was not offered, and this is why.
     pub fn set_failed(&self, filename: &str, reason: &str) {
         self.set(filename, OfferOutcome::Failed(reason.to_string()));
+    }
+
+    /// `filename`'s bytes are being read back to save them to this device.
+    pub fn set_saving(&self, filename: &str) {
+        self.set(filename, OfferOutcome::Saving);
+    }
+
+    /// `filename` was handed to the browser as a download of `size` bytes.
+    pub fn set_saved(&self, filename: &str, size: u64) {
+        self.set(filename, OfferOutcome::Saved(size));
+    }
+
+    /// `filename` was not saved to this device, and this is why.
+    pub fn set_save_failed(&self, filename: &str, reason: &str) {
+        self.set(filename, OfferOutcome::SaveFailed(reason.to_string()));
     }
 
     fn set(&self, filename: &str, outcome: OfferOutcome) {
@@ -155,6 +179,21 @@ mod tests {
         assert!(a.read().unwrap().1.in_flight());
         a.set_offered("second.bin", 12);
         assert!(!a.read().unwrap().1.in_flight(), "a finished press is not a spinner");
+    }
+
+    #[test]
+    fn a_save_is_a_press_on_the_same_card_and_reports_the_same_way() {
+        let a = OfferAttempt::new();
+        a.set_offered("note.txt", 5);
+        a.set_saving("note.txt");
+        assert!(a.read().unwrap().1.in_flight(), "a save in flight is a spinner");
+        a.set_save_failed("note.txt", "this browser no longer holds the file's contents");
+        match a.read().unwrap().1 {
+            OfferOutcome::SaveFailed(why) => assert!(why.contains("no longer holds")),
+            other => panic!("expected a save failure, got {other:?}"),
+        }
+        a.set_saved("note.txt", 5);
+        assert!(!a.read().unwrap().1.in_flight());
     }
 
     #[test]

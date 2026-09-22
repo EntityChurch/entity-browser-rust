@@ -55,6 +55,15 @@ pub struct AppEntry {
     /// until entity-apps rules on the contract — see `app_files`. `false` for
     /// every catalog that does not carry the key, which is every catalog today.
     pub files: bool,
+    /// The asset bundles the app reads by key (catalog key
+    /// [`crate::apps::assets::MANIFEST_KEY`], `x-assets`). A **local extension**,
+    /// like `files`. Empty for every catalog that does not carry the key, and an
+    /// empty list encodes to the pre-existing catalog bytes.
+    pub assets: Vec<String>,
+    /// The app keeps working files through the host (catalog key
+    /// [`crate::apps::workspace::MANIFEST_KEY`], `x-workspace`). A **local
+    /// extension**, like `files`; `false` encodes to the pre-existing bytes.
+    pub workspace: bool,
 }
 
 /// The app catalog — the list rendered as the launcher grid.
@@ -148,6 +157,20 @@ fn encode_entry(e: &AppEntry) -> entity_ecf::Value {
             entity_ecf::Value::Bool(true),
         ));
     }
+    // Only when non-empty, for the same reason as `files`.
+    if !e.assets.is_empty() {
+        fields.push((
+            entity_ecf::Value::Text(crate::apps::assets::MANIFEST_KEY.into()),
+            entity_ecf::Value::Array(e.assets.iter().map(entity_ecf::text).collect()),
+        ));
+    }
+    // Only when true, last, for the same reason as `files`.
+    if e.workspace {
+        fields.push((
+            entity_ecf::Value::Text(crate::apps::workspace::MANIFEST_KEY.into()),
+            entity_ecf::Value::Bool(true),
+        ));
+    }
     entity_ecf::Value::Map(fields)
 }
 
@@ -166,11 +189,29 @@ fn decode_entry(item: &ciborium::Value) -> AppEntry {
                 Some("size") => e.size = decode_size(v),
                 Some("type") => e.app_type = v.as_text().map(str::to_string),
                 Some(crate::app_files::MANIFEST_KEY) => e.files = v.as_bool().unwrap_or(false),
+                Some(crate::apps::assets::MANIFEST_KEY) => e.assets = decode_bundle_names(v),
+                Some(crate::apps::workspace::MANIFEST_KEY) => e.workspace = v.as_bool().unwrap_or(false),
                 _ => {}
             }
         }
     }
     e
+}
+
+/// Decode an `x-assets` list: every element that is a valid bundle name, in
+/// order, without duplicates. A malformed element is dropped rather than failing
+/// the entry — the catalog is untrusted input and the other apps in it still run;
+/// the app simply gets `not-declared` for a bundle it spelled wrong.
+fn decode_bundle_names(v: &ciborium::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in v.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        if let Some(name) = item.as_text() {
+            if crate::apps::assets::valid_bundle_name(name) && !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Decode a `size` value (`{width?,height?}` map) into an [`AppSize`]. A missing
@@ -306,6 +347,8 @@ mod tests {
                     size: Some(AppSize { width: Some(460), height: Some(600) }),
                     app_type: Some("tool".into()),
                     files: true,
+                    assets: vec!["guest".into(), "packages".into()],
+                    workspace: true,
                 },
                 // width-only cap (height fills), and no hints at all.
                 AppEntry {
@@ -360,6 +403,45 @@ mod tests {
             entries: vec![AppEntry { files: false, ..bare.entries[0].clone() }],
         };
         assert_eq!(explicit_false.to_entity().data, legacy);
+
+        // Nor does an empty `assets` list.
+        let no_assets = AppCatalog {
+            entries: vec![AppEntry { assets: Vec::new(), ..bare.entries[0].clone() }],
+        };
+        assert_eq!(no_assets.to_entity().data, legacy);
+    }
+
+    #[test]
+    fn an_assets_declaration_is_encoded_under_the_extension_key_and_bad_names_are_dropped() {
+        let opted = AppCatalog {
+            entries: vec![AppEntry { id: "vm".into(), assets: vec!["guest".into()], ..Default::default() }],
+        };
+        let data = opted.to_entity().data;
+        let v: ciborium::Value = ciborium::from_reader(data.as_slice()).unwrap();
+        let entry = &v.as_map().unwrap()[0].1.as_array().unwrap()[0];
+        let keys: Vec<&str> = entry.as_map().unwrap().iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert!(keys.contains(&"x-assets"), "declaration not encoded under x-assets: {keys:?}");
+        assert_eq!(AppCatalog::from_entity(&opted.to_entity()), opted);
+
+        // A hand-built entry whose list carries junk keeps only the valid names.
+        let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![(
+            entity_ecf::Value::Text("entries".into()),
+            entity_ecf::Value::Array(vec![entity_ecf::Value::Map(vec![
+                (entity_ecf::Value::Text("id".into()), entity_ecf::text("vm")),
+                (
+                    entity_ecf::Value::Text("x-assets".into()),
+                    entity_ecf::Value::Array(vec![
+                        entity_ecf::text("guest"),
+                        entity_ecf::text("../up"),
+                        entity_ecf::integer(3),
+                        entity_ecf::text("guest"),
+                        entity_ecf::text("pkgs"),
+                    ]),
+                ),
+            ])]),
+        )]));
+        let decoded = AppCatalog::from_entity(&Entity::new(APP_CATALOG_TYPE, data).unwrap());
+        assert_eq!(decoded.entries[0].assets, vec!["guest".to_string(), "pkgs".to_string()]);
     }
 
     #[test]

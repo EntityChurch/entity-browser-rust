@@ -588,6 +588,12 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("You are not offering anything."),
     ),
     ("filetransfer.stop_offering", Message::Simple("Stop offering")),
+    ("filetransfer.save_to_device", Message::Simple("Save to this device")),
+    ("filetransfer.from_app", Message::Simple("From {app}")),
+    (
+        "filetransfer.save_failed",
+        Message::Simple("Could not save {name} to this device: {why}"),
+    ),
     ("filetransfer.col_file", Message::Simple("File")),
     ("filetransfer.col_size", Message::Simple("Size")),
     // -- site editor surface --

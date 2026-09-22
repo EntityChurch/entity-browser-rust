@@ -85,6 +85,11 @@ pub enum ForeignArtifact {
     /// publish ships new app code (`AppEntry` carries no hash and no version, so
     /// the catalog above it does not).
     AppBundle { peer: String, set: String, id: String },
+    /// An app's asset-bundle index (`crate::apps::assets`) — the bundle's one
+    /// mutable pointer. **Only the index needs currency**: every file it names
+    /// is fetched by content hash through [`ensure_content`], which cannot go
+    /// stale. A republished bundle moves exactly this pointer.
+    AppAssetIndex { peer: String, set: String, id: String, bundle: String },
 }
 
 impl ForeignArtifact {
@@ -96,6 +101,9 @@ impl ForeignArtifact {
             Self::AppBundle { peer, set, id } => {
                 http_poll::app_bundle_bin_url(origin, peer, set, id)
             }
+            Self::AppAssetIndex { peer, set, id, bundle } => {
+                http_poll::app_asset_index_bin_url(origin, peer, set, id, bundle)
+            }
         }
     }
 
@@ -106,6 +114,9 @@ impl ForeignArtifact {
             Self::Manifest { peer, site } => super::paths::manifest_path(peer, site),
             Self::AppCatalog { peer, set } => crate::apps::paths::catalog_path(peer, set),
             Self::AppBundle { peer, set, id } => crate::apps::paths::bundle_path(peer, set, id),
+            Self::AppAssetIndex { peer, set, id, bundle } => {
+                crate::apps::paths::asset_index_path(peer, set, id, bundle)
+            }
         }
     }
 
@@ -118,7 +129,8 @@ impl ForeignArtifact {
         match self {
             Self::Manifest { peer, .. }
             | Self::AppCatalog { peer, .. }
-            | Self::AppBundle { peer, .. } => peer,
+            | Self::AppBundle { peer, .. }
+            | Self::AppAssetIndex { peer, .. } => peer,
         }
     }
 
@@ -134,6 +146,7 @@ impl ForeignArtifact {
             Self::Manifest { site, .. } => site.clone(),
             Self::AppCatalog { set, .. } => set.clone(),
             Self::AppBundle { set, id, .. } => format!("{set}/{id}"),
+            Self::AppAssetIndex { set, id, bundle, .. } => format!("{set}/{id}/assets/{bundle}"),
         }
     }
 }
@@ -266,6 +279,57 @@ pub async fn ensure_current(
         }
         Err(e) => record(what, Currency::Unavailable(e)),
     }
+}
+
+/// **Make content-addressed bytes present in my store: fetch what is missing,
+/// by hash, from `origin`.**
+///
+/// The one fetch in this module with **no currency check, and that is not an
+/// exception to D24 — it is the case D24 exempts.** A body addressed by its own
+/// hash cannot be stale: a different body has a different address, and
+/// `fetch_content` verifies the bytes against the hash before anything is
+/// written. So *"I hold it"* **is** *"I hold the current one"*, which is exactly
+/// the inference this module exists to forbid for a mutable pointer, and
+/// exactly the one that is sound here. What makes it safe is that the caller
+/// can only name a hash, never a path.
+///
+/// Walks a `system/content/blob`'s declared chunks when the blob arrives or is
+/// already held, so one call brings a whole file's closure in. Writes land in
+/// `writer`'s content store; on the Worker arm that store has no put verb
+/// (`WriterHandle::content_put`), so this returns `Unavailable`-shaped errors
+/// rather than claiming success.
+///
+/// Not recorded in the refresh ledger: the ledger is about whether a
+/// *publisher* answers for a *named* artifact, and a content fetch always
+/// follows an index fetch that already recorded that fact.
+pub async fn ensure_content(
+    src: &dyn BinSource,
+    writer: &WriterHandle,
+    origin: &str,
+    blob_hash: &Hash,
+) -> Result<(), PollError> {
+    let blob = match writer.content_get(blob_hash) {
+        Some(b) => b,
+        None => {
+            let b = http_poll::fetch_content(src, origin, blob_hash).await?;
+            writer.content_put(b.clone());
+            b
+        }
+    };
+    let chunks = crate::content_site::asset_store::chunk_hashes_of(&blob)
+        .map_err(PollError::Decode)?;
+    for ch in chunks {
+        if writer.content_get(&ch).is_none() {
+            let e = http_poll::fetch_content(src, origin, &ch).await?;
+            writer.content_put(e);
+        }
+    }
+    if writer.content_get(blob_hash).is_none() {
+        return Err(PollError::Decode(
+            "content fetched and not held afterwards — this arm cannot store content".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// **Every outcome lands in the refresh ledger, on the way out.**

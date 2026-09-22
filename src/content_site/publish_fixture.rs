@@ -214,6 +214,7 @@ pub fn emit_app_set(
     set: &str,
     catalog: &crate::apps::format::AppCatalog,
     bundles: &[(String, crate::apps::format::AppBundle)],
+    assets: &[crate::apps::assets::IngestedBundle],
     prefix: &str,
     mut root: Option<&mut RootProjector>,
 ) -> std::io::Result<usize> {
@@ -231,6 +232,26 @@ pub fn emit_app_set(
             peer_id,
             &format!("apps/{set}/bundles/{id}"),
             &bundle.to_entity(),
+            root.as_deref_mut(),
+        )?;
+    }
+    // Asset bundles: the index is the one tree-keyed entity per bundle, and the
+    // files behind it are hash-addressed content — `put_only`, for the reason
+    // the site-asset closure above gives. See `crate::apps::assets`.
+    for b in assets {
+        for entity in &b.content {
+            match root.as_deref_mut() {
+                Some(r) => {
+                    r.put_only(entity);
+                }
+                None => write_content_blob(&base, entity)?,
+            }
+        }
+        write_entity(
+            &base,
+            peer_id,
+            &format!("apps/{set}/assets/{}/{}", b.app_id, b.bundle),
+            &b.index.to_entity(),
             root.as_deref_mut(),
         )?;
     }
@@ -467,7 +488,7 @@ mod tests {
         };
         let bundles = vec![("calc".to_string(), AppBundle::new("<html>calc</html>"))];
         // Emit under the non-games "apps" set — proves the set is parameterized.
-        let n = emit_app_set(&dir, "PEERG", "apps", &catalog, &bundles, "", None).unwrap();
+        let n = emit_app_set(&dir, "PEERG", "apps", &catalog, &bundles, &[], "", None).unwrap();
         assert_eq!(n, 1);
         assert!(dir.join("PEERG/apps/apps/catalog.bin").exists(), "catalog pointer missing");
         assert!(dir.join("PEERG/apps/apps/bundles/calc.bin").exists(), "bundle pointer missing");
@@ -483,6 +504,88 @@ mod tests {
         assert_eq!(AppBundle::from_entity(&bundle_ent).html, "<html>calc</html>");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An app's asset bundle published, then read back the way the Apps player
+    /// reads it: the index through `ensure_current` (currency), every file by
+    /// content hash through `ensure_content`, reassembled and length-checked.
+    /// And a republish that changes one file moves the index pointer, while an
+    /// unchanged republish does not.
+    #[test]
+    fn an_app_asset_bundle_publishes_and_fetches_back_by_key() {
+        use crate::apps::assets::{read_bundle_dir, resolve_entry, AssetIndex, IngestedBundle};
+        use crate::apps::format::{AppBundle, AppCatalog, AppEntry};
+        use crate::content_site::foreign_cache::{ensure_content, ensure_current, held_hash, Currency, ForeignArtifact};
+        use crate::peers::Peers;
+
+        let root = std::env::temp_dir().join(format!("entity-browser-app-assets-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let src_dir = root.join("src/guest");
+        fs::create_dir_all(src_dir.join("blobs")).unwrap();
+        let big: Vec<u8> = (0..(3 * 1024 * 1024 + 11)).map(|i| (i * 7 % 251) as u8).collect();
+        fs::write(src_dir.join("kernel"), &big).unwrap();
+        fs::write(src_dir.join("blobs/one"), b"one").unwrap();
+        let out = root.join("out");
+        fs::create_dir_all(&out).unwrap();
+
+        let publisher = Peers::new_direct().primary_peer_id().to_string();
+        let catalog = AppCatalog {
+            entries: vec![AppEntry {
+                id: "vm".into(),
+                name: "VM".into(),
+                assets: vec!["guest".into()],
+                ..Default::default()
+            }],
+        };
+        let bundles = vec![("vm".to_string(), AppBundle::new("<html>vm</html>"))];
+        let publish = |dir: &Path| {
+            let (index, content) = read_bundle_dir(dir).unwrap();
+            let b = IngestedBundle { app_id: "vm".into(), bundle: "guest".into(), index, content };
+            emit_app_set(&out, &publisher, "apps", &catalog, &bundles, &[b], "", None).unwrap();
+        };
+        publish(&src_dir);
+        assert!(out.join(format!("{publisher}/apps/apps/assets/vm/guest.bin")).exists());
+
+        let origin = "http://publisher.example";
+        let src = FsBinSource { root: out.clone(), origin: origin.to_string() };
+        let reader = Peers::new_direct();
+        let me = reader.primary_peer_id().to_string();
+        let writer = reader.writer_handle_for(&me).unwrap();
+        let what = ForeignArtifact::AppAssetIndex {
+            peer: publisher.clone(),
+            set: "apps".into(),
+            id: "vm".into(),
+            bundle: "guest".into(),
+        };
+
+        let fetched = block_on(ensure_current(&src, &writer, held_hash(&reader, &me, &what), origin, &what));
+        let Currency::Fetched(ent) = fetched else { panic!("first read must fetch: {fetched:?}") };
+        let index = AssetIndex::from_entity(&ent).unwrap();
+        for key in ["kernel", "blobs/one"] {
+            let entry = index.entries[key];
+            // Nothing is held until asked for: on demand, per file.
+            assert!(writer.content_get(&entry.blob).is_none(), "{key} was fetched before it was asked for");
+            block_on(ensure_content(&src, &writer, origin, &entry.blob)).unwrap();
+        }
+        assert_eq!(resolve_entry(&index.entries["kernel"], |h| writer.content_get(h)).unwrap(), big);
+        assert_eq!(resolve_entry(&index.entries["blobs/one"], |h| writer.content_get(h)).unwrap(), b"one");
+
+        // Unchanged republish: the pointer does not move, nothing is fetched.
+        publish(&src_dir);
+        let again = block_on(ensure_current(&src, &writer, held_hash(&reader, &me, &what), origin, &what));
+        assert!(matches!(again, Currency::Unchanged), "an unchanged bundle must not move: {again:?}");
+
+        // A changed file moves the one pointer, and the new bytes come back.
+        fs::write(src_dir.join("blobs/one"), b"one, revised").unwrap();
+        publish(&src_dir);
+        let moved = block_on(ensure_current(&src, &writer, held_hash(&reader, &me, &what), origin, &what));
+        let Currency::Fetched(ent) = moved else { panic!("a republished bundle must refetch: {moved:?}") };
+        let index = AssetIndex::from_entity(&ent).unwrap();
+        let entry = index.entries["blobs/one"];
+        block_on(ensure_content(&src, &writer, origin, &entry.blob)).unwrap();
+        assert_eq!(resolve_entry(&entry, |h| writer.content_get(h)).unwrap(), b"one, revised");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

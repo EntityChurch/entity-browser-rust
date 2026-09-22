@@ -484,6 +484,7 @@ impl Share {
                 size: self.size.unwrap_or(0),
                 blob: *h,
                 from: self.from.clone(),
+                source: None,
             }),
             ShareTarget::Prefix(_) => None,
         }
@@ -2028,6 +2029,7 @@ mod tests {
             size: 900_000,
             blob: blob_hash(),
             from: "MEPID".to_string(),
+            source: None,
         };
         let share = Share::from_file_offer(&offer, CREATED);
         assert!(

@@ -823,5 +823,8 @@
   "apps.file.sent": "Sendte {name} til appen",
   "apps.file.kept": "Gemte {name} i dine filer",
   "apps.file.refused": "Gemte ikke {name}: {why}",
-  "apps.file.not_sent": "Sendte ingen fil: {why}"
+  "apps.file.not_sent": "Sendte ingen fil: {why}",
+  "filetransfer.save_to_device": "Gem på denne enhed",
+  "filetransfer.from_app": "Fra {app}",
+  "filetransfer.save_failed": "Kunne ikke gemme {name} på denne enhed: {why}"
 }

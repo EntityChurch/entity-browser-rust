@@ -851,5 +851,8 @@
   "apps.file.sent": "أُرسل {name} إلى التطبيق",
   "apps.file.kept": "حُفظ {name} في ملفاتك",
   "apps.file.refused": "لم يُحفظ {name}: {why}",
-  "apps.file.not_sent": "لم يُرسل أي ملف: {why}"
+  "apps.file.not_sent": "لم يُرسل أي ملف: {why}",
+  "filetransfer.save_to_device": "احفظ على هذا الجهاز",
+  "filetransfer.from_app": "من {app}",
+  "filetransfer.save_failed": "تعذّر حفظ {name} على هذا الجهاز: {why}"
 }

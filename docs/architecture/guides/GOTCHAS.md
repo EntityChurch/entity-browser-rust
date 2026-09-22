@@ -3014,6 +3014,82 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Apps & embedded programs
 
+- **A resumed VM snapshot gives every visitor the SAME random numbers until something reseeds it —
+  measured, not theorised (2026-09-13).** The Alpine app resumes from a snapshot taken at build time,
+  and the kernel's RNG state is part of that memory. With the reseed skipped, two separate visits
+  read byte-identical `/dev/urandom` output. Writing to `/dev/urandom` only mixes; the kernel keeps
+  its stream until a scheduled reseed (up to 60 s), so the agent's `resume` verb credits page bytes
+  with `RNDADDENTROPY` and forces `RNDRESEEDCRNG` (`entity-reseed`, built in the image). The same
+  class covers the clock and anything the guest did once at boot (the saved-files extraction in
+  sysinit): **list what a boot does that a resume skips before shipping a snapshot.** And a snapshot
+  only fits the exact engine, image index, package index and machine settings it was taken with —
+  `snapshot.json` records ids the page computes, and a mismatch boots cold rather than resuming into
+  a filesystem that is not there. `tools/run-env/README.md`, plan §8.
+
+- **AN APP'S ASSET BUNDLES ARE ONE INDEX EACH, AND THE LAUNCHER MUST NOT WATCH THEM — built
+  2026-09-13 (`src/apps/assets.rs`, `src/dom/app_assets.rs`).** An app declares
+  `"x-assets": [names]` in its catalog entry and ships `<id>.assets/<name>/` beside `<id>.html`;
+  it asks the player for a key (`x-asset-get {id, bundle, key}`) and gets bytes or a stable
+  refusal code (`x-asset`). The host never learns what a key means, and a test pins that the
+  vocabulary names no kind of content.
+  - **One `app/app-asset-index` entity per bundle (`key → {size, blob}`), NOT a tree binding per
+    file.** The index is the only mutable thing, so it is the only thing `ensure_current` checks;
+    every file is fetched by content hash through `foreign_cache::ensure_content`, which needs no
+    currency check because a hash-addressed body cannot be stale. A binding per file would have
+    cost one freshness request per file per launch (2,791 for the VM image).
+  - **A session reads one index, fixed at mount.** Requests wait until the currency check settles,
+    because an app reads related keys (an index file, then the files it names) and a mid-session
+    switch would hand a running program an inconsistent bundle. A republish reaches the next launch.
+  - ⚠ **The launcher watches `paths::launcher_watch_prefixes` (catalog + `bundles/`), never the
+    whole set prefix.** The player is the one writer under `assets/` — it caches the fetched index
+    on mount — and a watch there rebuilt the section, replaced the `<iframe>`, and **restarted the
+    app it was fetching for**. Measured on the VM's first launch: every bundle settled twice
+    (`fetched`, then `current`), i.e. two boots. AP43's family from the other side: there, a write
+    that should have rebuilt did not; here, a write that must not rebuild did. Gated natively by
+    `the_launcher_does_not_watch_the_asset_indexes_its_player_writes` and in the browser by
+    `tools/run-env/probes/apps-window-vm-probe.py` (one settle per bundle).
+  - **Every declaring type owes a `--verify` arm in the commit that introduces it**, and this one
+    has it (`an_app_asset_bundle_declares_its_files_so_verify_fails_when_one_is_missing`,
+    falsified: without the arm verify exits 0 on a tree missing a file).
+  - **Direct/IDB arm only.** Serving needs `WriterHandle::content_get`, which answers `None` on the
+    Worker arm, so `?worker=1` refuses every key `unavailable`. Stated, not hidden.
+
+- **AN APP'S WORKING FILES ARE ONE ENTITY PER FILE IN *OUR* TREE, AND A SAVE DELETES ONLY WHAT IT
+  NAMES — built 2026-09-13 (`src/apps/workspace.rs`, `src/dom/app_workspace.rs`).** The catalog opts
+  in with `"x-workspace": true`, `init` carries `x-workspace: true|false`, and the app lists
+  (`x-work-list`), reads (`x-work-get`) and saves a batch (`x-work-save {put, remove}`). Files land
+  at `app_paths::app_workspace_prefix` — `/{me}/app/entity-browser/apps/{set}/work/{app}/{path}` —
+  as `app/app-work-file {size, mode, mtime, blob}`, so a person can **see them in the entity tree**.
+  - **Per file here, one index for asset bundles, and the difference is who fetches.** A bundle is a
+    publisher's and crosses HTTP, where a binding per file is a freshness request per file. A
+    workspace is this profile's and is never fetched, so per-file costs nothing and buys a save that
+    touches only what changed.
+  - ⚠ **The workspace prefix is a SIBLING of `state/` and `backups/`, never under them** — the Apps
+    window watches those, and a watch covering the workspace restarts the running app on every save
+    (the asset-index bug above, a third time waiting to happen).
+    `the_workspace_is_outside_every_prefix_the_apps_window_watches` pins it.
+  - **The host removes exactly the paths in `remove`; the app decides what was deleted.** For the VM
+    that rule is: a path is removed only if *this session saw it on the guest's disk and then saw it
+    gone*. A file the host holds that never appeared — a restore that failed — is left alone, so a
+    broken restore can never become the reason work is deleted on the next autosave.
+  - **Worker arm answers `unavailable`, never an empty workspace** (`WorkStore::usable`); overwritten
+    files leave their blobs behind (binding-safe reclaim only sees tree bindings, not a hash inside
+    an entity). Both stated in the module.
+  - Gates: 13 native tests (falsified: drop the `put` and 5 red); `apps-window-vm-probe.py` with
+    `VISITS=2` writes a random marker at mode 755, saves, reloads, and requires both back (falsified:
+    skip the restore and it reds). **Its "fetched the saved files" check stays green under that
+    neuter** — it counts fetches — which is why the marker check exists.
+
+- **THREE v86/xterm BYTE TRAPS, ALL FOUND BY ONE NON-ASCII FILE NAME** (`tools/run-env/alpine-guest/index.html`).
+  - **`emulator.serial0_send(str)` sends each character code as ONE byte.** `é` reached the guest as
+    Latin-1 `0xE9` and anything past U+00FF was truncated, so every keystroke from a phone keyboard
+    outside ASCII was wrong. Use `serial_send_bytes(0, TextEncoder.encode(text))` (`typeIn`).
+  - **`term.write(String.fromCharCode(byte))` draws UTF-8 as mojibake.** Hand xterm the bytes
+    (`Uint8Array`); it decodes across writes, and OSC payloads then arrive as real text.
+  - **`emulator.read_file` REJECTS AN EMPTY FILE as "File not found"** (zero bytes read → `null` →
+    treated as absent). An empty `/root` is an empty manifest on every fresh profile; the agent's
+    line count decides instead.
+
 - **A RETURNING PROFILE NEVER RE-FETCHED AN APP BUNDLE — FIXED 2026-08-29 (D24), and the
   history is kept because the fix is a rule, not a line.** `src/views/games/mod.rs` refreshed
   the **catalog** once per window-open but fetched a **bundle** only `if b.is_none()`. Found on
@@ -4236,6 +4312,19 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   `PUBLISH_DATA_DIR`, and `PUBLISH-INGEST-FORMAT.md` all still say publish.
 
 ## Testing & the gates
+
+- **A poll that breaks on the FIRST frame matching "recovered" samples a transient — wait for the end
+  state (2026-09-13).** The kill-switch drill (`the_kill_switch_recovers_…`) was red ~1 run in 3 with
+  nothing under test, and it read as a flaky rig. It was two assertions made one poll too early: the
+  recovered page's `index.html` registers `/sw.js` again while the origin still serves the kill
+  switch, so a registration exists for a moment and removes itself; the loop broke on *app back* and
+  then asserted *zero registrations* against that moment. The step after it (put the real worker
+  back) then raced the still-uninstalling registration and failed on its own. Polling until the whole
+  end state holds (app back **and** no registrations **and** no caches) took it to 10/10 with the real
+  worker in control after one load, and a kill switch that never unregisters still reds. **The first
+  diagnosis was wrong**: the one failure message read was *"Document was unloaded"*, a fix went in for
+  that, and 4 of 10 still failed — every one of them past that line. *Read the failures you are
+  fixing, all of them, before you write the fix for the one you read.*
 
 - **A mass e2e failure whose message says *"something is holding :8092"* is usually SELinux, not
   a port — and the harness names the wrong cause. Measured 2026-09-02.** Two consecutive

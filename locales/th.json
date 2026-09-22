@@ -816,5 +816,8 @@
   "apps.file.sent": "ส่ง {name} ไปยังแอปแล้ว",
   "apps.file.kept": "บันทึก {name} ลงในไฟล์ของคุณแล้ว",
   "apps.file.refused": "ไม่ได้บันทึก {name}: {why}",
-  "apps.file.not_sent": "ไม่ได้ส่งไฟล์: {why}"
+  "apps.file.not_sent": "ไม่ได้ส่งไฟล์: {why}",
+  "filetransfer.save_to_device": "บันทึกลงอุปกรณ์นี้",
+  "filetransfer.from_app": "จาก {app}",
+  "filetransfer.save_failed": "ไม่สามารถบันทึก {name} ลงอุปกรณ์นี้ได้: {why}"
 }

@@ -830,5 +830,8 @@
   "apps.file.sent": "{name} נשלח לאפליקציה",
   "apps.file.kept": "{name} נשמר בקבצים שלך",
   "apps.file.refused": "{name} לא נשמר: {why}",
-  "apps.file.not_sent": "לא נשלח קובץ: {why}"
+  "apps.file.not_sent": "לא נשלח קובץ: {why}",
+  "filetransfer.save_to_device": "שמירה במכשיר הזה",
+  "filetransfer.from_app": "מ-{app}",
+  "filetransfer.save_failed": "לא ניתן לשמור את {name} במכשיר הזה: {why}"
 }

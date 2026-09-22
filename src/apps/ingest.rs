@@ -43,12 +43,36 @@ fn parse_size(v: Option<&serde_json::Value>) -> Option<AppSize> {
     }
 }
 
+/// Parse a catalog `x-assets` value. Absent → no bundles. **Present and wrong
+/// is an error at ingest** (unlike the decoder, which drops junk): ingest is
+/// authoring, and a publisher who misspelled a bundle name wants to hear it
+/// here, not from an app that answers `not-declared` in production.
+fn parse_bundle_names(v: Option<&serde_json::Value>) -> Result<Vec<String>, String> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    let arr = v
+        .as_array()
+        .ok_or_else(|| format!("{} must be an array of bundle names", crate::apps::assets::MANIFEST_KEY))?;
+    let mut out: Vec<String> = Vec::new();
+    for item in arr {
+        let name = item.as_str().filter(|n| crate::apps::assets::valid_bundle_name(n)).ok_or_else(|| {
+            format!("{} holds an invalid bundle name: {item}", crate::apps::assets::MANIFEST_KEY)
+        })?;
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// The catalog + every bundle read from a `dist/` directory. The catalog is the
 /// index; `bundles` pairs each `id` with its self-contained HTML.
 #[derive(Default)]
 pub struct IngestedApps {
     pub catalog: AppCatalog,
     pub bundles: Vec<(String, AppBundle)>,
+    /// Every declared asset bundle that was found, with its content closure.
+    /// See [`crate::apps::assets`].
+    pub assets: Vec<crate::apps::assets::IngestedBundle>,
 }
 
 /// One ingested app-set keyed by set id (`games` / `apps`), each with its own
@@ -112,14 +136,38 @@ pub fn read_dist(dir: &Path) -> Result<IngestedSets, String> {
                 .get(crate::app_files::MANIFEST_KEY)
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            assets: parse_bundle_names(item.get(crate::apps::assets::MANIFEST_KEY))?,
+            // Only a JSON `true`, like `files`.
+            workspace: item
+                .get(crate::apps::workspace::MANIFEST_KEY)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         };
 
         let html_path = dir.join(format!("{id}.html"));
         match std::fs::read_to_string(&html_path) {
             Ok(html) => {
+                // Asset bundles live beside the bundle as `<id>.assets/<name>/`.
+                // A DECLARED bundle whose directory is missing stops the ingest:
+                // unlike a missing `<id>.html` (the entry is simply absent), the
+                // app would be published and then fail at the first key it asks
+                // for, far from the packaging mistake that caused it.
+                let mut ingested = Vec::new();
+                for bundle in &entry.assets {
+                    let bdir = dir.join(format!("{id}.assets")).join(bundle);
+                    let (index, content) = crate::apps::assets::read_bundle_dir(&bdir)
+                        .map_err(|e| format!("app '{id}' declares asset bundle '{bundle}': {e}"))?;
+                    ingested.push(crate::apps::assets::IngestedBundle {
+                        app_id: id.clone(),
+                        bundle: bundle.clone(),
+                        index,
+                        content,
+                    });
+                }
                 let into = sets.entry(set.to_string()).or_default();
                 into.bundles.push((id.clone(), AppBundle::new(html)));
                 into.catalog.entries.push(entry);
+                into.assets.extend(ingested);
             }
             Err(e) => {
                 // A catalog entry without its bundle is skipped, not fatal.
@@ -137,6 +185,18 @@ pub fn write_set_into(peers: &Peers, peer_id: &str, set: &str, ing: &IngestedApp
     peers.seed_write(peer_id, paths::catalog_path(peer_id, set), ing.catalog.to_entity());
     for (id, bundle) in &ing.bundles {
         peers.seed_write(peer_id, paths::bundle_path(peer_id, set, id), bundle.to_entity());
+    }
+    // Content before the index that names it, so a reader never holds an index
+    // whose bytes have not landed yet.
+    for b in &ing.assets {
+        for e in &b.content {
+            peers.seed_content(peer_id, e.clone());
+        }
+        peers.seed_write(
+            peer_id,
+            paths::asset_index_path(peer_id, set, &b.app_id, &b.bundle),
+            b.index.to_entity(),
+        );
     }
     ing.bundles.len()
 }
@@ -269,6 +329,65 @@ mod tests {
         let games = sets.get(paths::GAMES_SET).expect("games set present");
         let war = &games.catalog.entries[0];
         assert!(war.category.is_none() && war.glyph.is_none() && war.icon.is_none() && war.size.is_none());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_declared_asset_bundle_is_read_from_beside_the_bundle() {
+        let tmp = std::env::temp_dir().join(format!("apps-ingest-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("vm.assets/guest/blobs")).unwrap();
+        write(&tmp, "index.json", r#"[{"id":"vm","name":"VM","type":"tool","x-assets":["guest"]},
+                                      {"id":"calc","name":"C","type":"tool"}]"#);
+        write(&tmp, "vm.html", "<html>vm</html>");
+        write(&tmp, "calc.html", "<html>calc</html>");
+        write(&tmp.join("vm.assets/guest"), "fs.json", "{}");
+        write(&tmp.join("vm.assets/guest/blobs"), "abc", "body");
+
+        let sets = read_dist(&tmp).unwrap();
+        let apps = sets.get(paths::APPS_SET).unwrap();
+        let vm = apps.catalog.entries.iter().find(|e| e.id == "vm").unwrap();
+        assert_eq!(vm.assets, vec!["guest".to_string()]);
+        assert_eq!(apps.assets.len(), 1, "only the declaring app contributes a bundle");
+        let b = &apps.assets[0];
+        assert_eq!((b.app_id.as_str(), b.bundle.as_str()), ("vm", "guest"));
+        let keys: Vec<&str> = b.index.entries.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["blobs/abc", "fs.json"]);
+
+        // And into a tree: the index at its path, the bytes resolvable from the
+        // peer's own content store — the round trip the host serves from.
+        let peers = crate::peers::Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        write_set_into(&peers, &me, paths::APPS_SET, apps);
+        let ent = peers
+            .get_entity(&me, &paths::asset_index_path(&me, paths::APPS_SET, "vm", "guest"))
+            .expect("index written");
+        let index = crate::apps::assets::AssetIndex::from_entity(&ent).unwrap();
+        let bytes = crate::apps::assets::resolve_entry(&index.entries["blobs/abc"], |h| {
+            peers.content_by_hash(&me, h)
+        })
+        .unwrap();
+        assert_eq!(bytes, b"body");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_declared_bundle_that_is_missing_or_misspelled_stops_the_ingest() {
+        let tmp = std::env::temp_dir().join(format!("apps-ingest-assets-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        write(&tmp, "vm.html", "<html>vm</html>");
+
+        write(&tmp, "index.json", r#"[{"id":"vm","name":"VM","type":"tool","x-assets":["guest"]}]"#);
+        let err = read_dist(&tmp).err().expect("a declared bundle with no directory must fail");
+        assert!(err.contains("guest"), "{err}");
+
+        write(&tmp, "index.json", r#"[{"id":"vm","name":"VM","type":"tool","x-assets":["../guest"]}]"#);
+        let err = read_dist(&tmp).err().expect("an invalid bundle name must fail");
+        assert!(err.contains("invalid bundle name"), "{err}");
+
+        write(&tmp, "index.json", r#"[{"id":"vm","name":"VM","type":"tool","x-assets":"guest"}]"#);
+        assert!(read_dist(&tmp).is_err(), "a non-array declaration must fail");
         std::fs::remove_dir_all(&tmp).ok();
     }
 

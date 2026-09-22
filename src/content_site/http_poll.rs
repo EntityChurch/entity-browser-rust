@@ -175,33 +175,20 @@ pub fn content_url(origin: &str, h: &Hash) -> String {
 /// `paths`) because it carries an http origin and appends the `.bin` poll
 /// suffix.
 pub fn manifest_bin_url(origin: &str, peer_id: &str, site_id: &str) -> String {
-    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/manifest"))
-}
-
-/// HTTP URL of **any** peer-relative tree key's `.bin` leaf under a published
-/// origin — `{origin}/{peer_id}/{key}.bin`.
-///
-/// The three site builders around it are this with a key spelled out, and they
-/// are written that way rather than repeating the join: the peer-first layout
-/// and the `.bin` suffix are one convention, and three copies of it is the shape
-/// that drifts (C15).
-///
-/// It is public because `APP-CONVENTION-FEED` §6 needs a key that belongs to no
-/// vocabulary this module knows: a mirror's carried entries are bound under
-/// **their own author** at `app/feed/entries/{hex}`, and a consumer reaching
-/// them has a `(peer, key)` pair and nothing else. Adding a
-/// `mirror_entry_bin_url` beside the site three would have been the vocabulary
-/// coupling `REVIEW-2026-09-10` measured this file as already holding too much
-/// of.
-pub fn tree_bin_url(origin: &str, peer_id: &str, key: &str) -> String {
-    format!("{}/{}/{}.bin", origin.trim_end_matches('/'), peer_id, key)
+    format!("{}/{}/sites/{}/manifest.bin", origin.trim_end_matches('/'), peer_id, site_id)
 }
 
 /// HTTP URL of a site page's `.bin` leaf under a published origin —
 /// `{origin}/{peer_id}/sites/{site_id}/pages/{slug}.bin` (tree-path mirror,
 /// peer-first; see [`manifest_bin_url`]).
 pub fn page_bin_url(origin: &str, peer_id: &str, site_id: &str, slug: &str) -> String {
-    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/pages/{slug}"))
+    format!(
+        "{}/{}/sites/{}/pages/{}.bin",
+        origin.trim_end_matches('/'),
+        peer_id,
+        site_id,
+        slug
+    )
 }
 
 /// HTTP URL of a site asset's `.bin` leaf under a published origin —
@@ -209,7 +196,13 @@ pub fn page_bin_url(origin: &str, peer_id: &str, site_id: &str, slug: &str) -> S
 /// peer-first; see [`manifest_bin_url`]). `name` is the asset's path under
 /// `assets/` (`figures/x.png`), so the leaf is `assets/figures/x.png.bin`.
 pub fn asset_bin_url(origin: &str, peer_id: &str, site_id: &str, name: &str) -> String {
-    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/assets/{name}"))
+    format!(
+        "{}/{}/sites/{}/assets/{}.bin",
+        origin.trim_end_matches('/'),
+        peer_id,
+        site_id,
+        name
+    )
 }
 
 /// Fetch + decode a site asset entity over `src` (the asset two-hop). Returns
@@ -288,6 +281,21 @@ pub fn app_catalog_bin_url(origin: &str, peer_id: &str, set: &str) -> String {
 /// site asset; the live Games/Apps window fetches this on click-through.
 pub fn app_bundle_bin_url(origin: &str, peer_id: &str, set: &str, id: &str) -> String {
     format!("{}/{}/apps/{}/bundles/{}.bin", origin.trim_end_matches('/'), peer_id, set, id)
+}
+
+/// HTTP URL of an app's asset-bundle index `.bin` leaf —
+/// `{origin}/{peer_id}/apps/{set}/assets/{id}/{bundle}.bin`. The one mutable
+/// pointer a bundle has; every file under it is fetched by content hash
+/// ([`content_url`]). See `crate::apps::assets`.
+pub fn app_asset_index_bin_url(origin: &str, peer_id: &str, set: &str, id: &str, bundle: &str) -> String {
+    format!(
+        "{}/{}/apps/{}/assets/{}/{}.bin",
+        origin.trim_end_matches('/'),
+        peer_id,
+        set,
+        id,
+        bundle
+    )
 }
 
 /// Fetch + decode an app-set catalog entity over `src` (the catalog two-hop).

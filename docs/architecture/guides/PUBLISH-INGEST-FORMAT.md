@@ -256,7 +256,7 @@ generic core is the only path. What the cutover did:
 - `entity-browser publish` + `--ingest=<dir>` and all the projection flags.
 - `src/content_site/ingest.rs` and this format. Producer-agnostic by construction.
 - `make site INGEST=<dir>` / `make site-bare` — the generic entry points.
-- This document + TOOLS.md §4 + the worked example `examples/demo-site/`.
+- This document + TOOLS.md §4 + the worked example `examples/entity-demo/`.
 
 **REMOVED — papers-specific:**
 - The `publish-papers` + `publish-papers-preflight` Makefile targets and every

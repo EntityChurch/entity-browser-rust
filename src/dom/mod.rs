@@ -4,6 +4,8 @@
 //! WindowManager's active instances.
 
 pub mod access_log;
+pub mod app_assets;
+pub mod app_workspace;
 pub mod app_saves;
 pub mod chain_trace;
 pub mod chat;
@@ -635,8 +637,6 @@ impl DomRenderer {
                         actions_rc.borrow_mut().push(Action::SpawnWindow {
                             type_name: name,
                             peer_id: Some(pid.clone()),
-                            // The palette names a window, never a subject.
-                            target: None,
                         });
                         *so.borrow_mut() = false; // auto-close the mobile menu
                         rp();
@@ -655,7 +655,6 @@ impl DomRenderer {
                         actions_rc.borrow_mut().push(Action::SpawnWindow {
                             type_name: name,
                             peer_id: if pid.is_empty() { None } else { Some(pid) },
-                            target: None,
                         });
                         *so.borrow_mut() = false; // auto-close the mobile menu
                         rp();

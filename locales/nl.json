@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} naar de app gestuurd",
   "apps.file.kept": "{name} opgeslagen in je bestanden",
   "apps.file.refused": "{name} niet opgeslagen: {why}",
-  "apps.file.not_sent": "Geen bestand verzonden: {why}"
+  "apps.file.not_sent": "Geen bestand verzonden: {why}",
+  "filetransfer.save_to_device": "Opslaan op dit apparaat",
+  "filetransfer.from_app": "Van {app}",
+  "filetransfer.save_failed": "Kon {name} niet op dit apparaat opslaan: {why}"
 }

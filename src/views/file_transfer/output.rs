@@ -126,6 +126,9 @@ pub struct OwnOffer {
     pub id: String,
     pub name: String,
     pub size: u64,
+    /// Display name of the app that handed this file to the host, `None` for a
+    /// file a person offered (`file_offer::OfferSource`).
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -3074,11 +3074,26 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "Launching War should mount a sandboxed iframe in the Apps window. \
          Got: {frame:?}"
     );
-    assert_eq!(
-        frame.get("sandbox").and_then(|v| v.as_str()).unwrap_or(""),
-        "allow-scripts",
-        "Game iframe must be sandboxed allow-scripts (opaque origin, no \
+    // The token SET, not a string: `allow-downloads` joined on 2026-09-11
+    // (`crate::app_sandbox::sandbox_tokens`, gated natively) and this literal
+    // was not updated, so the monolith went red on a correct change. What this
+    // phase is FOR is the absence of `allow-same-origin`, stated separately so
+    // a future token cannot hide it.
+    let tokens: std::collections::BTreeSet<&str> = frame
+        .get("sandbox")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    assert!(
+        !tokens.contains("allow-same-origin"),
+        "Game iframe must NOT carry allow-same-origin (opaque origin, no \
          same-origin reach into the page). Got: {frame:?}"
+    );
+    assert_eq!(
+        tokens,
+        ["allow-downloads", "allow-scripts"].into_iter().collect(),
+        "Game iframe sandbox tokens changed. Got: {frame:?}"
     );
     let srcdoc_len = frame
         .get("srcdoc_len")
@@ -3686,8 +3701,13 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     let seq_before_step = with_tree.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
     let step_click = client.execute(&click_ctl("[data-host-step]"), vec![]).await?;
     assert_eq!(step_click.as_str(), Some("clicked"), "step click failed: {step_click:?}");
-    sleep(Duration::from_millis(400)).await;
-    let after_step = client.execute(read_chrome, vec![]).await?;
+    // Poll, not a fixed 400 ms: on a loaded box the stepped tick landed after the
+    // single read and this reported "STEP did not advance" (2026-09-13, one full
+    // run in two). A step that never advances still fails, at the budget.
+    let after_step = poll_json(&client, read_chrome, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1) > seq_before_step
+    })
+    .await?;
     let seq_after_step = after_step.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
     assert!(
         seq_after_step > seq_before_step,
@@ -19622,6 +19642,263 @@ const READ_PLAYER_CHROME: &str = r#"
     return { player: false };
 "#;
 
+/// **An app that declares `x-files` can hand the host a file, and the host can
+/// hand it one back** — the `x-file` verb pair (`crate::app_files`), a local
+/// extension to the entity-apps contract until they rule on it.
+///
+/// The `file-probe` fixture does the app's half on init: asks for a file, sends
+/// a name that must be refused (`../`), and sends `out/probe-out.txt` as a
+/// **33-byte view into a 64-byte buffer**. So the gate asserts, in order of
+/// whose defect each would expose:
+///
+///  1. the app got BOTH answers — `bad-name` and `kept` with an offer id —
+///     because a refusal the app never hears is the silent failure this
+///     replaces (`Entity.Export` in a sandbox), and the refusal is SYNC while
+///     the keep is async, so only both proves the wait is not just the fast one;
+///  2. the frame stamps and the status line agree (a person and a gate must be
+///     able to see the same fact);
+///  3. File Transfer lists `probe-out.txt` at **33 B** — the name had its
+///     directory stripped, and a host that read the view's `.buffer` instead of
+///     its bytes would list 64 B;
+///  4. a file given to the app through the host's picker arrives byte-exact;
+///  5. and an app that did NOT declare the key (Calculator) draws no control;
+///  6. the offer row says it came from File Probe, and **Save to this device**
+///     — in File Transfer and in the player bar (2b) — hands the browser the
+///     same 33 bytes under the same name.
+///
+/// The picker is driven by assigning `input.files` and dispatching `change`,
+/// because WebDriver cannot drive a native chooser on a remote grid. That is the
+/// same seam `a_lone_file_transfer_window_lists_what_it_offers` uses; the
+/// chooser itself is `util::show_file_picker`, already gated there.
+/// Captures a browser download instead of performing it: every object URL
+/// remembers its Blob, and an anchor click records its `download` name plus the
+/// Blob's size and text in `window.__ftSaved`. A real download on a remote grid
+/// is a dialog nobody can see; what a gate needs is the name and the bytes the
+/// page handed the browser. Resets `__ftSaved` each time it is installed.
+const CAPTURE_DOWNLOADS: &str = r#"
+            window.__ftSaved = [];
+            const __blobs = new Map();
+            if (!URL.__ftOrig) URL.__ftOrig = URL.createObjectURL;
+            URL.createObjectURL = function (b) { const u = URL.__ftOrig.call(URL, b); __blobs.set(u, b); return u; };
+            HTMLAnchorElement.prototype.click = function () {
+                const b = __blobs.get(this.href);
+                const rec = { download: this.getAttribute('download'), size: b ? b.size : null, text: null };
+                window.__ftSaved.push(rec);
+                if (b) b.text().then(t => { rec.text = t; });
+            };
+"#;
+
+#[tokio::test]
+async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_back(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ Apps").await?, "clicked", "couldn't open the Apps window");
+
+    // A shadow-DOM walk to the Apps window section, shared by every script below.
+    const APPS: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            const h3 = s.querySelector('header h3');
+            if (h3 && h3.textContent.trim() === 'Apps') { sec = s; break; }
+        }
+    "#;
+    let card = |name: &str| format!(r#"{APPS}
+        if (!sec) return 'no-window';
+        const b = Array.from(sec.querySelectorAll('button'))
+            .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('{name}'));
+        if (!b) return 'no-card';
+        b.click(); return 'clicked';
+    "#);
+    let back = format!(r#"{APPS}
+        if (!sec) return 'no-window';
+        const b = Array.from(sec.querySelectorAll('button')).find(b => b.textContent.trim().startsWith('←'));
+        if (!b) return 'no-back'; b.click(); return 'clicked';
+    "#);
+
+    // ── 5 first, while nothing has declared anything: Calculator gets no control.
+    let launched = poll_json(&client, &card("Calculator"), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(launched.as_str(), Some("clicked"), "could not launch Calculator: {launched}");
+    let undeclared = poll_json(&client, &format!(r#"{APPS}
+            const fr = sec && sec.querySelector('iframe[sandbox]');
+            return {{ mounted: !!fr, button: !!(sec && sec.querySelector('[data-field="app-file-send"]')),
+                      status: !!(sec && sec.querySelector('[data-field="app-file-status"]')) }};
+        "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("mounted").and_then(|b| b.as_bool()).unwrap_or(false)).await?;
+    assert!(undeclared.get("mounted").and_then(|b| b.as_bool()).unwrap_or(false), "Calculator never mounted: {undeclared}");
+    assert!(
+        !undeclared.get("button").and_then(|b| b.as_bool()).unwrap_or(true)
+            && !undeclared.get("status").and_then(|b| b.as_bool()).unwrap_or(true),
+        "an app that did NOT declare x-files got file controls — the opt-in is not an opt-in: {undeclared}"
+    );
+    assert_eq!(client.execute(&back, vec![]).await?.as_str(), Some("clicked"), "no way back to the grid");
+
+    // ── launch the probe
+    let launched = poll_json(&client, &card("File Probe"), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(launched.as_str(), Some("clicked"), "could not launch File Probe (is the demo-apps build current?): {launched}");
+
+    // ── 2: frame stamps + status line
+    let stamped = poll_json(&client, &format!(r#"{APPS}
+            const fr = sec && sec.querySelector('iframe[sandbox]');
+            const st = sec && sec.querySelector('[data-field="app-file-status"]');
+            const btn = sec && sec.querySelector('[data-field="app-file-send"]');
+            return {{ mounted: !!fr,
+                      seq: fr ? (fr.getAttribute('data-app-file-seq') || '0') : null,
+                      last: fr ? fr.getAttribute('data-app-file-last') : null,
+                      requested: fr ? fr.getAttribute('data-app-file-requested') : null,
+                      raised: !!(btn && btn.classList.contains('gm-file-requested')),
+                      status: st ? st.textContent : null }};
+        "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("seq").and_then(|s| s.as_str()) == Some("1")).await?;
+    println!("  host side: {stamped}");
+    assert_eq!(stamped.get("seq").and_then(|s| s.as_str()), Some("1"),
+        "the host never KEPT the probe's file (data-app-file-seq). If `last` is a refusal code, that is why: {stamped}");
+    assert_eq!(stamped.get("last").and_then(|s| s.as_str()), Some("kept"), "{stamped}");
+    assert_eq!(stamped.get("requested").and_then(|s| s.as_str()), Some("1"),
+        "x-request-file never reached the host: {stamped}");
+    assert!(stamped.get("raised").and_then(|b| b.as_bool()).unwrap_or(false),
+        "x-request-file arrived but the send control was not raised: {stamped}");
+    let status = stamped.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    assert!(status.contains("probe-out.txt"),
+        "the status line does not name the kept file — a person cannot see what the gate saw: {stamped}");
+
+    // ── 2b: the player's own "Save to this device" appears for the kept file and
+    // hands the browser its 33 bytes — the phone's way out without leaving the
+    // app. Captured at the object URL and the anchor, not performed (see 6).
+    let pressed = client.execute(&format!(r#"{APPS}
+            {CAPTURE_DOWNLOADS}
+            const btn = sec && sec.querySelector('[data-field="app-file-save"]');
+            if (!btn) return {{ state: 'no-button' }};
+            if (btn.hidden) return {{ state: 'hidden' }};
+            const named = btn.getAttribute('data-offer-name');
+            btn.click();
+            return {{ state: 'clicked', named }};
+        "#), vec![]).await?;
+    assert_eq!(pressed.get("state").and_then(|s| s.as_str()), Some("clicked"),
+        "the player offers no Save to this device for the file it just kept: {pressed}");
+    assert_eq!(pressed.get("named").and_then(|s| s.as_str()), Some("probe-out.txt"), "{pressed}");
+    let saved = poll_json(&client, "return window.__ftSaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("text")).and_then(|t| t.as_str()).is_some()
+    }).await?;
+    println!("  player saved to device: {saved}");
+    let first = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    assert_eq!(first.get("download").and_then(|s| s.as_str()), Some("probe-out.txt"),
+        "the player's Save to this device never handed the browser a download: {saved}");
+    assert_eq!(first.get("text").and_then(|s| s.as_str()), Some("file probe: made inside the app\n!"),
+        "the player downloaded bytes that are not the file the app sent: {saved}");
+
+    // ── 4: give the app a file through the host's picker (drives `change`)
+    let given = client.execute(&format!(r#"{APPS}
+            const inp = sec && sec.querySelector('[data-field="app-file-input"]');
+            if (!inp) return 'no-input';
+            const bytes = new Uint8Array(256).map((_, i) => i);
+            const dt = new DataTransfer();
+            dt.items.add(new File([new TextEncoder().encode('host to app\n'), bytes], 'given.bin', {{ type: 'application/octet-stream' }}));
+            inp.files = dt.files;
+            inp.dispatchEvent(new Event('change'));
+            return 'given';
+        "#), vec![]).await?;
+    assert_eq!(given.as_str(), Some("given"), "could not drive the host's file input: {given}");
+    let sent = poll_json(&client, &format!(r#"{APPS}
+            const fr = sec && sec.querySelector('iframe[sandbox]');
+            return {{ sent: fr ? (fr.getAttribute('data-app-file-sent-seq') || '0') : null }};
+        "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("sent").and_then(|s| s.as_str()) == Some("1")).await?;
+    assert_eq!(sent.get("sent").and_then(|s| s.as_str()), Some("1"), "the host never posted the chosen file: {sent}");
+
+    // ── 1 + 4, from INSIDE the sandbox: what the app actually heard.
+    client.enter_frame(0).await?;
+    let inside = poll_json(&client, "return window.__probe || null;", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("results").and_then(|r| r.as_array()).map(|r| r.len() >= 2).unwrap_or(false)
+            && v.get("received").and_then(|r| r.as_array()).map(|r| !r.is_empty()).unwrap_or(false)
+    }).await?;
+    client.enter_parent_frame().await?;
+    println!("  app side: {inside}");
+    let results = inside.get("results").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let refused = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(false));
+    let kept = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(true));
+    assert_eq!(refused.and_then(|r| r.get("reason")).and_then(|s| s.as_str()), Some("bad-name"),
+        "the app never heard its `../` refused — a refusal the app cannot see is the silent failure: {inside}");
+    assert_eq!(kept.and_then(|r| r.get("name")).and_then(|s| s.as_str()), Some("probe-out.txt"),
+        "the app never heard its file kept, or under the wrong name: {inside}");
+    assert!(kept.and_then(|r| r.get("id")).and_then(|s| s.as_str()).map(|s| s.len() > 16).unwrap_or(false),
+        "a kept file must carry the offer id the app can refer to: {inside}");
+    let got = inside.get("received").and_then(|r| r.as_array()).and_then(|r| r.first()).cloned().unwrap_or_default();
+    assert_eq!(got.get("name").and_then(|s| s.as_str()), Some("given.bin"), "{inside}");
+    assert_eq!(got.get("length").and_then(|n| n.as_u64()), Some(12 + 256),
+        "the file given to the app did not arrive byte-exact in length: {inside}");
+
+    // ── 3: the kept file is a real offer, at its real size.
+    assert_eq!(click_spawn_btn(&client, "+ File Transfer").await?, "clicked", "couldn't open File Transfer");
+    let listed = poll_json(&client, r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (!s.querySelector('.file-transfer')) continue;
+                const row = s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
+                return { row: !!row, text: row ? row.textContent : null };
+            }
+            return { row: false, text: null };
+        "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("row").and_then(|b| b.as_bool()).unwrap_or(false)).await?;
+    println!("  offer row: {listed}");
+    assert!(listed.get("row").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the host said `kept` and File Transfer lists no `probe-out.txt` offer: {listed}");
+    let text = listed.get("text").and_then(|s| s.as_str()).unwrap_or("");
+    assert!(text.contains("33 B"),
+        "the offer is not 33 bytes — 64 B means the host read the view's whole `.buffer`: {listed}");
+
+    // ── 6: the row names the app it came from, and saving it to this device
+    // hands the browser the file's own 33 bytes under its own name (M2 — how
+    // an app's output leaves a phone). The download is captured at the object
+    // URL and the anchor, not performed: a real download on a remote grid is
+    // a dialog nobody can see, and what matters is the bytes and the name we
+    // handed the browser. Reading the Blob back is what proves the bytes came
+    // out of the store rather than from a row's size.
+    let source = poll_json(&client, r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (!s.querySelector('.file-transfer')) continue;
+                const row = s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
+                const src = row && row.querySelector('[data-field="ft-offer-source"]');
+                const btn = row && row.querySelector('[data-field="ft-save-offer"]');
+                return { source: src ? src.textContent : null, button: !!btn };
+            }
+            return { source: null, button: false };
+        "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("source").and_then(|s| s.as_str()).is_some()).await?;
+    println!("  offer source: {source}");
+    assert!(source.get("source").and_then(|s| s.as_str()).unwrap_or("").contains("File Probe"),
+        "the row does not say the file came from File Probe — app output reads as something the person offered: {source}");
+    assert!(source.get("button").and_then(|b| b.as_bool()).unwrap_or(false),
+        "no Save to this device button on the app's file: {source}");
+    let pressed = client.execute(&format!(r#"
+            {CAPTURE_DOWNLOADS}
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const s of root.querySelectorAll('section.window')) {{
+                if (!s.querySelector('.file-transfer')) continue;
+                const btn = s.querySelector('[data-field="ft-save-offer"][data-offer-name="probe-out.txt"]');
+                if (!btn) return 'no-button';
+                btn.click(); return 'clicked';
+            }}
+            return 'no-window';
+        "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "could not press Save to this device: {pressed}");
+    let saved = poll_json(&client, "return window.__ftSaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("text")).and_then(|t| t.as_str()).is_some()
+    }).await?;
+    println!("  saved to device: {saved}");
+    let first = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    assert_eq!(first.get("download").and_then(|s| s.as_str()), Some("probe-out.txt"),
+        "Save to this device never handed the browser a download named probe-out.txt: {saved}");
+    assert_eq!(first.get("text").and_then(|s| s.as_str()), Some("file probe: made inside the app\n!"),
+        "the downloaded bytes are not the file the app sent: {saved}");
+
+    client.close().await.ok();
+    Ok(())
+}
+
 /// FULL SCREEN — the app leaves the page and fills the physical screen, and the
 /// running app is NOT remounted on the way in or out.
 ///
@@ -23775,6 +24052,25 @@ async fn kill_switch_page_state(
         .await?)
 }
 
+/// [`kill_switch_page_state`] while the page may be navigating on its own.
+///
+/// Step 4 of the drill WAITS for `clients.navigate()` inside the self-destruct
+/// worker to reload the tab, so a poll can land in the middle of that reload and
+/// WebDriver answers `JavascriptError: Document was unloaded`. That is the event
+/// the gate is waiting for, not a failure: it made the drill red about 1 run in
+/// 3 (2 of 6 with no change under test, 2026-09-13). Only that error reads as
+/// "still navigating" (`Ok(None)`); anything else is still an error, and the
+/// assertions after the loop still decide whether recovery happened.
+async fn kill_switch_page_state_navigating(
+    client: &Client,
+) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    match kill_switch_page_state(client).await {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if format!("{e} {e:?}").contains("Document was unloaded") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// **G8 — THE KILL-SWITCH DRILL. Heal-path row 9b, and the only cell on the
 /// brick matrix whose recovery had never been run.**
 ///
@@ -23984,16 +24280,35 @@ self.addEventListener('fetch', (event) => {
         // reaches a user who is staring at a broken tab rather than closing it.
         client.goto(&url).await?;
         let deadline = Instant::now() + Duration::from_secs(30);
-        let mut recovered = kill_switch_page_state(&client).await?;
+        let mut recovered = serde_json::Value::Null;
+        let mut mid_navigation = 0;
         while Instant::now() < deadline {
-            let clean = recovered.get("app").and_then(|v| v.as_bool()) == Some(true)
-                && recovered.get("bricked").and_then(|v| v.as_bool()) == Some(false);
-            if clean {
-                break;
+            match kill_switch_page_state_navigating(&client).await? {
+                Some(state) => {
+                    recovered = state;
+                    // Wait for the END state, not the first clean frame. The
+                    // recovered page's index.html registers /sw.js again, which the
+                    // origin is still serving as the kill switch, so a registration
+                    // appears for a moment and removes itself (it navigates only
+                    // CONTROLLED clients, so this is not a reload loop). Breaking on
+                    // the first frame with the app back sampled that moment and read
+                    // it as "a registration survived" -- 2 of 10 runs, 2026-09-13.
+                    let empty = |k: &str| {
+                        recovered.get(k).and_then(|v| v.as_array()).map(|a| a.is_empty()) == Some(true)
+                    };
+                    let clean = recovered.get("app").and_then(|v| v.as_bool()) == Some(true)
+                        && recovered.get("bricked").and_then(|v| v.as_bool()) == Some(false)
+                        && empty("registrations")
+                        && empty("caches");
+                    if clean {
+                        break;
+                    }
+                }
+                None => mid_navigation += 1,
             }
             sleep(Duration::from_millis(500)).await;
-            recovered = kill_switch_page_state(&client).await?;
         }
+        println!("  G8: polls that landed mid-navigation (the worker's own reload): {mid_navigation}");
 
         assert_eq!(
             recovered.get("bricked").and_then(|v| v.as_bool()),
@@ -24049,16 +24364,43 @@ self.addEventListener('fetch', (event) => {
         // Restore the healthy worker, and prove the return trip is ordinary:
         // there is nothing special about coming back off the kill switch.
         std::fs::write(&sw_path, &healthy_sw)?;
-        client.goto(&url).await?;
-        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
-        let back = poll_json(
-            &client,
-            "return navigator.serviceWorker && navigator.serviceWorker.controller \
-             ? (navigator.serviceWorker.controller.scriptURL || 'controller-no-url') : '';",
-            Duration::from_millis(15_000),
-            |v| !v.as_str().unwrap_or("").is_empty(),
-        )
-        .await?;
+        // Up to five ordinary loads, as a returning visitor makes. One load was
+        // not always enough (2 of 10 runs, 2026-09-13): the kill switch's own
+        // last registration can still be uninstalling when the real one is
+        // registered. The number of loads is printed, so a regression that needs
+        // more is visible rather than absorbed.
+        let mut back = serde_json::Value::Null;
+        let mut loads = 0;
+        for _ in 0..5 {
+            loads += 1;
+            client.goto(&url).await?;
+            wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+            back = poll_json(
+                &client,
+                "return navigator.serviceWorker && navigator.serviceWorker.controller \
+                 ? (navigator.serviceWorker.controller.scriptURL || 'controller-no-url') : '';",
+                Duration::from_millis(10_000),
+                |v| !v.as_str().unwrap_or("").is_empty(),
+            )
+            .await?;
+            if back.as_str().map(|s| s.ends_with("/sw.js")).unwrap_or(false) {
+                break;
+            }
+            let why = client
+                .execute_async(
+                    r#"const cb = arguments[arguments.length - 1];
+                       navigator.serviceWorker.getRegistrations().then(rs => cb(rs.map(r => ({
+                           installing: r.installing && r.installing.state,
+                           waiting: r.waiting && r.waiting.state,
+                           active: r.active && r.active.state }))), e => cb(String(e)));"#,
+                    vec![],
+                )
+                .await
+                .map(|v| v.to_string())
+                .unwrap_or_else(|e| e.to_string());
+            println!("  G8: load {loads} not controlled yet; registrations: {why}");
+        }
+        println!("  G8: the real worker took control after {loads} load(s)");
         assert!(
             back.as_str().unwrap_or("").ends_with("/sw.js"),
             "the real worker did not re-install after the kill switch was withdrawn, so the \
@@ -24669,12 +25011,6 @@ async fn update_banner_text(
 /// would pass for the wrong reason.
 const A_REAL_STRANGER: &str = "2KLp3VgNLUW8pMsLuGhvEBDr2vimCNNvtp8anxjxWMWLbH";
 
-/// A second genuine peer id, used as the **gatherer** — `Keypair::from_seed`
-/// `[62u8; 32]`. Distinct from `A_REAL_STRANGER` on purpose: the whole point of
-/// rows 5–6 is that the follow list and the gatherer list are separate, and one
-/// id in both would make *"the right list grew"* unfalsifiable.
-const A_REAL_GATHERER: &str = "2KLZV8YBH3QqQtraUKiUeV9ZpBDb9S1VWkn9bzxwYEs2Jp";
-
 /// Read the Feed window's panel and follow list out of the DOM.
 ///
 /// Returns a JSON blob rather than one string, because the assertions below are
@@ -24697,28 +25033,9 @@ const READ_FEED: &str = r#"
         // would read, because that is what this gate is for.
         text: (win.textContent || '').replace(/\s+/g, ' ').trim(),
         follows: rows.length,
-        // The gatherer list is read from ITS OWN container, never from a count
-        // of peer-id-looking rows: the two registries are one path segment
-        // apart and a shared selector would make "the right list grew"
-        // unfalsifiable.
-        gatherers: win.querySelectorAll('[data-field="feed-gatherers"] > div').length,
-        unrouted: win.querySelectorAll('[data-field="feed-gatherer-unrouted"]').length,
         entries: win.querySelector('[data-field="feed-entries"]')
             ? win.querySelector('[data-field="feed-entries"]').getAttribute('data-count')
             : null,
-        // **Which LEG served this panel, read off `data-via` rather than the
-        // sentence.** The copy is translated in thirty locales and the key is
-        // not, so a needle on the words would couple this gate to a catalog an
-        // integration test cannot import (the no-route sentence one row down
-        // already went stale that way and was red for a day).
-        via: win.querySelector('[data-field="feed-via"]')
-            ? win.querySelector('[data-field="feed-via"]').getAttribute('data-via')
-            : null,
-        // How many entries carry `FEED-R4`'s attributed verdict. A count rather
-        // than a boolean: *some* entries verifying and *all* of them verifying
-        // are different facts about a gathered view, and §6.1 rule 2 lets a
-        // mirror be short but never lets it be unattributable.
-        attributed: win.querySelectorAll('[data-attributed="true"]').length,
     });
 "#;
 
@@ -24757,40 +25074,6 @@ async fn feed_type_and_follow(
     Ok(v.as_str().unwrap_or("non-string").to_string())
 }
 
-/// Type into the Feed window's **gatherer** box and press Add.
-///
-/// Its own helper rather than a parameter on `feed_type_and_follow`, because
-/// the two boxes are two draft keys — one box for both lists would let somebody
-/// type a peer id, press the other button, and have the field they were looking
-/// at change meaning under them.
-async fn feed_type_and_add_gatherer(
-    client: &Client,
-    peer_id: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let script = format!(
-        r#"
-        const layer = document.getElementById('dom-layer');
-        const root = layer.shadowRoot || layer;
-        let win = null;
-        for (const sec of root.querySelectorAll('section.window')) {{
-            const h = sec.querySelector('header h3');
-            if (h && h.textContent.trim() === 'Feed') win = sec;
-        }}
-        if (!win) return 'no-feed-window';
-        const input = win.querySelector('[data-field="feed-gatherer-peer"]');
-        if (!input) return 'no-gatherer-input';
-        input.value = '{peer_id}';
-        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        const btn = win.querySelector('[data-field="feed-add-gatherer"]');
-        if (!btn) return 'no-add-btn';
-        btn.click();
-        return 'clicked';
-        "#
-    );
-    let v = client.execute(&script, vec![]).await?;
-    Ok(v.as_str().unwrap_or("non-string").to_string())
-}
-
 /// **The Feed window, in a browser — and the claim is that a pending walk is
 /// never rendered as an empty feed.**
 ///
@@ -24818,16 +25101,6 @@ async fn feed_type_and_add_gatherer(
 ///    never appear is *"has not posted anything"*, which would be this
 ///    implementation telling a person a publisher wrote nothing when it never
 ///    asked anybody.
-/// 5. **The gatherer section exists and is its own list.** §6's third source leg
-///    is the only thing on this surface a person can *configure*, and it had no
-///    browser row at all — the two registries are one path segment apart and
-///    both keyed by a peer id, so *"the list grew"* has to be checked on the
-///    right list.
-/// 6. **An added gatherer we have no route to STAYS ON SCREEN and says so.**
-///    It contributes no leg (there is no URL to build, and inventing one
-///    relative to the page is `OriginFeedSource`'s empty-origin defect), and a
-///    row that silently vanished would leave somebody who just added a peer
-///    unable to tell whether anything happened.
 #[tokio::test(flavor = "current_thread")]
 async fn the_feed_window_follows_a_publisher_and_never_calls_an_unasked_question_an_empty_feed(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -24943,67 +25216,11 @@ async fn the_feed_window_follows_a_publisher_and_never_calls_an_unasked_question
              was ever made. That is the collapse `FeedStep::Wait` and \
              `FeedPanel::NoRoute` exist to prevent: {text}"
         );
-        // ⚠ **This needle RESTATES a copy string, and it went stale within a day
-        // of being written.** `04f9057` shipped *"This deployment does not know
-        // where this publisher is hosted"*, this gate asserted it, and `c110576`
-        // then improved the sentence to name **both** halves of the condition
-        // (its own message: *"which is now only half the condition"*) without
-        // touching the gate — so row 4 was red from 2026-09-11 and nobody saw it,
-        // because that session recorded *"no e2e ran"*. **A gate absent from the
-        // recorded run set is a gate nobody ran**, third instance.
-        //
-        // It cannot be derived from the catalog: `src/i18n.rs` is a module of a
-        // *bin* crate and an integration test cannot import it, so the coupling is
-        // real and unmaintained by any compiler (AP37's family). **Changing
-        // `feed.no_route` owes this line a look.** The needle is the distinctive
-        // clause rather than the whole sentence, so ordinary rewording survives
-        // and a change of *meaning* does not.
         assert!(
             text.contains("does not know where they are hosted"),
             "RED — with no origin registered the panel owes the no-route sentence: {text}"
         );
         println!("  feed: a followed publisher with no route says so, and never claims an empty feed ✓");
-
-        // 5 and 6 — the gatherer section.
-        let added = feed_type_and_add_gatherer(&client, A_REAL_GATHERER).await?;
-        assert_eq!(added.as_str(), "clicked", "the gatherer box is not on screen: {added}");
-        // ⚠ **Poll, never a single read.** A press queues a repaint; a bare read
-        // runs before the next frame and sees the previous DOM, which reports as
-        // *"the gatherer was not added"* about a product that added it. Row 4
-        // polls for exactly this reason. `poll_json` returns `Ok(last_value)` on
-        // timeout (AP47), so the assertions below are on the VALUE and the
-        // predicate is only the wait.
-        let after = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
-            v.as_str().is_some_and(|s| s.contains("\"gatherers\":1"))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(after.as_str().unwrap_or("{}")).unwrap_or_default();
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert_eq!(
-            state["gatherers"].as_u64().unwrap_or(0),
-            1,
-            "RED — the gatherer was not added to the gatherer list: {text}"
-        );
-        assert_eq!(
-            state["follows"].as_u64().unwrap_or(0),
-            1,
-            "RED — adding a gatherer changed the FOLLOW list. The two registries are \
-             one path segment apart and both keyed by a peer id: {text}"
-        );
-        assert!(
-            text.contains(A_REAL_GATHERER),
-            "RED — the gatherer is not named on screen: {text}"
-        );
-        assert_eq!(
-            state["unrouted"].as_u64().unwrap_or(0),
-            1,
-            "RED — this rig registers no origin for that gatherer, so the row owes \
-             the *cannot be read yet* marker. A row that renders as usable, or \
-             that vanishes with its leg, both leave somebody unable to tell \
-             whether adding it did anything: {text}"
-        );
-        println!("  feed: a gatherer is its own list, and an unrouted one says so ✓");
 
         let _ = read; // the closure form is kept for readability of the block above
         Ok::<(), Box<dyn std::error::Error>>(())
@@ -25013,458 +25230,5 @@ async fn the_feed_window_follows_a_publisher_and_never_calls_an_unasked_question
     let _ = client.close().await;
     r?;
     println!("FEED OK — the reader surface renders, refuses, follows, and never invents an empty feed.");
-    Ok(())
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// `APP-CONVENTION-FEED` §6 — a MIRROR reaches a browser
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Stage a served tree in which **B publishes a gathered view of A, and A is
-/// reachable nowhere.**
-///
-/// `a_gathered_view_is_published_and_a_stranger_reads_it_back_attributed_to_its_author`
-/// proves the loop natively through the production `OriginMirrorSource`. What no
-/// gate here could prove is that a **person sees it**: this rig had never
-/// registered a gatherer origin or published a mirror to one, so the delivery
-/// claim rested on native gates plus the type being the production one.
-///
-/// ⭐ **A's unreachability is the scenario AND the anti-vacuity guard.** The
-/// emitted `/entity-deployment.json` registers an origin for B and none for A,
-/// and the author's carried bytes — which do sit at B's origin under A's own
-/// namespace, because that is where §6 puts them — are deliberately **outside
-/// every signed root there** (`RootProjector::record` skips a foreign peer). So
-/// there is no published leg for A by two independent mechanisms, and anything
-/// this browser renders arrived through the mirror. A rig that served A directly
-/// would go green with `Leg::Mirror` entirely unwired.
-///
-/// Hardlinks into `target/`, like `stage_pinned_spa`, so the debug wasm is not
-/// copied; its own port, so the first load is a cold boot against a fresh origin.
-fn stage_gathered_feed_spa(
-    port: u16,
-) -> Result<(FederationServer, String, String), Box<dyn std::error::Error>> {
-    let root = std::path::PathBuf::from("target/e2e-gathered-feed");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root)?;
-    fn link_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for e in std::fs::read_dir(from)? {
-            let e = e?;
-            let (src, dst) = (e.path(), to.join(e.file_name()));
-            if e.file_type()?.is_dir() {
-                link_tree(&src, &dst)?;
-            } else if std::fs::hard_link(&src, &dst).is_err() {
-                std::fs::copy(&src, &dst)?;
-            }
-        }
-        Ok(())
-    }
-    link_tree(std::path::Path::new("dist"), &root)?;
-
-    // The fixture publishes both trees. Isolated `ENTITY_DATA_DIR` for
-    // `run_rekey_fixture`'s reason: every nested cargo the suite spawns shares
-    // one publisher store, and a fixture that reaches into shared state is not
-    // entitled to be convenient about it.
-    let data_dir = std::env::temp_dir().join("entity-gathered-feed-fixture");
-    let _ = std::fs::create_dir_all(&data_dir);
-    let full = "content_site::publish::tests::emit_gathered_feed_fixture";
-    let out = Command::new(env!("CARGO"))
-        .args(["test", "--bin", "entity-browser", full, "--", "--ignored", "--exact"])
-        .env("ENTITY_DATA_DIR", &data_dir)
-        .env("ENTITY_GATHER_OUT", &root)
-        .output()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success(),
-        "fixture {full} failed:\nstdout: {stdout}\nstderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    // libtest exits 0 for "matched nothing", so a typo in the name would make
-    // this fixture a silent no-op that passed its own status check.
-    assert!(
-        stdout.contains("1 passed"),
-        "fixture {full} matched no test. stdout:\n{stdout}"
-    );
-
-    // The two ids come out of the ARTIFACT, never re-derived from a seed here:
-    // the browser's belief comes from these bytes, so the test's notion of who
-    // is who must come from the same place.
-    let raw = std::fs::read_to_string(root.join("gathered-feed-fixture.json"))?;
-    let ids: serde_json::Value = serde_json::from_str(&raw)?;
-    let author = ids["author"].as_str().unwrap_or_default().to_string();
-    let gatherer = ids["gatherer"].as_str().unwrap_or_default().to_string();
-    assert!(!author.is_empty() && !gatherer.is_empty(), "fixture ids missing: {raw}");
-    assert_ne!(author, gatherer, "the fixture's two publishers collapsed into one");
-
-    let child = Command::new("python3")
-        .args(["tools/cors-serve.py", root.to_str().unwrap(), &port.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    Ok((FederationServer(child), author, gatherer))
-}
-
-/// ⭐⭐ **A MIRROR REACHES A PERSON — `APP-CONVENTION-FEED` §6's browser leg,
-/// and the last gap in that arc.**
-///
-/// A publishes a feed. B gathers it. A browser that has **no route to A at all**
-/// is told to read through B, and A's posts appear — attributed to A, with the
-/// one line §6.1 rule 3 allows naming B.
-///
-/// ## Why the control comes FIRST, and why it is the gate
-///
-/// Step 3 follows A **before** any gatherer exists and asserts the no-route
-/// screen. That ordering is not narrative convenience: it is what makes step 5's
-/// entries attributable to the mirror rather than to anything else this origin
-/// happens to serve. Without it, a browser that had found A's posts by some
-/// other path — a stray origin registration, a cached copy, a future change that
-/// starts walking `/{author}/` at whatever origin is to hand — would pass every
-/// assertion below while `Leg::Mirror` was never consulted. **Ask what your
-/// gate's expected value depends on**: here it depends on a *transition*, and a
-/// transition needs both of its states measured.
-///
-/// ## What each row is for
-///
-/// 1. **Anti-vacuity** — the window's own body rendered (not the chrome's title;
-///    the sibling gate was caught by exactly that and now asserts on the hint).
-/// 2. A followed A is on screen.
-/// 3. **A is unreachable.** No entries, no via line, the no-route screen.
-/// 4. B is added as a gatherer and is **routed** — its origin is in the
-///    document, so the *cannot be read yet* marker must NOT appear. That marker
-///    is the sibling gate's row 6, and its absence here is what says this rig
-///    differs from that one in the way it is supposed to.
-/// 5. **A's posts arrive.** Three of them, the author's own words, every one
-///    carrying `FEED-R4`'s attributed verdict.
-/// 6. **The via line says `feed.via.mirror` and names B** — read off `data-via`
-///    rather than the sentence, because the sentence is translated into thirty
-///    locales and an integration test cannot import the catalog.
-/// 7. **B is never presented as the author.** §6.1 rule 3 / `FEED-R13`: a
-///    gatherer's id may appear on the via line and nowhere else, and `EntryRow`
-///    carries no field it could travel in — so this asserts the property the
-///    types are supposed to guarantee, at the pixels.
-#[tokio::test(flavor = "current_thread")]
-async fn a_gathered_feed_reaches_a_browser_that_cannot_reach_its_author(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let port = pick_free_port()?;
-    let (_server, author, gatherer) = stage_gathered_feed_spa(port)?;
-    println!("  gathered-feed rig: author {author} (no route) via gatherer {gatherer}");
-
-    let (client, _dist) = setup().await?;
-    client.goto(&format!("http://localhost:{port}/?log=trace")).await?;
-    wait_for_boot(&client, 30_000).await?;
-    // The origins registration is phase 2 work — it is read out of the
-    // deployment document — so a bare `wait_for_boot` would race it and the
-    // gatherer would look unrouted for reasons that have nothing to do with the
-    // product (`e2e_phase2_barrier_census`).
-    let _ = wait_for_phase2(&client, 30_000).await?;
-
-    let r = async {
-        // 1 — the window opens and its BODY renders.
-        let spawn = click_spawn_btn(&client, "+ Feed").await?;
-        assert_eq!(spawn.as_str(), "clicked", "could not spawn Feed: {spawn}");
-        let first = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
-            v.as_str().is_some_and(|s| s.contains("\"follows\""))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(first.as_str().unwrap_or("{}")).unwrap_or_default();
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert!(
-            text.contains("Follow a publisher by peer id"),
-            "RED (VACUOUS) — the Feed window's body rendered nothing: {text}"
-        );
-
-        // 2 — follow A.
-        let typed = feed_type_and_follow(&client, &author).await?;
-        assert_eq!(typed.as_str(), "clicked", "could not press Follow: {typed}");
-        let after = poll_json(&client, READ_FEED, Duration::from_secs(10), |v| {
-            v.as_str().is_some_and(|s| s.contains("\"follows\":1"))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(after.as_str().unwrap_or("{}")).unwrap_or_default();
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert_eq!(state["follows"].as_u64().unwrap_or(0), 1, "A was not followed: {text}");
-
-        // 3 — ⭐ THE CONTROL. A is reachable by no leg, so there are no entries
-        // and no via line. If this passes with entries already on screen, every
-        // assertion below is measuring something other than the mirror.
-        assert_eq!(
-            state["via"], serde_json::Value::Null,
-            "RED — this browser has no route to the author and a leg served it anyway. \
-             Every assertion below would then be about that leg, not the mirror: {text}"
-        );
-        assert_eq!(
-            state["entries"], serde_json::Value::Null,
-            "RED — entries for an author this profile cannot reach: {text}"
-        );
-        println!("  gathered: the author is unreachable before a gatherer exists ✓");
-
-        // 4 — add B, whose origin the deployment document registered.
-        let added = feed_type_and_add_gatherer(&client, &gatherer).await?;
-        assert_eq!(added.as_str(), "clicked", "the gatherer box is not on screen: {added}");
-        // Poll for the ENTRIES, not for the gatherer row: adding one calls
-        // `forget_all`, so the panel re-walks, and a read taken the moment the
-        // row appears sees `Loading`. `poll_json` returns `Ok(last_value)` on
-        // timeout (AP47), so the assertions are on the value.
-        let after = poll_json(&client, READ_FEED, Duration::from_secs(30), |v| {
-            v.as_str().is_some_and(|s| s.contains("\"via\":\"feed.via.mirror\""))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(after.as_str().unwrap_or("{}")).unwrap_or_default();
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert_eq!(
-            state["gatherers"].as_u64().unwrap_or(0),
-            1,
-            "RED — the gatherer was not added: {text}"
-        );
-        assert_eq!(
-            state["unrouted"].as_u64().unwrap_or(9),
-            0,
-            "RED — this deployment DOES register an origin for the gatherer, so the \
-             *cannot be read yet* marker must not appear. Either the document's \
-             origins did not reach the profile, or the row stopped reading them: {text}"
-        );
-
-        // 5 — A's posts arrived, through B.
-        assert_eq!(
-            state["entries"].as_str().unwrap_or("0"),
-            "3",
-            "RED — the mirror carried three entries and the browser shows a \
-             different number: {text}"
-        );
-        // The authored titles, which is what EMBED §3's mandatory `fallback`
-        // carries and therefore what `EntryRow::text` renders. **Both ends of
-        // the range**, so a walk that delivered one page or stopped early cannot
-        // pass — and note they come back newest-first, which is §4.5's authored
-        // order surviving the gather.
-        assert!(
-            text.contains("Post 0") && text.contains("Post 2"),
-            "RED — the author's own posts are not on screen: {text}"
-        );
-        assert_eq!(
-            state["attributed"].as_u64().unwrap_or(0),
-            3,
-            "RED — a carried entry that does not verify against its AUTHOR's own \
-             detached signature is the one thing a mirror may never produce \
-             (FEED-R4): {text}"
-        );
-
-        // 6 — and the surface says whose reading this is.
-        assert_eq!(
-            state["via"].as_str().unwrap_or(""),
-            "feed.via.mirror",
-            "RED — the panel does not report that it was served by a mirror: {text}"
-        );
-        assert!(
-            text.contains(&gatherer),
-            "RED — §6.1 rule 3 makes the via line the one place a gatherer may be \
-             named, and it is not named: {text}"
-        );
-
-        // 7 — …and B is not presented as the author. The gatherer's id may
-        // appear exactly once, on the via line.
-        let named = client
-            .execute(
-                r#"
-                const layer = document.getElementById('dom-layer');
-                const root = layer.shadowRoot || layer;
-                let win = null;
-                for (const sec of root.querySelectorAll('section.window')) {
-                    const h = sec.querySelector('header h3');
-                    if (h && h.textContent.trim() === 'Feed') win = sec;
-                }
-                if (!win) return JSON.stringify({error: 'no-feed-window'});
-                const inEntries = Array.from(
-                    win.querySelectorAll('[data-field="feed-entry"]')
-                ).map(e => (e.textContent || '')).join(' ');
-                return JSON.stringify({ entries_text: inEntries });
-                "#,
-                vec![],
-            )
-            .await?;
-        let named: serde_json::Value =
-            serde_json::from_str(named.as_str().unwrap_or("{}")).unwrap_or_default();
-        let entries_text = named["entries_text"].as_str().unwrap_or_default();
-        assert!(
-            !entries_text.contains(&gatherer),
-            "RED — the gatherer's peer id appears on an ENTRY. FEED-R13: attribution \
-             follows each entry's own detached signature, and a surface naming the \
-             gatherer as the author is non-conformant: {entries_text}"
-        );
-        println!("  gathered: three of the author's posts, attributed to the author, read through the gatherer ✓");
-
-        let log_lines = capture_log(&client).await?;
-        let panics = count_panics(&log_lines);
-        assert!(panics.is_empty(), "a window panicked during the walk: {panics:?}");
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }
-    .await;
-
-    let _ = client.close().await;
-    r?;
-    println!("GATHERED FEED OK — a mirror reached a browser that cannot reach its author.");
-    Ok(())
-}
-
-/// Stage a copy of `dist/` whose deployment document boots a **maximized Feed
-/// window aimed at `target`** (or at nothing, when `target` is empty).
-///
-/// Hand-authored rather than published, like `stage_pinned_spa`: the property is
-/// what the document *says*, and a publish would drag a home site, an origin and
-/// a site posture in with it — every one of which moves this boot away from the
-/// one thing under test.
-fn stage_aimed_boot_spa(
-    target: &str,
-    port: u16,
-    dir: &str,
-) -> Result<FederationServer, Box<dyn std::error::Error>> {
-    let root = std::path::PathBuf::from(dir);
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root)?;
-    fn link_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for e in std::fs::read_dir(from)? {
-            let e = e?;
-            let (src, dst) = (e.path(), to.join(e.file_name()));
-            if e.file_type()?.is_dir() {
-                link_tree(&src, &dst)?;
-            } else if std::fs::hard_link(&src, &dst).is_err() {
-                std::fs::copy(&src, &dst)?;
-            }
-        }
-        Ok(())
-    }
-    link_tree(std::path::Path::new("dist"), &root)?;
-
-    // No `origins` key at all rather than an empty one: an explicit empty map is
-    // a deployment declaring it hosts nobody, and `withdrawn_rows`' first rule
-    // exists because the two arrive identically at the parser.
-    let doc = if target.is_empty() {
-        "{\n  \"surface\": \"window\",\n  \"window_type\": \"Feed\"\n}\n".to_string()
-    } else {
-        format!(
-            "{{\n  \"surface\": \"window\",\n  \"window_type\": \"Feed\",\n  \"window_target\": \"{target}\"\n}}\n"
-        )
-    };
-    std::fs::write(root.join("entity-deployment.json"), doc)?;
-
-    let child = Command::new("python3")
-        .args(["tools/cors-serve.py", root.to_str().unwrap(), &port.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    Ok(FederationServer(child))
-}
-
-/// ⭐ **A DEPLOYMENT SAYS *WHICH* FEED, IN A BROWSER — the one-field gap
-/// `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §2 measured.**
-///
-/// Before `window_target`, a domain could boot the Feed window and had **no way
-/// to name a publisher**, so a deployment declaring *"open my feed"* came up on
-/// an empty picker. The whole chain is gated natively — emitter → JSON → `parse`
-/// → `apply_to` → `BootSurface` — and each viewer's `aim` is gated natively too.
-/// **None of that is evidence that a boot performs it**, which is this repo's
-/// standing failure shape: a control proven on the path the test takes and
-/// absent on the one it does not.
-///
-/// ## What makes the assertion sharp
-///
-/// A fresh profile **follows nobody**, and the Feed window renders the selected
-/// peer id as its panel subheading and nowhere else. So the author's id being on
-/// screen at all can only mean the boot aimed the window at them — there is no
-/// follow row, no typed input and no other surface that could have put it there.
-///
-/// ## The control is the same document with the field removed
-///
-/// Run second, on its own origin (a separate browser profile), against a
-/// document identical but for `window_target`. It must show the **nobody
-/// selected** screen and must not name the author. Without it, this gate would
-/// pass for any build that happened to render a peer id somewhere — and *"the
-/// window opened"* is true of the un-aimed boot too.
-#[tokio::test(flavor = "current_thread")]
-async fn a_deployment_boots_the_feed_window_at_a_named_publisher(
-) -> Result<(), Box<dyn std::error::Error>> {
-    // A syntactically valid peer id we have no route to. It never has to exist:
-    // the claim is *the window is pointed at them*, not *their posts arrive* —
-    // that is the gathered-feed gate one screen up.
-    const AIMED_AT: &str = "2KL3C5o8vpAbaeAkFhTneHokv3rQZdR5YHmSC3vERZ6vw9";
-    let target = format!("entity+ref://{AIMED_AT}/app/feed/index");
-
-    let aimed_port = pick_free_port()?;
-    let _aimed = stage_aimed_boot_spa(&target, aimed_port, "target/e2e-aimed-boot")?;
-    let (client, _dist) = setup().await?;
-    client.goto(&format!("http://localhost:{aimed_port}/?log=trace")).await?;
-    wait_for_boot(&client, 30_000).await?;
-    // The surface is applied in PHASE 2 — it comes out of the deployment
-    // document — so `wait_for_boot` alone would race the spawn and report a
-    // missing window as a product defect (`e2e_phase2_barrier_census`).
-    let _ = wait_for_phase2(&client, 30_000).await?;
-
-    let r = async {
-        let state = poll_json(&client, READ_FEED, Duration::from_secs(15), |v| {
-            v.as_str().is_some_and(|s| s.contains(AIMED_AT))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(state.as_str().unwrap_or("{}")).unwrap_or_default();
-        assert!(
-            state.get("error").is_none(),
-            "RED — the deployment declared a Feed window and no Feed window opened: {state:?}"
-        );
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert_eq!(
-            state["follows"].as_u64().unwrap_or(999),
-            0,
-            "RED — this profile follows nobody, so a follow row would make the \
-             assertion below unfalsifiable: {text}"
-        );
-        assert!(
-            text.contains(AIMED_AT),
-            "RED — the deployment named a publisher and the window is not showing \
-             them. The address is declared, parsed and routed natively, so what is \
-             unwired is the boot performing the aim: {text}"
-        );
-        println!("  aimed boot: the deployment's Feed window opened at the publisher it named ✓");
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }
-    .await;
-    let _ = client.close().await;
-    r?;
-
-    // ── the control ──────────────────────────────────────────────────────
-    let bare_port = pick_free_port()?;
-    let _bare = stage_aimed_boot_spa("", bare_port, "target/e2e-aimed-boot-control")?;
-    let (client, _dist2) = setup().await?;
-    client.goto(&format!("http://localhost:{bare_port}/?log=trace")).await?;
-    wait_for_boot(&client, 30_000).await?;
-    let _ = wait_for_phase2(&client, 30_000).await?;
-
-    let r = async {
-        let state = poll_json(&client, READ_FEED, Duration::from_secs(15), |v| {
-            v.as_str().is_some_and(|s| s.contains("\"follows\""))
-        })
-        .await?;
-        let state: serde_json::Value =
-            serde_json::from_str(state.as_str().unwrap_or("{}")).unwrap_or_default();
-        let text = state["text"].as_str().unwrap_or_default().to_string();
-        assert!(
-            !text.contains(AIMED_AT),
-            "RED (CONTROL) — a document declaring NO target aimed the window at one \
-             anyway, so the assertion above measures nothing: {text}"
-        );
-        assert!(
-            text.contains("Choose a publisher"),
-            "RED (CONTROL) — the un-aimed boot is not on the nobody-selected screen, \
-             so it is not the control it claims to be: {text}"
-        );
-        println!("  aimed boot: the same document with no target opens at nobody ✓");
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }
-    .await;
-    let _ = client.close().await;
-    r?;
-    println!("AIMED BOOT OK — a deployment can say which feed, and one that says nothing opens at nobody.");
     Ok(())
 }

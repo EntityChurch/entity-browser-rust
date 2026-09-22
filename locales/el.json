@@ -823,5 +823,8 @@
   "apps.file.sent": "Το {name} στάλθηκε στην εφαρμογή",
   "apps.file.kept": "Το {name} αποθηκεύτηκε στα αρχεία σας",
   "apps.file.refused": "Το {name} δεν αποθηκεύτηκε: {why}",
-  "apps.file.not_sent": "Δεν στάλθηκε αρχείο: {why}"
+  "apps.file.not_sent": "Δεν στάλθηκε αρχείο: {why}",
+  "filetransfer.save_to_device": "Αποθήκευση σε αυτή τη συσκευή",
+  "filetransfer.from_app": "Από {app}",
+  "filetransfer.save_failed": "Δεν ήταν δυνατή η αποθήκευση του {name} σε αυτή τη συσκευή: {why}"
 }

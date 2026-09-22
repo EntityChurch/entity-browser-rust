@@ -816,5 +816,8 @@
   "apps.file.sent": "{name} dikirim ke aplikasi",
   "apps.file.kept": "{name} disimpan ke file Anda",
   "apps.file.refused": "{name} tidak disimpan: {why}",
-  "apps.file.not_sent": "Tidak ada file yang dikirim: {why}"
+  "apps.file.not_sent": "Tidak ada file yang dikirim: {why}",
+  "filetransfer.save_to_device": "Simpan ke perangkat ini",
+  "filetransfer.from_app": "Dari {app}",
+  "filetransfer.save_failed": "Tidak dapat menyimpan {name} ke perangkat ini: {why}"
 }

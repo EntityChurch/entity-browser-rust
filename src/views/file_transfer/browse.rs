@@ -738,6 +738,7 @@ mod tests {
             size: bytes.len() as u64,
             blob: blob.content_hash,
             from: "PEER_SERVING".into(),
+            source: None,
         }
     }
 

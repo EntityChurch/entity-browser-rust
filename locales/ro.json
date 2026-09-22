@@ -830,5 +830,8 @@
   "apps.file.sent": "{name} a fost trimis aplicației",
   "apps.file.kept": "{name} a fost salvat în fișierele tale",
   "apps.file.refused": "{name} nu a fost salvat: {why}",
-  "apps.file.not_sent": "Niciun fișier nu a fost trimis: {why}"
+  "apps.file.not_sent": "Niciun fișier nu a fost trimis: {why}",
+  "filetransfer.save_to_device": "Salvează pe acest dispozitiv",
+  "filetransfer.from_app": "Din {app}",
+  "filetransfer.save_failed": "Nu s-a putut salva {name} pe acest dispozitiv: {why}"
 }

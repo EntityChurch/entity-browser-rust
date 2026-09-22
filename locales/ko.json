@@ -816,5 +816,8 @@
   "apps.file.sent": "{name}을(를) 앱에 보냈습니다",
   "apps.file.kept": "{name}을(를) 내 파일에 저장했습니다",
   "apps.file.refused": "{name}을(를) 저장하지 못했습니다: {why}",
-  "apps.file.not_sent": "파일을 보내지 못했습니다: {why}"
+  "apps.file.not_sent": "파일을 보내지 못했습니다: {why}",
+  "filetransfer.save_to_device": "이 기기에 저장",
+  "filetransfer.from_app": "{app}에서",
+  "filetransfer.save_failed": "{name}을(를) 이 기기에 저장할 수 없습니다: {why}"
 }

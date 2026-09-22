@@ -58,11 +58,9 @@
 
 use std::sync::Arc;
 
-use entity_capability::ResourceTarget;
 use entity_content::{blob_chunk_hashes, create_blob_fixed, reassemble, GET_BATCH_SIZE};
 use entity_ecf::{bytes as ecf_bytes, integer, text, to_ecf, Value};
 use entity_entity::Entity;
-use entity_handler::ExecuteOptions;
 use entity_hash::Hash;
 use entity_store::{ContentStore, MemoryContentStore};
 
@@ -114,7 +112,32 @@ pub struct FileOffer {
     /// The peer that offered it — carried in the manifest so a pulled file
     /// remembers where it came from even after the listing is gone.
     pub from: String,
+    /// The app that handed this file to the host (`x-file`, [`crate::app_files`]),
+    /// or `None` for a file a person offered themselves. See [`OfferSource`].
+    pub source: Option<OfferSource>,
 }
+
+/// Which app produced an offered file.
+///
+/// **Encoded only when present**, under the manifest key [`SOURCE_KEY`]: a
+/// file a person offered carries no such key, so every manifest written before
+/// this field existed — and every one written without an app — keeps its exact
+/// bytes and content hash. An older decoder ignores the key (unknown keys are
+/// skipped), so a peer on an earlier build still lists the file.
+///
+/// `set` + `app` are the stable identity (the catalog's set and app id, the
+/// same pair that keys the app's saves); `name` is the display name **as it
+/// was when the file was kept**, carried so a reader on another peer — who may
+/// not have that app installed at all — can still say where the file came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferSource {
+    pub set: String,
+    pub app: String,
+    pub name: String,
+}
+
+/// The manifest key an [`OfferSource`] is encoded under.
+pub const SOURCE_KEY: &str = "app";
 
 impl FileOffer {
     /// The path segment this offer is published under (hex of the blob hash,
@@ -146,12 +169,24 @@ pub fn hash_from_id(id: &str) -> Result<Hash, String> {
 
 /// Encode an offer as its manifest entity.
 pub fn manifest_entity(offer: &FileOffer) -> Result<Entity, String> {
-    let data = to_ecf(&Value::Map(vec![
+    let mut fields = vec![
         (text("name"), text(offer.name.clone())),
         (text("size"), integer(offer.size as i64)),
         (text("blob"), ecf_bytes(offer.blob.to_bytes())),
         (text("from"), text(offer.from.clone())),
-    ]));
+    ];
+    // Absent, not empty, for a person's own file: see [`OfferSource`].
+    if let Some(src) = &offer.source {
+        fields.push((
+            text(SOURCE_KEY),
+            Value::Map(vec![
+                (text("set"), text(src.set.clone())),
+                (text("id"), text(src.app.clone())),
+                (text("name"), text(src.name.clone())),
+            ]),
+        ));
+    }
+    let data = to_ecf(&Value::Map(fields));
     Entity::new(OFFER_TYPE, data).map_err(|e| format!("offer manifest: {e}"))
 }
 
@@ -164,13 +199,14 @@ pub fn decode_manifest(entity: &Entity) -> Option<FileOffer> {
     }
     let value: Value = ciborium::from_reader(entity.data.as_slice()).ok()?;
     let map = value.as_map()?;
-    let (mut name, mut size, mut blob, mut from) = (None, None, None, None);
+    let (mut name, mut size, mut blob, mut from, mut source) = (None, None, None, None, None);
     for (k, v) in map {
         match k.as_text() {
             Some("name") => name = v.as_text().map(str::to_string),
             Some("size") => size = v.as_integer().and_then(|i| u64::try_from(i128::from(i)).ok()),
             Some("blob") => blob = v.as_bytes().and_then(|b| Hash::from_bytes(b).ok()),
             Some("from") => from = v.as_text().map(str::to_string),
+            Some(SOURCE_KEY) => source = decode_source(v),
             _ => {}
         }
     }
@@ -179,7 +215,32 @@ pub fn decode_manifest(entity: &Entity) -> Option<FileOffer> {
         size: size?,
         blob: blob?,
         from: from.unwrap_or_default(),
+        source,
     })
+}
+
+/// The `app` field of a manifest. **An unreadable one drops to `None` and keeps
+/// the offer**: the source is a label about the file, and a stranger's malformed
+/// label must not hide a file whose name, size and bytes are all fine. The cost
+/// is stated — a malformed source reads as "a person offered this" — and it is
+/// the cheaper mistake, since nothing branches on it but the words beside a row.
+fn decode_source(v: &Value) -> Option<OfferSource> {
+    let (mut set, mut app, mut name) = (None, None, None);
+    for (k, v) in v.as_map()? {
+        match k.as_text() {
+            Some("set") => set = v.as_text().map(str::to_string),
+            Some("id") => app = v.as_text().map(str::to_string),
+            Some("name") => name = v.as_text().map(str::to_string),
+            _ => {}
+        }
+    }
+    let (set, app) = (set?, app?);
+    if set.is_empty() || app.is_empty() {
+        return None;
+    }
+    // A missing display name is recoverable: the id is still a name.
+    let name = name.filter(|n| !n.is_empty()).unwrap_or_else(|| app.clone());
+    Some(OfferSource { set, app, name })
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +447,16 @@ pub async fn offer_file(
     name: &str,
     raw: &[u8],
 ) -> Result<FileOffer, String> {
+    offer_file_from(dispatch, name, raw, None).await
+}
+
+/// [`offer_file`], recording the app the file came from (see [`OfferSource`]).
+pub async fn offer_file_from(
+    dispatch: &DispatchHandle,
+    name: &str,
+    raw: &[u8],
+    source: Option<OfferSource>,
+) -> Result<FileOffer, String> {
     let local_pid = dispatch.local_peer_id();
     // Refuse **before** allocating anything: the whole point of a stated limit
     // is that the user is told, in a sentence, instead of watching the tab die
@@ -412,6 +483,7 @@ pub async fn offer_file(
         size: raw.len() as u64,
         blob: blob.content_hash,
         from: local_pid.clone(),
+        source,
     };
     dispatch
         .put(
@@ -514,15 +586,55 @@ pub async fn pull_offer_with<P: Fn(usize, usize)>(
     blob: &Hash,
     progress: P,
 ) -> Result<Vec<u8>, String> {
-    let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
-    let namespace = namespace_resource(remote_pid);
+    walk_closure(dispatch, Holder::Peer(remote_pid), blob, progress).await
+}
 
-    fetch_into(dispatch, remote_pid, &namespace, &store, &[*blob]).await?;
+/// The bytes of one of **our own** offers, read out of our own `system/content`.
+///
+/// This is what "save to this device" needs for a file an app handed the host:
+/// the bytes are already here, so the walk is local — a bare `system/content`
+/// dispatch, not `entity://{self}/…`, for the reason [`read_own_offers`] gives
+/// (the remote shape's failure path is ten one-second retries against ourselves).
+/// Same walk as [`pull_offer`], so a large file is reassembled from its chunks
+/// exactly as a pulled one is, and verified by the same hash walk.
+pub async fn read_own_offer(dispatch: &DispatchHandle, blob: &Hash) -> Result<Vec<u8>, String> {
+    walk_closure(dispatch, Holder::Local, blob, |_, _| {}).await
+}
+
+/// Whose `system/content` a closure walk reads.
+#[derive(Clone, Copy)]
+enum Holder<'a> {
+    /// This peer's own store, dispatched locally.
+    Local,
+    /// A remote peer, dispatched through the connection pool.
+    Peer(&'a str),
+}
+
+async fn walk_closure<P: Fn(usize, usize)>(
+    dispatch: &DispatchHandle,
+    holder: Holder<'_>,
+    blob: &Hash,
+    progress: P,
+) -> Result<Vec<u8>, String> {
+    let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+    let holder_pid = match holder {
+        Holder::Local => dispatch.local_peer_id(),
+        Holder::Peer(pid) => pid.to_string(),
+    };
+    let namespace = namespace_resource(&holder_pid);
+
+    fetch_into(dispatch, holder, &namespace, &store, &[*blob]).await?;
     if store.get(blob).is_none() {
-        return Err(format!(
-            "peer {remote_pid} did not return the offered blob {} — the offer is stale",
-            blob.to_hex()
-        ));
+        return Err(match holder {
+            Holder::Peer(pid) => format!(
+                "peer {pid} did not return the offered blob {} — the offer is stale",
+                blob.to_hex()
+            ),
+            Holder::Local => format!(
+                "this browser no longer holds the file's contents ({})",
+                blob.to_hex()
+            ),
+        });
     }
 
     let (_total, chunk_hashes) =
@@ -537,7 +649,7 @@ pub async fn pull_offer_with<P: Fn(usize, usize)>(
     while !missing.is_empty() {
         let batch: Vec<Hash> = missing.iter().take(GET_BATCH_SIZE).copied().collect();
         let before = missing.len();
-        fetch_into(dispatch, remote_pid, &namespace, &store, &batch).await?;
+        fetch_into(dispatch, holder, &namespace, &store, &batch).await?;
         missing.retain(|h| store.get(h).is_none());
         progress(total - missing.len(), total);
         if missing.len() == before {
@@ -558,19 +670,30 @@ pub async fn pull_offer_with<P: Fn(usize, usize)>(
 /// than as a partial file.
 async fn fetch_into(
     dispatch: &DispatchHandle,
-    remote_pid: &str,
+    holder: Holder<'_>,
     namespace: &str,
     store: &Arc<dyn ContentStore>,
     hashes: &[Hash],
 ) -> Result<(), String> {
-    let result = remote_execute(
-        dispatch,
-        format!("entity://{remote_pid}/system/content"),
-        "get".to_string(),
-        get_params(hashes)?,
-        resource_opts(namespace),
-    )
-    .await?;
+    let params = get_params(hashes)?;
+    let opts = resource_opts(namespace);
+    let result = match holder {
+        Holder::Peer(pid) => {
+            remote_execute(
+                dispatch,
+                format!("entity://{pid}/system/content"),
+                "get".to_string(),
+                params,
+                opts,
+            )
+            .await?
+        }
+        Holder::Local => {
+            dispatch
+                .execute("system/content".to_string(), "get".to_string(), params, opts)
+                .await?
+        }
+    };
     if result.status != 200 {
         return Err(format!("content get refused: status {}", result.status));
     }
@@ -644,10 +767,97 @@ mod tests {
             size: 5,
             blob: blob.content_hash,
             from: "PEER_A".into(),
+            source: None,
         };
         let decoded = decode_manifest(&manifest_entity(&offer).unwrap()).unwrap();
         assert_eq!(decoded, offer);
         assert_eq!(decoded.id(), blob.content_hash.to_hex());
+    }
+
+    #[test]
+    fn a_manifest_without_an_app_keeps_the_bytes_it_had_before_the_field_existed() {
+        // Built by hand in the pre-field layout, NOT through `manifest_entity`:
+        // a fixture from the encoder under test would move with it.
+        let (blob, _) = chunk_bytes(b"hello").unwrap();
+        let legacy = Entity::new(
+            OFFER_TYPE,
+            to_ecf(&Value::Map(vec![
+                (text("name"), text("notes.txt")),
+                (text("size"), integer(5)),
+                (text("blob"), ecf_bytes(blob.content_hash.to_bytes())),
+                (text("from"), text("PEER_A")),
+            ])),
+        )
+        .unwrap();
+        let offer = FileOffer {
+            name: "notes.txt".into(),
+            size: 5,
+            blob: blob.content_hash,
+            from: "PEER_A".into(),
+            source: None,
+        };
+        let now = manifest_entity(&offer).unwrap();
+        assert_eq!(now.data, legacy.data, "a person's own offer must not re-encode");
+        assert_eq!(now.content_hash, legacy.content_hash);
+        // And the old manifest still decodes, as a person's offer.
+        assert_eq!(decode_manifest(&legacy).unwrap(), offer);
+    }
+
+    #[test]
+    fn an_offer_records_the_app_it_came_from() {
+        let (blob, _) = chunk_bytes(b"report").unwrap();
+        let offer = FileOffer {
+            name: "report.txt".into(),
+            size: 6,
+            blob: blob.content_hash,
+            from: "PEER_A".into(),
+            source: Some(OfferSource {
+                set: "apps".into(),
+                app: "alpine".into(),
+                name: "Alpine Linux".into(),
+            }),
+        };
+        let entity = manifest_entity(&offer).unwrap();
+        assert_eq!(decode_manifest(&entity).unwrap(), offer);
+        // Pinned by literal: other peers read this key.
+        let value: Value = ciborium::from_reader(entity.data.as_slice()).unwrap();
+        let src = value.get("app").expect("the source is encoded under `app`");
+        assert_eq!(src.get("id").unwrap().as_text(), Some("alpine"));
+        assert_eq!(src.get("set").unwrap().as_text(), Some("apps"));
+    }
+
+    #[test]
+    fn an_unreadable_app_field_keeps_the_file_and_drops_only_the_label() {
+        let (blob, _) = chunk_bytes(b"x").unwrap();
+        let body = |app: Value| {
+            Entity::new(
+                OFFER_TYPE,
+                to_ecf(&Value::Map(vec![
+                    (text("name"), text("x.bin")),
+                    (text("size"), integer(1)),
+                    (text("blob"), ecf_bytes(blob.content_hash.to_bytes())),
+                    (text("from"), text("P")),
+                    (text("app"), app),
+                ])),
+            )
+            .unwrap()
+        };
+        for bad in [
+            text("alpine"),
+            Value::Map(vec![(text("id"), text("alpine"))]),
+            Value::Map(vec![(text("set"), text("")), (text("id"), text("alpine"))]),
+        ] {
+            let offer = decode_manifest(&body(bad.clone())).expect("the file must still list");
+            assert_eq!(offer.name, "x.bin");
+            assert_eq!(offer.source, None, "{bad:?} is not a usable source");
+        }
+        // No display name: the id stands in, rather than dropping the source.
+        let named = decode_manifest(&body(Value::Map(vec![
+            (text("set"), text("apps")),
+            (text("id"), text("alpine")),
+        ])))
+        .unwrap();
+        assert_eq!(named.source.unwrap().name, "alpine");
     }
 
     #[test]

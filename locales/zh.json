@@ -816,5 +816,8 @@
   "apps.file.sent": "已将 {name} 发送给应用",
   "apps.file.kept": "已将 {name} 保存到你的文件",
   "apps.file.refused": "未保存 {name}：{why}",
-  "apps.file.not_sent": "未发送文件：{why}"
+  "apps.file.not_sent": "未发送文件：{why}",
+  "filetransfer.save_to_device": "保存到此设备",
+  "filetransfer.from_app": "来自 {app}",
+  "filetransfer.save_failed": "无法将 {name} 保存到此设备：{why}"
 }

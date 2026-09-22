@@ -830,5 +830,8 @@
   "apps.file.sent": "{name} odeslán do aplikace",
   "apps.file.kept": "{name} uložen do vašich souborů",
   "apps.file.refused": "{name} nebyl uložen: {why}",
-  "apps.file.not_sent": "Soubor nebyl odeslán: {why}"
+  "apps.file.not_sent": "Soubor nebyl odeslán: {why}",
+  "filetransfer.save_to_device": "Uložit do tohoto zařízení",
+  "filetransfer.from_app": "Z aplikace {app}",
+  "filetransfer.save_failed": "{name} nelze uložit do tohoto zařízení: {why}"
 }

@@ -830,5 +830,8 @@
   "apps.file.sent": "Wysłano {name} do aplikacji",
   "apps.file.kept": "Zapisano {name} w Twoich plikach",
   "apps.file.refused": "Nie zapisano {name}: {why}",
-  "apps.file.not_sent": "Nie wysłano pliku: {why}"
+  "apps.file.not_sent": "Nie wysłano pliku: {why}",
+  "filetransfer.save_to_device": "Zapisz na tym urządzeniu",
+  "filetransfer.from_app": "Z aplikacji {app}",
+  "filetransfer.save_failed": "Nie udało się zapisać {name} na tym urządzeniu: {why}"
 }

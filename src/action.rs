@@ -10,25 +10,8 @@ use crate::window::WindowId;
 #[allow(dead_code)]
 pub enum Action {
     // -- Window management --
-    /// Spawn a new window of the given type name, optionally bound to a specific
-    /// peer, optionally **aimed at an address**.
-    ///
-    /// The three fields are three different facts and the middle one used to do
-    /// two jobs. `peer_id` is the store the window READS; `target` is the subject
-    /// it is looking at, and they are usually different peers —
-    /// `views/registry_browser/output.rs:open_target` narrates the shipped bug
-    /// that came of conflating them. `target: None` is the ordinary open (the
-    /// command palette, a taskbar button): nothing was named, so nothing is
-    /// aimed, and a window that invented a subject here would be `app_source`'s
-    /// guess (AP54) with a new door.
-    ///
-    /// See [`crate::open_target`] for which viewer an address routes to, and
-    /// [`crate::window::WindowView::aim`] for what a viewer does with one.
-    SpawnWindow {
-        type_name: &'static str,
-        peer_id: Option<String>,
-        target: Option<crate::entity_ref::EntityRef>,
-    },
+    /// Spawn a new window of the given type name, optionally bound to a specific peer.
+    SpawnWindow { type_name: &'static str, peer_id: Option<String> },
     /// Close a specific window instance.
     CloseWindow(WindowId),
     /// Maximize a window into the full-screen surface, or restore it if it is
@@ -151,6 +134,17 @@ pub enum Action {
         /// Hex of the blob hash — the manifest's path segment.
         offer_id: String,
         /// Only so the result line can name the file rather than a hash.
+        filename: String,
+    },
+    /// Save one of our own offers to this device as a browser download — the
+    /// way a file an app handed the host (`x-file`) leaves a phone. The bytes
+    /// are read from our own `system/content` ([`crate::file_offer::read_own_offer`]),
+    /// so no peer and no connection is involved.
+    SaveOwnOffer {
+        peer_id: String,
+        /// Hex of the blob hash — the manifest's path segment.
+        offer_id: String,
+        /// The download's file name.
         filename: String,
     },
     /// Refresh the **backend-auth observability** surface for one backend
@@ -351,7 +345,7 @@ mod tests {
 
     #[test]
     fn action_variants_constructible() {
-        let _ = Action::SpawnWindow { type_name: "Entity Tree", peer_id: None, target: None };
+        let _ = Action::SpawnWindow { type_name: "Entity Tree", peer_id: None };
         let _ = Action::CloseWindow(1);
         let _ = Action::Navigate(1, "docs/test".into());
         let _ = Action::NavigateUp(1);

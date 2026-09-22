@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} elküldve az alkalmazásnak",
   "apps.file.kept": "{name} mentve a fájljaid közé",
   "apps.file.refused": "{name} nem lett mentve: {why}",
-  "apps.file.not_sent": "Nem lett fájl elküldve: {why}"
+  "apps.file.not_sent": "Nem lett fájl elküldve: {why}",
+  "filetransfer.save_to_device": "Mentés erre az eszközre",
+  "filetransfer.from_app": "Forrás: {app}",
+  "filetransfer.save_failed": "A(z) {name} nem menthető erre az eszközre: {why}"
 }

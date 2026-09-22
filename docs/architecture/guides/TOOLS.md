@@ -108,7 +108,7 @@ browser needed). `make site` / `site-bare` / `site-serve` all wrap it.
 > The `--ingest=<dir>` format is **tool-agnostic** — any generator is just one
 > producer. To publish your own content (by hand or from any script), see
 > **[PUBLISH-INGEST-FORMAT.md](PUBLISH-INGEST-FORMAT.md)** (the manifest + pages +
-> assets directory contract) and the worked example in `examples/demo-site/`.
+> assets directory contract) and the worked example in `examples/entity-demo/`.
 
 ```
 entity-browser publish [OUT_DIR] [flags]
@@ -205,5 +205,5 @@ their own repo/tool; you hand the publish pipeline the output:
 
 | Input | Consumed by | Note |
 |---|---|---|
-| a content ingest dir (`INGEST=<dir>`) | `site` / `site-serve` | Any generator's output or a hand-authored folder in the ingest format (`PUBLISH-INGEST-FORMAT.md`). Worked example: `examples/demo-site/`. Empty → the bundled demo site seed. |
+| a content ingest dir (`INGEST=<dir>`) | `site` / `site-serve` | Any generator's output or a hand-authored folder in the ingest format (`PUBLISH-INGEST-FORMAT.md`). Worked example: `examples/entity-demo/`. Empty → the bundled demo site seed. |
 | a pre-built apps dist (`APPS_DIST=<dir>`) | `site` / `site-serve` | The entity-apps `dist/` shape (self-contained `*.html` + `index.json`), ingested via `--ingest-apps`. Building it is the app repo's concern. Empty → the bundled demo app seed. |

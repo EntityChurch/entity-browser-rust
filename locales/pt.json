@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} enviado ao aplicativo",
   "apps.file.kept": "{name} salvo nos seus arquivos",
   "apps.file.refused": "{name} não foi salvo: {why}",
-  "apps.file.not_sent": "Nenhum arquivo enviado: {why}"
+  "apps.file.not_sent": "Nenhum arquivo enviado: {why}",
+  "filetransfer.save_to_device": "Salvar neste dispositivo",
+  "filetransfer.from_app": "De {app}",
+  "filetransfer.save_failed": "Não foi possível salvar {name} neste dispositivo: {why}"
 }

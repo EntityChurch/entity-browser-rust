@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} an die App gesendet",
   "apps.file.kept": "{name} in deinen Dateien gespeichert",
   "apps.file.refused": "{name} nicht gespeichert: {why}",
-  "apps.file.not_sent": "Keine Datei gesendet: {why}"
+  "apps.file.not_sent": "Keine Datei gesendet: {why}",
+  "filetransfer.save_to_device": "Auf diesem Gerät speichern",
+  "filetransfer.from_app": "Von {app}",
+  "filetransfer.save_failed": "{name} konnte nicht auf diesem Gerät gespeichert werden: {why}"
 }

@@ -4241,6 +4241,58 @@ pub(crate) mod memory_transport_tests {
         handle_b.abort();
     }
 
+    /// **A file an app handed the host can be saved to this device** — M2.
+    ///
+    /// The bytes of an app's `x-file` are already in our own `system/content`,
+    /// so "save to this device" reads them back locally, with no peer and no
+    /// connection. Multi-chunk, because a single self-contained response would
+    /// pass a walk that never fetched a chunk. Also pins that the source app
+    /// survives the round trip through our own tree, since that is where the
+    /// File Transfer row reads it from.
+    ///
+    /// **Mutation check:** make `read_own_offer` stop after the blob (skip the
+    /// chunk loop) and the bytes assertion reds; drop `source` from the
+    /// manifest and the listing assertion reds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_apps_file_is_read_back_from_our_own_store_with_its_source() {
+        use crate::file_offer::{self, OfferSource};
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers, pid, handle) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        let dispatch = peers.dispatch_handle(&pid).expect("dispatch handle");
+
+        let raw: Vec<u8> = (0..(file_offer::CHUNK_SIZE * 2 + 5))
+            .map(|i| (i.wrapping_mul(13) % 251) as u8)
+            .collect();
+        let source = OfferSource {
+            set: "apps".into(),
+            app: "alpine".into(),
+            name: "Alpine Linux".into(),
+        };
+        let offer = file_offer::offer_file_from(&dispatch, "note.txt", &raw, Some(source.clone()))
+            .await
+            .expect("offer");
+
+        let own = file_offer::read_own_offers(&peers, &pid);
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].source.as_ref(), Some(&source), "the row must know its app");
+
+        let bytes = file_offer::read_own_offer(&dispatch, &own[0].blob)
+            .await
+            .expect("our own file must be readable with no connection at all");
+        assert_eq!(bytes, raw, "byte for byte, across every chunk");
+        assert_eq!(offer.blob, own[0].blob);
+
+        let (ghost, _) = file_offer::chunk_bytes(b"never kept").unwrap();
+        assert!(
+            file_offer::read_own_offer(&dispatch, &ghost.content_hash).await.is_err(),
+            "content we do not hold must error, never download as an empty file"
+        );
+
+        handle.abort();
+    }
+
     /// **THE ACCOUNTING PROOF — what an offer costs, permanently.** This test
     /// exists to *measure* a gap, not to assert a behaviour we like: it is the
     /// D-accounting discipline applied to the transfer arc before the arc is

@@ -196,7 +196,7 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
             ctx,
             &crate::i18n::t("filetransfer.authorize_device", &[]),
             components::ButtonKind::Primary,
-            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None, target: None }, // i18n-ignore — identity key; registry lookup
+            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None }, // i18n-ignore — identity key; registry lookup
         );
         util::append(parent, &btn);
     }
@@ -376,28 +376,9 @@ fn file_picker(
     field: &str,
     on_file: impl Fn(String, Vec<u8>) + 'static,
 ) {
-    let input = util::create_element("input");
-    input.set_attribute("type", "file").ok();
-    // **Visually hidden, not `display:none`.** A `display:none` input is not
-    // rendered at all, and several mobile browsers are documented to decline a
-    // picker for an unrendered control. Keeping it in the layout at zero size
-    // costs nothing, so it stays.
-    //
-    // **It is NOT what fixes Android, and the record used to imply it was.**
-    // Measured 2026-08-24 against Firefox for Android with a nine-row matrix
-    // (`tools/picker-probe.html`): a clipped input, a laid-out `opacity:0`
-    // input, and a plainly visible input tapped directly ALL have their chooser
-    // dismissed by the engine in ~200-250ms — while Chrome on the same phone
-    // opens it. So the hiding style is not the discriminator; nothing here is.
-    // Keep this rule as cheap insurance for other engines, not as a fix.
-    input
-        .set_attribute(
-            "style",
-            "position:absolute;width:1px;height:1px;padding:0;margin:-1px;\
-             overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0",
-        )
-        .ok();
-    input.set_attribute("data-field", &format!("{field}-input")).ok();
+    // Visually hidden, not `display:none` — the why (and the measured limit of
+    // the why) is on `components::hidden_file_input`.
+    let input = components::hidden_file_input(&format!("{field}-input"));
     util::append(parent, &input);
 
     let btn = components::button_el(label, kind);
@@ -624,6 +605,29 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
             "",
         ]);
         for offer in &output.own_offers {
+            // Save to this device: how a file an app handed the host leaves a
+            // phone. Same hook convention as the stop button below.
+            let save = components::button_el(
+                &crate::i18n::t("filetransfer.save_to_device", &[]),
+                components::ButtonKind::Small,
+            );
+            save.set_attribute("data-field", "ft-save-offer").ok();
+            save.set_attribute("data-offer-name", &offer.name).ok();
+            {
+                let actions = ctx.actions.clone();
+                let rp = ctx.repaint.clone();
+                let peer_id = output.peer_id.clone();
+                let offer_id = offer.id.clone();
+                let filename = offer.name.clone();
+                ctx.listen(&save, "click", move |_| {
+                    actions.borrow_mut().push(Action::SaveOwnOffer {
+                        peer_id: peer_id.clone(),
+                        offer_id: offer_id.clone(),
+                        filename: filename.clone(),
+                    });
+                    rp();
+                });
+            }
             let stop = components::button_el(
                 &crate::i18n::t("filetransfer.stop_offering", &[]),
                 components::ButtonKind::Small,
@@ -647,10 +651,28 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
                 rp();
             });
 
+            // The file's name, and under it the app it came from when an app
+            // handed it over — so app output does not read as something the
+            // person offered by hand.
+            let name_cell = util::create_element("div");
+            let name_el = util::create_element("div");
+            util::set_text(&name_el, &offer.name);
+            util::append(&name_cell, &name_el);
+            if let Some(app) = &offer.source {
+                let from = util::create_element("div");
+                from.set_attribute("style", theme::HINT).ok();
+                from.set_attribute("data-field", "ft-offer-source").ok();
+                util::set_text(&from, &crate::i18n::t("filetransfer.from_app", &[("app", app)]));
+                util::append(&name_cell, &from);
+            }
+            let buttons = util::create_element("div");
+            buttons.set_attribute("style", theme::ROW_INLINE).ok();
+            util::append(&buttons, &save);
+            util::append(&buttons, &stop);
             let row = components::tr(vec![
-                components::td_text(&offer.name),
+                components::td(&name_cell),
                 components::td_text(&human_size(offer.size)),
-                components::td(&stop),
+                components::td(&buttons),
             ]);
             // Row-level hook too: a harness asserting "this file is offered"
             // should not have to find the button to see the row.
@@ -684,7 +706,7 @@ fn render_offer_status(parent: &Element, ctx: &DomCtx) {
     let el = match outcome {
         // The catalog's own "Loading…" plus the file, because on a slow read
         // the *name* is what tells the user the right file was picked.
-        OfferOutcome::Reading | OfferOutcome::Preparing => {
+        OfferOutcome::Reading | OfferOutcome::Preparing | OfferOutcome::Saving => {
             // Slot + punctuation composition, not prose — both halves are
             // already a catalog string and a filename.
             components::loading(&format!("{filename} — {}", crate::i18n::t("state.loading", &[]))) // i18n-ignore
@@ -692,8 +714,8 @@ fn render_offer_status(parent: &Element, ctx: &DomCtx) {
         // The reason is model English inside a localized frame, the same known
         // shape as the port-mapping row's `{why}`. A translated "it failed" with
         // the reason dropped would be worse.
-        OfferOutcome::Failed(why) => components::error(&why),
-        OfferOutcome::Offered(_) => return,
+        OfferOutcome::Failed(why) | OfferOutcome::SaveFailed(why) => components::error(&why),
+        OfferOutcome::Offered(_) | OfferOutcome::Saved(_) => return,
     };
     el.set_attribute("data-field", "ft-offer-status").ok();
     util::append(parent, &el);

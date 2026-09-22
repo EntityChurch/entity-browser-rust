@@ -25,7 +25,64 @@ pub fn read_app_set(peers: &Peers, peer_id: &str, set: &str) -> Option<IngestedA
             Some((e.id.clone(), AppBundle::from_entity(&ent)))
         })
         .collect();
-    Some(IngestedApps { catalog, bundles })
+    let assets = read_asset_bundles(peers, peer_id, set, &catalog);
+    Some(IngestedApps { catalog, bundles, assets })
+}
+
+/// Every declared asset bundle's index and content closure, read back off the
+/// tree for re-projection.
+///
+/// **A bundle whose closure is incomplete is still returned, with what is
+/// held**, and warned about. Refusing it here would silently drop the whole
+/// bundle from the publish; projecting it lets `publish --verify` name the
+/// missing hashes, which is the tool built to say exactly that.
+fn read_asset_bundles(
+    peers: &Peers,
+    peer_id: &str,
+    set: &str,
+    catalog: &AppCatalog,
+) -> Vec<crate::apps::assets::IngestedBundle> {
+    use crate::apps::assets::{AssetIndex, IngestedBundle};
+    use crate::content_site::asset_store::chunk_hashes_of;
+    let mut out = Vec::new();
+    for entry in &catalog.entries {
+        for bundle in &entry.assets {
+            let path = paths::asset_index_path(peer_id, set, &entry.id, bundle);
+            let Some(ent) = peers.get_entity(peer_id, &path) else {
+                tracing::warn!(app = %entry.id, bundle = %bundle, "publish read: declared asset bundle has no index in the tree");
+                continue;
+            };
+            let index = match AssetIndex::from_entity(&ent) {
+                Ok(i) => i,
+                Err(e) => {
+                    tracing::warn!(app = %entry.id, bundle = %bundle, error = %e, "publish read: asset index unreadable — not projected");
+                    continue;
+                }
+            };
+            let mut content = Vec::new();
+            let mut missing = 0usize;
+            for blob_hash in index.blobs() {
+                let Some(blob) = peers.content_by_hash(peer_id, &blob_hash) else {
+                    missing += 1;
+                    continue;
+                };
+                if let Ok(chunks) = chunk_hashes_of(&blob) {
+                    for ch in chunks {
+                        match peers.content_by_hash(peer_id, &ch) {
+                            Some(e) => content.push(e),
+                            None => missing += 1,
+                        }
+                    }
+                }
+                content.push(blob);
+            }
+            if missing > 0 {
+                tracing::warn!(app = %entry.id, bundle = %bundle, missing, "publish read: asset bundle closure incomplete — projecting what is held");
+            }
+            out.push(IngestedBundle { app_id: entry.id.clone(), bundle: bundle.clone(), index, content });
+        }
+    }
+    out
 }
 
 /// Read **every** app set ([`paths::APP_SETS`]) off `peer_id`'s tree, keyed by

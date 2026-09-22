@@ -174,6 +174,17 @@ impl RootProjector {
         self.bindings.is_empty()
     }
 
+    /// The recorded key → hash map, for **measurement gates only**.
+    ///
+    /// `#[cfg(test)]` deliberately: *which keys moved between two publishes* is
+    /// the question §4.3 rule 1's `[MUST]` is about, and there is no way to ask
+    /// it from outside without this. Nothing in the product may branch on the
+    /// binding set — `finish` is the only thing entitled to read it.
+    #[cfg(test)]
+    pub(crate) fn bindings_for_measurement(&self) -> BTreeMap<String, Hash> {
+        self.bindings.clone()
+    }
+
     /// Load the published root already sitting in `base` into this projector's
     /// peer, so the next publish **chains off it** instead of restarting the
     /// §3.3a sequence at zero.
@@ -299,11 +310,21 @@ impl RootProjector {
         // The trie closure. Reachable only by hash from the signed root, so
         // nothing that enumerates the location index will emit these.
         let closure = trie_closure(shared.content_store.as_ref(), root);
+        // **A SET, not a linear scan per closure member.** This counter is
+        // report-only — `trie_nodes` is a line of output — and it was spelled
+        // `self.bindings.values().any(…)` *inside* the closure loop, i.e.
+        // `O(|closure| × |bindings|)`. Measured on a feed: `finish` went
+        // quadratic and a 16,000-post archive took **20.4 s**, of which the
+        // counter was **17.7 s**; the same publish is 2.6 s with this set.
+        // Nothing else in the emit path is superlinear, so for two months the
+        // whole of publish's scaling ceiling was a diagnostic nobody reads.
+        // ⇒ *a report-only computation is still on the critical path.*
+        let bound: BTreeSet<&Hash> = self.bindings.values().collect();
         let mut trie_nodes = 0usize;
         for h in &closure {
             let Some(e) = shared.content_store.get(h) else { continue };
             write_blob(base, h, &entity_ecf::ecf_for_hash(&e.entity_type, &e.data))?;
-            if !self.bindings.values().any(|b| b == h) {
+            if !bound.contains(h) {
                 trie_nodes += 1;
             }
         }

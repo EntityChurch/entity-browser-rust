@@ -2311,10 +2311,104 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `bindings/sdk` while a neuter was in flight, and pinning to their last commit made the difference
   between *"my neuter did something strange"* and *"their tree moved"* one flag wide.
   **Stated bounds:** nothing durable of anybody else's is held (no offline read, D24 not engaged);
-  **the browser gate covers the reader surface and nothing under it** — the entry list, the seven
+  and **the WINDOW cannot post** — `publish --ingest-feed` is a CLI path, so authoring still happens
+  on disk and never in the app. *(The bound that used to sit here — "the entry list, the seven
   attribution verdicts and a successful walk are still native-only, because the rig registers no
-  origin and publishes no feed to one; and **the WINDOW cannot post** — `publish --ingest-feed`
-  is a CLI path, so authoring still happens on disk and never in the app.
+  origin and publishes no feed to one" — is retired by the published-leg gate below.)*
+- **THE ORDINARY LEG HAD NO BROWSER GATE AND THE EXTRAORDINARY ONE DID — closed 2026-09-12,
+  `make e2e-worker T=a_published_feed_reaches`.** A §6 mirror carrying an author a browser cannot
+  reach had a gate; *follow a publisher and read what they published at their own origin* did not,
+  **because no rig here had ever published a feed to an origin it also served.** So `feed_read`'s
+  two-hop walk, `SignedSession`'s root check, `FEED-R2`'s detached signatures and `FEED-R4`'s
+  verdicts all ran in WASM for the first time when this gate was written — and every one of them
+  went green first try, which is the part that makes the gap easy to keep. ⇒ **when you gate the
+  hard case first, write down that the easy one is ungated**; the hard case's gate reads as coverage
+  of the subsystem, and a rig built for the exotic scenario is usually *unable* to produce the
+  ordinary one. Here the mirror rig's whole design is *the author is served nowhere*.
+  ⭐ **EVERY FEED FIXTURE ON EITHER SEAT WAS ONE PAGE, SO `FEED-R12` WAS UNFALSIFIABLE EVERYWHERE.**
+  The fixture publishes **34** entries against `DEFAULT_PAGE_SIZE` 32 and `feed_fetch::LIMIT` 50 —
+  deliberately across a page boundary and under the limit — so the oldest post lives on the index
+  page the head does **not** name. Falsified: stop the walk after the head's page and it reds
+  showing **2 of 34**. A one-page population cannot tell a reader that walks from one that got
+  lucky, and *"both ends of the archive"* means nothing when both ends are on one page.
+  **The oversized post is a row, not padding:** one body is over EMBED §3's 16 KiB inline ceiling,
+  so the archive a browser walks contains an entry on the **pointer** arm — gated natively at the
+  chunker and at the publish closure, never before at a consumer. (What it proves is that the entry
+  *resolves*; this surface renders no bodies, so the blob is still only gated by `--verify`.)
+  **Three neuters, three distinct rows:** drop the published leg from `feed_route::plan` → the
+  no-route sentence verbatim; never consult the per-entry signature → entries still arrive and
+  `attributed` goes 34 → 0; stop after the first page → 2 of 34.
+  ⭐ **MEASURED, AND IT BEARS ON §6.2's COST ARGUMENT: reading ONE author's 34-entry feed cost 71
+  `no-store` fetches of that publisher's `system/peer/published-root`** — 2 per entry (body, then
+  signature) + 1 per index page — counted off the origin's access log. **Not a defect:**
+  `SignedSession::resolve` re-fetches the manifest on every resolve *by design*, and says why
+  (*"a stale manifest can never roll back, because we never look at it twice"*) — the anti-rollback
+  `seq` floor is bought by that refresh. What it corrects is a reading of §6.2: the gatherer's
+  *"one root check instead of 500"* is about the number of **distinct publishers** to verify, and a
+  mirror walk pays the same per-resolve refresh against one root. **Budget ~2N round trips to the
+  root on top of the bodies**, and do not read §6.2 as promising otherwise. Narrowing the refresh to
+  once per *walk* would preserve the floor and is a change to an anti-rollback property — its own
+  session, its own gates, not a line in a feed change.
+- ⭐ **A REPORT-ONLY COMPUTATION IS STILL ON THE CRITICAL PATH — the whole publish path's scaling
+  ceiling was a diagnostic nobody reads (2026-09-13).** `RootProjector::finish` tested closure
+  membership with `self.bindings.values().any(…)` **inside** the loop over the trie closure —
+  `O(|closure| × |bindings|)` — to compute `trie_nodes`, a number that is printed and used by
+  nothing. Measured through the real projector at 16,000 posts: `finish` **20.37 s → 1.76 s**,
+  quadratic to linear, and **nothing else in the emit path was superlinear** — so for as long as
+  that line existed, the ceiling on *every* publish here (sites, apps, the registry, the feed) was
+  one counter. ⇒ **when a publish feels slow, profile the reporting before the work.**
+  ⭐⭐ **THE REASON IT SURVIVED IS THE TRANSFERABLE HALF: WHEN A DESIGN ARGUES A COST PROPERTY,
+  MEASURE THE COST.** `APP-CONVENTION-FEED` §4.3 rule 1 is a `[MUST]` *about a feed at scale* —
+  *"rewriting page 12 changes page 12's binding and nothing else, `O(tree depth)`, the same cost as
+  posting"* — and **every fixture on either seat was 3–34 entries.** The property itself holds
+  exactly (`the_cost_of_posting_one_more`: at n=4000, posting one more moves **3 bindings out of
+  8,129**) and the publisher **re-emits all 8,129**, 17,275 files, every post. *Rule 1 is about a
+  reader's invalidation surface and we get it for free; nothing asks the publisher to exploit it and
+  we do not.* Both probes are `#[ignore]`d in `feed_publish` and assert nothing —
+  `make test-one T="the_cost_of_a_large_feed --ignored"` — because a threshold nobody has earned is
+  a flake and the point is the shape of the curve. ⇒ **a conformance fixture is not a scale
+  fixture**, and a convention whose whole argument is cost needs one of each.
+  Full picture, with the read side, the unbounded mirror and the live leg:
+  `docs/plans/AUDIT-2026-09-13-THE-SOCIAL-TIER-AT-THE-CHECKPOINT.md`.
+- ⛔ **`git checkout <file>` IS THE NEUTER-REVERT EVERYONE REACHES FOR, AND IT DISCARDS EVERY
+  UNCOMMITTED CHANGE IN THAT FILE — including the gate you just wrote (2026-09-13).** Falsifying a
+  gate means editing the product, running, and reverting. Reverting with `git checkout` is right
+  exactly when the file holds nothing else of yours; the third use of it in one session was on
+  `publish.rs`, which also held **two brand-new tests**, and it took both. ⇒ **commit the gate
+  BEFORE you falsify it.** A neuter is a destructive experiment on the working tree, so the thing
+  being measured should already be in history — that also settles *which* green you are reporting.
+  Otherwise revert with the inverse edit, or `git stash push -- <file>`, never the file-scoped
+  checkout.
+  ⭐ **What caught it is the direction of *a count is not a claim* nobody uses: a count that did NOT
+  move when you added something is itself a claim.** `make test` came back with the main binary at
+  **1754 passed / 19 ignored** — byte-identical to the figure before either test existed — after a
+  run that should have read 1755/20. Both gates had genuinely passed before the loss, so every green
+  reported was real when measured and the tree no longer contained what produced them. **Read the
+  delta, not the colour**, and know what your own change should do to it.
+- **AN AXIS WITH A FLAG AND NO STAGED `make` VARIABLE IS AN AXIS A PERSON CANNOT PUBLISH — `FEED=`,
+  2026-09-12.** `--ingest-feed` shipped 2026-09-10 with a row in the flag table and **no make
+  plumbing at all**. Every containerized publish target bind-mounts only this repo, and
+  `stage_publish_sources` is what copies an out-of-mount source in and rewrites the path — so a bare
+  `--ingest-feed=` at a `make` invocation names a directory the container cannot see, and on a
+  podman-only host (which is the supported host) the third axis was reachable **by nobody** for two
+  days. `FEED=` is staged exactly like `INGEST=`/`APPS_DIST=`, wired at **all three** call sites of
+  the staged-flag pair rather than the one in front of me (AP44 — and the pair is greppable, which is
+  what made the enumeration cheap). ⇒ **when you add an ingest flag, the deliverable is the flag, the
+  staged variable, the `.gitignore` row and a worked example** — the canonical home for which is
+  `REFERENCE-PUBLISHING-PIPELINE` §0.2's axis table, which now carries a `make` column and an example
+  column for exactly this reason.
+  **The worked example is `examples/entity-demo/feed/` and the point of it is coexistence** — one
+  authoring root carrying two sites *and* a feed, published in one run under one signed root, which
+  is the shape the browser gate above then reads back. Two application-tier conventions, one
+  identity, one wire.
+  ⚠ **AP37, found on the way: `examples/demo-site/` does not exist and never has.** **Five** places
+  named it across three documents — the Makefile's `INGEST=` row and its `site-serve` example,
+  `PUBLISH-INGEST-FORMAT`'s KEPT list, and two rows of `TOOLS.md` — while the directory is
+  `examples/entity-demo/`. *A documented invocation is a coupling no compiler maintains*, and the
+  tell was cheap: `ls` the path in the doc you are about to copy a line from. **The first count
+  written here was three, from the grep I happened to run first** (`Makefile` + one guide); the
+  other two surfaced only from a tree-wide sweep. *A count is not a claim* — sweep before you
+  publish the number.
 - **A MIRROR IS REACHABLE BY A PERSON — the Feed window's *Read through* list, 2026-09-12. The
   §6 arc's last gap on this seat, and the surface half is `src/feed_gatherers.rs` + the
   `Leg::Mirror` wiring in `feed_fetch`.**

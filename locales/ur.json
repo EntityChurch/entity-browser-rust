@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} ایپ کو بھیج دی گئی",
   "apps.file.kept": "{name} آپ کی فائلوں میں محفوظ ہو گئی",
   "apps.file.refused": "{name} محفوظ نہیں ہوئی: {why}",
-  "apps.file.not_sent": "کوئی فائل نہیں بھیجی گئی: {why}"
+  "apps.file.not_sent": "کوئی فائل نہیں بھیجی گئی: {why}",
+  "filetransfer.save_to_device": "اس آلے پر محفوظ کریں",
+  "filetransfer.from_app": "{app} سے",
+  "filetransfer.save_failed": "{name} کو اس آلے پر محفوظ نہیں کیا جا سکا: {why}"
 }

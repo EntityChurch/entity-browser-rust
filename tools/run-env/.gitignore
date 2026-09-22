@@ -8,6 +8,9 @@
 v86-m1/
 kernel-min/
 alpine-guest*/guest/
+
+# the package-signing key (package-key.sh). NEVER COMMITTED; back it up.
+.keys/
 alpine-guest*/build
 alpine-guest*/bios
 alpine-guest*/vendor
@@ -19,3 +22,6 @@ alpine-guest-*/
 # harness variants generated while bisecting a boot
 alpine-guest/boot-ni-*.js
 alpine-guest/boot-noinitrd.js
+
+# ./package-app.sh output (the entity-app dist: page + asset bundles)
+app-dist*/

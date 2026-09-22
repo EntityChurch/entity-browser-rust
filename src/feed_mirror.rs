@@ -77,7 +77,11 @@
 //! *A sentence true at the layer everyone is thinking about and false at the
 //! layer nobody is reviews clean forever.*
 
-#![allow(dead_code)] // no verb publishes a mirror yet; the gates are native
+// `publish --gather=<peer>@<dir>` reaches the plan half since 2026-09-12
+// (`publish_axes::MirrorAxis`) and `feed_fetch::OriginMirrorSource` reaches the
+// read half from a browser; what stays unused is the WASM side of the planner,
+// since a gatherer writes a directory.
+#![allow(dead_code)]
 
 use std::future::Future;
 use std::pin::Pin;

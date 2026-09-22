@@ -83,12 +83,22 @@ to write it down somewhere else, link here instead. It is one function:
 
 ### 0.2 The four axes
 
-| axis | tree prefix | reader | ingest flag |
-|---|---|---|---|
-| sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` |
-| apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` |
-| feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` |
-| mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` |
+| axis | tree prefix | reader | ingest flag | `make` variable | worked example |
+|---|---|---|---|---|---|
+| sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` | `INGEST=<dir>` | `examples/entity-demo/` |
+| apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` | `APPS_DIST=<dir>` | the `entity-apps` repo's `dist/` |
+| feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` | `FEED=<dir>` | `examples/entity-demo/feed/` |
+| mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` | — (no make variable: the value is a `peer@dir` pair, and the dir is another publisher's out-tree rather than an authored source) | — |
+
+**The `make` column is the *authoring* entry point and it is not cosmetic.** Every
+containerized publish target bind-mounts only this repo, so a source anywhere else on the
+host is invisible to the publish; the variables are staged (`stage_publish_sources`) into
+repo-local dirs and the publish is handed the *staged* path. A raw `--ingest-feed=` at a
+`make` invocation therefore names a directory the container cannot see. **`FEED=` arrived
+2026-09-12, two days after `--ingest-feed`** — so for two days the third axis was reachable
+from a bare `cargo run` and from no `make` target, which on a podman-only host means it was
+reachable by nobody. *An axis with a flag and no staged variable is an axis a person cannot
+publish.*
 
 The fourth row is the only one whose reader points outside this peer and the
 only one with a non-empty `carried_peers`; §0.2a is what that costs.

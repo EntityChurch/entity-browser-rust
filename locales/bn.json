@@ -823,5 +823,8 @@
   "apps.file.sent": "{name} অ্যাপে পাঠানো হয়েছে",
   "apps.file.kept": "{name} আপনার ফাইলে সংরক্ষিত হয়েছে",
   "apps.file.refused": "{name} সংরক্ষণ করা হয়নি: {why}",
-  "apps.file.not_sent": "কোনো ফাইল পাঠানো হয়নি: {why}"
+  "apps.file.not_sent": "কোনো ফাইল পাঠানো হয়নি: {why}",
+  "filetransfer.save_to_device": "এই ডিভাইসে সংরক্ষণ করুন",
+  "filetransfer.from_app": "{app} থেকে",
+  "filetransfer.save_failed": "{name} এই ডিভাইসে সংরক্ষণ করা যায়নি: {why}"
 }
